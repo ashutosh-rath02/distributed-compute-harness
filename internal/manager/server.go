@@ -138,6 +138,28 @@ func (s *Server) SendCommand(ctx context.Context, nodeID domain.NodeID, name dom
 	}
 }
 
+// failPendingCommandsFor resolves every in-flight command targeting
+// nodeID with a failure, instead of leaving SendCommand's caller to block
+// for the full timeout. Without this, a node going offline mid-command
+// (churn is normal — baseline §9 rule 4) silently strands the pending
+// entry: SendCommand still eventually returns via its own context/timeout
+// deadline, but only after waiting needlessly for a result that can never
+// arrive on a connection that's already gone.
+func (s *Server) failPendingCommandsFor(nodeID domain.NodeID, reason string) {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	for id, p := range s.pending {
+		if p.target != nodeID {
+			continue
+		}
+		delete(s.pending, id)
+		select {
+		case p.result <- domain.CommandResult{CommandID: id, Success: false, Error: reason}:
+		default:
+		}
+	}
+}
+
 func newCommandID() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
@@ -191,6 +213,7 @@ func (s *Server) monitorHeartbeats(ctx context.Context) {
 			for _, id := range s.Registry.ExpireStale(s.cfg.HeartbeatTimeout) {
 				log.Printf("node.offline: %s", id)
 				s.publish(domain.EventNodeOffline, id, map[string]any{"reason": "heartbeat timeout"})
+				s.failPendingCommandsFor(id, "node went offline: heartbeat timeout")
 			}
 		}
 	}
@@ -202,6 +225,7 @@ func (s *Server) handleConn(ctx context.Context, conn domain.Conn) {
 		if nodeID != "" && s.Registry.SetOfflineIfCurrent(nodeID, conn) {
 			log.Printf("node.offline: %s (connection closed)", nodeID)
 			s.publish(domain.EventNodeOffline, nodeID, map[string]any{"reason": "connection closed"})
+			s.failPendingCommandsFor(nodeID, "node went offline: connection closed")
 		}
 		conn.Close()
 	}()

@@ -28,8 +28,13 @@ func TestManifestReturnsPlausibleResources(t *testing.T) {
 	if kinds[domain.ResourceStorageBytes] <= 0 {
 		t.Fatalf("expected positive storage total, got %v", kinds[domain.ResourceStorageBytes])
 	}
-	if len(capabilities) == 0 {
-		t.Fatal("expected at least one declared capability")
+	// v0 declares no capabilities — nothing invocable exists yet to
+	// advertise (see sysinfo.Manifest's doc comment).
+	if capabilities == nil {
+		t.Fatal("expected a non-nil (even if empty) capabilities slice")
+	}
+	if len(capabilities) != 0 {
+		t.Fatalf("expected zero declared capabilities in v0, got %+v", capabilities)
 	}
 }
 

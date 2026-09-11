@@ -17,11 +17,6 @@ import (
 	"home-harness/internal/domain"
 )
 
-// capabilityVersion is a placeholder version for the illustrative
-// capabilities declared below — none of them are actually invocable yet
-// (see command.go's CommandName set for what v0 really supports).
-const capabilityVersion = "0.1"
-
 // Manifest collects the static resources and capabilities to publish in a
 // node's manifest at registration time.
 func Manifest(ctx context.Context) ([]domain.Resource, []domain.Capability, error) {
@@ -46,17 +41,15 @@ func Manifest(ctx context.Context) ([]domain.Resource, []domain.Capability, erro
 		{Kind: domain.ResourceStorageBytes, Capacity: float64(usage.Total), Unit: "bytes"},
 	}
 
-	// v1.md §5's example manifest lists these as illustrative capabilities
-	// even though v0 has no runtime capable of invoking them — the point
-	// is to prove the schema can carry declarations for functionality that
-	// arrives later without redesigning Manifest itself.
-	capabilities := []domain.Capability{
-		{Name: domain.CapabilitySystemExecute, Version: capabilityVersion},
-		{Name: domain.CapabilityFilesystemRead, Version: capabilityVersion},
-		{Name: domain.CapabilityFilesystemWrite, Version: capabilityVersion},
-	}
-
-	return resources, capabilities, nil
+	// v0 declares no capabilities: capability-first modeling (baseline §8
+	// rule 2) means a node is described by what it actually exposes, and
+	// nothing here is invocable yet (see command.go's CommandName set for
+	// what v0 really supports). domain.CapabilitySystemExecute and its
+	// siblings are reserved names for a future runtime to declare once it
+	// actually implements them — advertising them now, unenforceable,
+	// would be exactly the kind of claim baseline §9 rule 5 (deterministic
+	// enforcement) rules out.
+	return resources, []domain.Capability{}, nil
 }
 
 // Metrics is the live figures collected on each heartbeat.
