@@ -6,6 +6,7 @@ package ws
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"net/http"
@@ -16,16 +17,42 @@ import (
 	"home-harness/internal/domain"
 )
 
-// Transport is the WebSocket implementation of domain.Transport.
-type Transport struct{}
+// Transport is the WebSocket implementation of domain.Transport. Plain
+// (New) is plaintext ws://, used unchanged by every existing test and by
+// -insecure. TLS configuration is set at construction time by the
+// composition root (cmd/manager, cmd/agent) via NewTLSServer/NewTLSClient
+// — domain.Transport's shape never changes, so callers coded against the
+// interface don't need to know which variant they got.
+type Transport struct {
+	serverTLS *tls.Config
+	clientTLS *tls.Config
+}
 
-// New returns a ready-to-use WebSocket transport.
+// New returns a plaintext WebSocket transport.
 func New() *Transport { return &Transport{} }
+
+// NewTLSServer returns a transport whose Listen serves wss:// using cert.
+func NewTLSServer(cert tls.Certificate) *Transport {
+	return &Transport{serverTLS: &tls.Config{Certificates: []tls.Certificate{cert}}}
+}
+
+// NewTLSClient returns a transport whose Dial connects over wss:// using
+// cfg (typically mtls.PinnedClientConfig's result) to verify the server.
+func NewTLSClient(cfg *tls.Config) *Transport {
+	return &Transport{clientTLS: cfg}
+}
 
 // Dial opens a WebSocket connection to addr (host:port, no scheme).
 func (t *Transport) Dial(ctx context.Context, addr string) (domain.Conn, error) {
-	url := fmt.Sprintf("ws://%s/harness", addr)
-	c, _, err := websocket.Dial(ctx, url, nil)
+	scheme := "ws"
+	var opts *websocket.DialOptions
+	if t.clientTLS != nil {
+		scheme = "wss"
+		opts = &websocket.DialOptions{HTTPClient: &http.Client{Transport: &http.Transport{TLSClientConfig: t.clientTLS}}}
+	}
+
+	url := fmt.Sprintf("%s://%s/harness", scheme, addr)
+	c, _, err := websocket.Dial(ctx, url, opts)
 	if err != nil {
 		return nil, fmt.Errorf("ws: dial %s: %w", addr, err)
 	}
@@ -38,6 +65,9 @@ func (t *Transport) Listen(ctx context.Context, addr string) (<-chan domain.Conn
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("ws: listen on %s: %w", addr, err)
+	}
+	if t.serverTLS != nil {
+		ln = tls.NewListener(ln, t.serverTLS)
 	}
 
 	conns := make(chan domain.Conn)

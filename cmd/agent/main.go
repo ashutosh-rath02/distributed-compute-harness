@@ -15,6 +15,7 @@ import (
 
 	"home-harness/internal/agent"
 	"home-harness/internal/discovery/udp"
+	"home-harness/internal/mtls"
 	"home-harness/internal/transport/ws"
 )
 
@@ -24,13 +25,25 @@ func main() {
 	identityDir := flag.String("identity-dir", defaultIdentityDir(), "directory holding this node's persistent identity")
 	name := flag.String("name", "", "friendly node name (defaults to hostname)")
 	heartbeatInterval := flag.Duration("heartbeat-interval", 5*time.Second, "how often to send heartbeats")
+	managerFingerprint := flag.String("manager-fingerprint", "", "expected SHA-256 fingerprint of the manager's TLS certificate, printed on manager startup (required unless -insecure)")
+	insecure := flag.Bool("insecure", false, "disable TLS: connect over plaintext ws:// with no manager authentication (dev/local use only; must match the manager's -insecure)")
 	flag.Parse()
 
 	if *pairingToken == "" {
 		log.Fatal("agent: -pairing-token is required")
 	}
 
-	a, err := agent.New(ws.New(), agent.Config{
+	transport := ws.New()
+	if !*insecure {
+		if *managerFingerprint == "" {
+			log.Fatal("agent: -manager-fingerprint is required unless -insecure is set (get it from the manager's startup log)")
+		}
+		transport = ws.NewTLSClient(mtls.PinnedClientConfig(*managerFingerprint))
+	} else {
+		log.Println("agent: running with -insecure: plaintext transport, manager identity not verified")
+	}
+
+	a, err := agent.New(transport, agent.Config{
 		ManagerAddr:       *managerAddr,
 		Discoverer:        &udp.Discoverer{},
 		PairingToken:      *pairingToken,

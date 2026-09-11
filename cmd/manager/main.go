@@ -18,17 +18,20 @@ import (
 
 	"home-harness/internal/discovery/udp"
 	"home-harness/internal/manager"
+	"home-harness/internal/mtls"
 	"home-harness/internal/store/persistent"
 	"home-harness/internal/transport/ws"
 )
 
 func main() {
 	addr := flag.String("addr", ":7420", "address to listen on for agent connections (host:port)")
-	apiAddr := flag.String("api-addr", ":7421", "address to serve the HTTP observability/control API on")
+	apiAddr := flag.String("api-addr", "127.0.0.1:7421", "address to serve the HTTP observability/control API on (loopback by default: POST /nodes/{id}/commands has no auth of its own, so widening this exposes unauthenticated command dispatch to the network)")
 	dbPath := flag.String("db", "harness-manager.db", "path to the persistent store file")
+	tlsDir := flag.String("tls-dir", "harness-manager-tls", "directory holding the manager's persistent TLS certificate")
 	pairingToken := flag.String("pairing-token", "", "shared secret agents must present to register (required)")
 	heartbeatTimeout := flag.Duration("heartbeat-timeout", 15*time.Second, "how long without a heartbeat before a node is marked offline")
 	disableDiscovery := flag.Bool("disable-discovery", false, "disable the LAN multicast discovery beacon")
+	insecure := flag.Bool("insecure", false, "disable TLS: agents connect over plaintext ws:// with no manager authentication (dev/local use only)")
 	flag.Parse()
 
 	if *pairingToken == "" {
@@ -41,7 +44,19 @@ func main() {
 	}
 	defer store.Close()
 
-	srv := manager.NewServer(ws.New(), store, manager.Config{
+	transport := ws.New()
+	if !*insecure {
+		cert, err := mtls.LoadOrCreateCert(*tlsDir)
+		if err != nil {
+			log.Fatalf("manager: %v", err)
+		}
+		log.Printf("Manager TLS fingerprint (give this to agents via -manager-fingerprint):\n  %s", mtls.Fingerprint(cert))
+		transport = ws.NewTLSServer(cert)
+	} else {
+		log.Println("manager: running with -insecure: plaintext transport, no manager authentication")
+	}
+
+	srv := manager.NewServer(transport, store, manager.Config{
 		Addr:             *addr,
 		PairingToken:     *pairingToken,
 		HeartbeatTimeout: *heartbeatTimeout,

@@ -33,13 +33,21 @@ type Config struct {
 	// is consulted on every (re)connect attempt, not just once, so the
 	// agent tolerates the manager's address changing across restarts —
 	// churn is normal (baseline §9 rule 4).
-	Discoverer        domain.Discoverer
-	PairingToken      string
-	IdentityDir       string
-	Name              string
-	AgentVersion      string
+	Discoverer   domain.Discoverer
+	PairingToken string
+	IdentityDir  string
+	Name         string
+	AgentVersion string
+
 	HeartbeatInterval time.Duration
-	ReconnectBackoff  time.Duration
+	// ReconnectBackoff is both the starting delay after a failed
+	// connection attempt and the delay reset to after a connection that
+	// stayed up for a while — it doubles (capped at MaxReconnectBackoff)
+	// on each consecutive failure, so a persistently unreachable manager
+	// is retried less aggressively over time rather than hammering it.
+	ReconnectBackoff time.Duration
+	// MaxReconnectBackoff caps the doubling. Defaults to 30s.
+	MaxReconnectBackoff time.Duration
 }
 
 const defaultAgentVersion = "0.1.0"
@@ -62,6 +70,9 @@ func New(transport domain.Transport, cfg Config) (*Agent, error) {
 	if cfg.ReconnectBackoff == 0 {
 		cfg.ReconnectBackoff = 3 * time.Second
 	}
+	if cfg.MaxReconnectBackoff == 0 {
+		cfg.MaxReconnectBackoff = 30 * time.Second
+	}
 	if cfg.AgentVersion == "" {
 		cfg.AgentVersion = defaultAgentVersion
 	}
@@ -78,20 +89,44 @@ func New(transport domain.Transport, cfg Config) (*Agent, error) {
 func (a *Agent) NodeID() domain.NodeID { return a.identity.NodeID }
 
 // Run connects to the manager and services the connection until ctx is
-// canceled, reconnecting with a fixed backoff on any failure (v1.md §16
-// "Reconnect after network failure").
+// canceled, reconnecting with exponential backoff on failure (v1.md §16
+// "Reconnect after network failure"). A connection that stayed up longer
+// than a few heartbeat intervals counts as a real session and resets the
+// backoff to its starting value; a rapid failure loop keeps doubling it
+// (capped at MaxReconnectBackoff) instead of hammering an unreachable
+// manager at a fixed rate forever.
 func (a *Agent) Run(ctx context.Context) error {
+	backoff := a.cfg.ReconnectBackoff
+	resetThreshold := 3 * a.cfg.HeartbeatInterval
+
 	for {
+		connectedAt := time.Now()
 		if err := a.connectAndServe(ctx); err != nil {
 			log.Printf("agent %s: connection error: %v", a.identity.NodeID, err)
+		}
+
+		if time.Since(connectedAt) >= resetThreshold {
+			backoff = a.cfg.ReconnectBackoff
+		} else {
+			backoff = nextBackoff(backoff, a.cfg.MaxReconnectBackoff)
 		}
 
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(a.cfg.ReconnectBackoff):
+		case <-time.After(backoff):
 		}
 	}
+}
+
+// nextBackoff doubles current, capped at maxBackoff. A pure function so
+// the backoff progression is testable without any real timing.
+func nextBackoff(current, maxBackoff time.Duration) time.Duration {
+	next := current * 2
+	if next > maxBackoff {
+		return maxBackoff
+	}
+	return next
 }
 
 func (a *Agent) connectAndServe(ctx context.Context) error {
