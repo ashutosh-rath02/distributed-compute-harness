@@ -2,6 +2,7 @@ package manager
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 
@@ -17,28 +18,54 @@ type Config struct {
 	HeartbeatTimeout time.Duration
 }
 
+// PersistentStore is the subset of persistent storage the manager needs:
+// last-known node manifests that must survive a restart. The manager
+// depends only on this interface, never on the concrete store package
+// (e.g. internal/store/persistent), so storage can change later without
+// touching manager logic.
+type PersistentStore interface {
+	UpsertNode(manifest domain.Manifest) error
+	ListNodes() ([]domain.Manifest, error)
+}
+
 // Server is the control-plane process: it accepts connections over a
 // domain.Transport, runs the REGISTER/HEARTBEAT protocol, and owns the
-// node registry.
+// node registry. Persistence is optional (nil store = registry only,
+// nothing survives a restart) so tests and the walking-skeleton path from
+// Milestone 3 keep working unchanged.
 type Server struct {
 	cfg       Config
 	transport domain.Transport
+	store     PersistentStore
 	Registry  *Registry
 }
 
 // NewServer builds a manager bound to a concrete transport (e.g. the ws
-// package) but coded only against domain.Transport.
-func NewServer(transport domain.Transport, cfg Config) *Server {
+// package) but coded only against domain.Transport, and an optional
+// PersistentStore for node identity/metadata to survive a restart.
+func NewServer(transport domain.Transport, store PersistentStore, cfg Config) *Server {
 	return &Server{
 		cfg:       cfg,
 		transport: transport,
+		store:     store,
 		Registry:  NewRegistry(),
 	}
 }
 
-// Run starts accepting connections and monitoring heartbeats until ctx is
+// Run loads any previously-known nodes from the persistent store, then
+// starts accepting connections and monitoring heartbeats until ctx is
 // canceled.
 func (s *Server) Run(ctx context.Context) error {
+	if s.store != nil {
+		manifests, err := s.store.ListNodes()
+		if err != nil {
+			return fmt.Errorf("manager: load persisted nodes: %w", err)
+		}
+		for _, m := range manifests {
+			s.Registry.Seed(m.Node)
+		}
+	}
+
 	conns, err := s.transport.Listen(ctx, s.cfg.Addr)
 	if err != nil {
 		return err
@@ -156,6 +183,12 @@ func (s *Server) handleRegister(ctx context.Context, conn domain.Conn, env *prot
 
 	_, isNew := s.Registry.Upsert(node, conn)
 	s.Registry.SetState(claimedID, domain.NodeReady)
+
+	if s.store != nil {
+		if err := s.store.UpsertNode(payload.Manifest); err != nil {
+			log.Printf("manager: failed to persist node %s: %v", claimedID, err)
+		}
+	}
 
 	if isNew {
 		log.Printf("node.registered: %s (%s)", claimedID, node.Name)

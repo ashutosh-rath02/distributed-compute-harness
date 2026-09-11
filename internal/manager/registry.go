@@ -108,6 +108,20 @@ func (r *Registry) List() []*NodeRecord {
 	return out
 }
 
+// Seed inserts a node as OFFLINE with no live connection, without
+// overwriting an existing (possibly already-live) record. It is how the
+// manager restores previously-registered nodes into the runtime registry
+// after a restart, before any of them have reconnected (v1.md §13/§21:
+// state survives manager restart where appropriate).
+func (r *Registry) Seed(node domain.Node) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.nodes[node.Identity.NodeID]; exists {
+		return
+	}
+	r.nodes[node.Identity.NodeID] = &NodeRecord{Node: node, State: domain.NodeOffline}
+}
+
 // ExpireStale transitions any node whose LastSeen exceeds timeout into
 // OFFLINE, returning the IDs that were just transitioned so callers can
 // emit node.offline events without holding the registry lock.

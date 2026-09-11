@@ -23,7 +23,7 @@ func startManager(t *testing.T, addr string, heartbeatTimeout time.Duration) *ma
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	srv := manager.NewServer(ws.New(), manager.Config{
+	srv := manager.NewServer(ws.New(), nil, manager.Config{
 		Addr:             addr,
 		PairingToken:     pairingToken,
 		HeartbeatTimeout: heartbeatTimeout,
