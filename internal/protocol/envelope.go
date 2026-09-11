@@ -116,13 +116,18 @@ func (e *ErrUnsupportedVersion) Error() string {
 // "v0.3" is accepted by a "v0.1" build; "v1.0" is not). This lets minor
 // protocol additions land without breaking older peers, per v1.md §8/§21.
 func CheckVersion(e *Envelope) error {
-	if major(e.ProtocolVersion) != major(Version) {
+	if Major(e.ProtocolVersion) != Major(Version) {
 		return &ErrUnsupportedVersion{Got: e.ProtocolVersion, Want: Version}
 	}
 	return nil
 }
 
-func major(v string) string {
+// Major extracts the major component of a "vMAJOR.MINOR" version string,
+// e.g. "v0.3" -> "0". Exported so other packages that need to reason about
+// version compatibility (e.g. UDP discovery, which filters beacons before
+// a full envelope even exists) share this exact rule instead of each
+// re-implementing it.
+func Major(v string) string {
 	parts := strings.SplitN(strings.TrimPrefix(v, "v"), ".", 2)
 	return parts[0]
 }

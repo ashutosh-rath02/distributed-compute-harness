@@ -19,7 +19,15 @@ import (
 
 // Config holds the agent's tunables.
 type Config struct {
-	ManagerAddr       string
+	// ManagerAddr, if set, is used directly and Discoverer is never
+	// consulted — the manual "--manager-addr" fallback from v1.md §4.1
+	// for networks where discovery doesn't work.
+	ManagerAddr string
+	// Discoverer resolves a manager address when ManagerAddr is empty. It
+	// is consulted on every (re)connect attempt, not just once, so the
+	// agent tolerates the manager's address changing across restarts —
+	// churn is normal (baseline §9 rule 4).
+	Discoverer        domain.Discoverer
 	PairingToken      string
 	IdentityDir       string
 	Name              string
@@ -80,9 +88,14 @@ func (a *Agent) Run(ctx context.Context) error {
 }
 
 func (a *Agent) connectAndServe(ctx context.Context) error {
-	conn, err := a.transport.Dial(ctx, a.cfg.ManagerAddr)
+	addr, err := a.resolveManagerAddr(ctx)
 	if err != nil {
-		return fmt.Errorf("dial manager: %w", err)
+		return fmt.Errorf("resolve manager address: %w", err)
+	}
+
+	conn, err := a.transport.Dial(ctx, addr)
+	if err != nil {
+		return fmt.Errorf("dial manager at %s: %w", addr, err)
 	}
 	defer conn.Close()
 
@@ -101,6 +114,16 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+func (a *Agent) resolveManagerAddr(ctx context.Context) (string, error) {
+	if a.cfg.ManagerAddr != "" {
+		return a.cfg.ManagerAddr, nil
+	}
+	if a.cfg.Discoverer == nil {
+		return "", fmt.Errorf("no ManagerAddr configured and no Discoverer set")
+	}
+	return a.cfg.Discoverer.Discover(ctx)
 }
 
 func (a *Agent) register(ctx context.Context, conn domain.Conn) error {
