@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -23,6 +24,7 @@ import (
 
 func main() {
 	addr := flag.String("addr", ":7420", "address to listen on for agent connections (host:port)")
+	apiAddr := flag.String("api-addr", ":7421", "address to serve the HTTP observability/control API on")
 	dbPath := flag.String("db", "harness-manager.db", "path to the persistent store file")
 	pairingToken := flag.String("pairing-token", "", "shared secret agents must present to register (required)")
 	heartbeatTimeout := flag.Duration("heartbeat-timeout", 15*time.Second, "how long without a heartbeat before a node is marked offline")
@@ -61,7 +63,20 @@ func main() {
 		}()
 	}
 
-	log.Printf("harness manager listening on %s", *addr)
+	apiServer := &http.Server{Addr: *apiAddr, Handler: srv.NewHTTPHandler()}
+	go func() {
+		if err := apiServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("manager: API server stopped: %v", err)
+		}
+	}()
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		apiServer.Shutdown(shutdownCtx)
+	}()
+
+	log.Printf("harness manager listening on %s (API on %s)", *addr, *apiAddr)
 	if err := srv.Run(ctx); err != nil && ctx.Err() == nil {
 		log.Fatalf("manager: %v", err)
 	}

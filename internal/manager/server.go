@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"home-harness/internal/domain"
+	"home-harness/internal/eventbus"
 	"home-harness/internal/identity"
 	"home-harness/internal/protocol"
 )
@@ -42,6 +43,10 @@ type Server struct {
 	transport domain.Transport
 	store     PersistentStore
 	Registry  *Registry
+	// Events publishes lifecycle/command events (v1.md §12) — a future
+	// scheduler, the HTTP API's SSE stream, or a CLI can subscribe without
+	// coupling to networking code.
+	Events *eventbus.Bus
 
 	pendingMu sync.Mutex
 	pending   map[string]pendingCommand
@@ -66,8 +71,13 @@ func NewServer(transport domain.Transport, store PersistentStore, cfg Config) *S
 		transport: transport,
 		store:     store,
 		Registry:  NewRegistry(),
+		Events:    eventbus.New(),
 		pending:   make(map[string]pendingCommand),
 	}
+}
+
+func (s *Server) publish(eventType domain.EventType, nodeID domain.NodeID, data map[string]any) {
+	s.Events.Publish(domain.Event{Type: eventType, NodeID: nodeID, Timestamp: time.Now().UTC(), Data: data})
 }
 
 // ErrNodeNotConnected is returned by SendCommand when the target node has
@@ -102,6 +112,7 @@ func (s *Server) SendCommand(ctx context.Context, nodeID domain.NodeID, name dom
 
 	s.send(ctx, rec.Conn, protocol.MsgCommand, domain.ManagerNodeID, nodeID, protocol.CommandPayload{Command: cmd})
 	log.Printf("command.sent: %s to %s (id=%s)", name, nodeID, cmdID)
+	s.publish(domain.EventCommandSent, nodeID, map[string]any{"commandId": cmdID, "name": string(name)})
 
 	sendCtx := ctx
 	if timeout > 0 {
@@ -114,12 +125,15 @@ func (s *Server) SendCommand(ctx context.Context, nodeID domain.NodeID, name dom
 	case result := <-resultCh:
 		if result.Success {
 			log.Printf("command.completed: %s to %s (id=%s)", name, nodeID, cmdID)
+			s.publish(domain.EventCommandCompleted, nodeID, map[string]any{"commandId": cmdID, "name": string(name)})
 		} else {
 			log.Printf("command.failed: %s to %s (id=%s): %s", name, nodeID, cmdID, result.Error)
+			s.publish(domain.EventCommandFailed, nodeID, map[string]any{"commandId": cmdID, "name": string(name), "error": result.Error})
 		}
 		return result, nil
 	case <-sendCtx.Done():
 		log.Printf("command.failed: %s to %s (id=%s): %v", name, nodeID, cmdID, sendCtx.Err())
+		s.publish(domain.EventCommandFailed, nodeID, map[string]any{"commandId": cmdID, "name": string(name), "error": sendCtx.Err().Error()})
 		return domain.CommandResult{}, sendCtx.Err()
 	}
 }
@@ -176,6 +190,7 @@ func (s *Server) monitorHeartbeats(ctx context.Context) {
 		case <-ticker.C:
 			for _, id := range s.Registry.ExpireStale(s.cfg.HeartbeatTimeout) {
 				log.Printf("node.offline: %s", id)
+				s.publish(domain.EventNodeOffline, id, map[string]any{"reason": "heartbeat timeout"})
 			}
 		}
 	}
@@ -186,6 +201,7 @@ func (s *Server) handleConn(ctx context.Context, conn domain.Conn) {
 	defer func() {
 		if nodeID != "" && s.Registry.SetOfflineIfCurrent(nodeID, conn) {
 			log.Printf("node.offline: %s (connection closed)", nodeID)
+			s.publish(domain.EventNodeOffline, nodeID, map[string]any{"reason": "connection closed"})
 		}
 		conn.Close()
 	}()
@@ -276,9 +292,12 @@ func (s *Server) handleRegister(ctx context.Context, conn domain.Conn, env *prot
 
 	if isNew {
 		log.Printf("node.registered: %s (%s)", claimedID, node.Name)
+		s.publish(domain.EventNodeRegistered, claimedID, map[string]any{"name": node.Name})
 	} else {
 		log.Printf("node.reconnected: %s (%s)", claimedID, node.Name)
+		s.publish(domain.EventNodeReconnected, claimedID, map[string]any{"name": node.Name})
 	}
+	s.publish(domain.EventNodeReady, claimedID, nil)
 
 	s.send(ctx, conn, protocol.MsgRegisterAck, domain.ManagerNodeID, claimedID,
 		protocol.RegisterAckPayload{NodeID: claimedID, ServerTime: time.Now().UTC()})
@@ -339,6 +358,7 @@ func (s *Server) handleCapabilityUpdate(nodeID domain.NodeID, env *protocol.Enve
 	}
 	s.Registry.UpdateResources(nodeID, payload.Resources, payload.Capabilities)
 	log.Printf("node.updated: %s (resources/capabilities refreshed)", nodeID)
+	s.publish(domain.EventNodeUpdated, nodeID, nil)
 }
 
 func (s *Server) sendError(ctx context.Context, conn domain.Conn, source, dest domain.NodeID, code, message string) {
