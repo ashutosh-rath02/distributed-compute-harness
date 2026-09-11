@@ -27,6 +27,14 @@ type Config struct {
 	// and restart-backoff resolution are different concerns. Defaults to
 	// 5s (see cmd/manager's -reconcile-interval flag).
 	ReconcileInterval time.Duration
+	// AgentBinaryPath, if set, is the agent executable the manager serves
+	// at /agent-binary (registered on the transport's own listener — see
+	// cmd/manager/main.go) and hashes once at startup for self-update's
+	// "does this node need updating" decision (selfupdate.go). Empty
+	// disables self-update entirely rather than erroring — a manager
+	// restarted without this flag simply can't push updates until it's
+	// set again.
+	AgentBinaryPath string
 }
 
 // PersistentStore is the subset of persistent storage the manager needs:
@@ -59,6 +67,11 @@ type Server struct {
 
 	pendingMu sync.Mutex
 	pending   map[string]pendingCommand
+
+	// agentBinaryHash is cfg.AgentBinaryPath's SHA-256, computed once at
+	// startup (see NewServer) — empty if AgentBinaryPath is unset or
+	// unreadable, in which case NeedsUpdate always reports false.
+	agentBinaryHash string
 }
 
 // pendingCommand tracks who a dispatched command was sent to, so its
@@ -78,7 +91,7 @@ func NewServer(transport domain.Transport, store PersistentStore, cfg Config) *S
 	if cfg.ReconcileInterval <= 0 {
 		cfg.ReconcileInterval = defaultReconcileInterval
 	}
-	return &Server{
+	s := &Server{
 		cfg:       cfg,
 		transport: transport,
 		store:     store,
@@ -87,6 +100,16 @@ func NewServer(transport domain.Transport, store PersistentStore, cfg Config) *S
 		Events:    eventbus.New(),
 		pending:   make(map[string]pendingCommand),
 	}
+
+	if cfg.AgentBinaryPath == "" {
+		log.Println("manager: self-update disabled: -agent-binary not set")
+	} else if hash, err := hashFile(cfg.AgentBinaryPath); err != nil {
+		log.Printf("manager: self-update disabled: could not hash -agent-binary %q: %v", cfg.AgentBinaryPath, err)
+	} else {
+		s.agentBinaryHash = hash
+	}
+
+	return s
 }
 
 func (s *Server) publish(eventType domain.EventType, nodeID domain.NodeID, data map[string]any) {

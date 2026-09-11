@@ -65,6 +65,8 @@ func main() {
 		err = requireArgs(args, 2, "workload <id>", func() error { return client.cmdWorkload(args[1]) })
 	case "cancel":
 		err = requireArgs(args, 2, "cancel <workload-id>", func() error { return client.cmdCancelWorkload(args[1]) })
+	case "update":
+		err = requireArgs(args, 2, "update <id>", func() error { return client.cmdUpdateNode(args[1]) })
 	default:
 		usage()
 		os.Exit(2)
@@ -109,7 +111,12 @@ Commands:
                         what a node declares.
   workloads             list all known workloads
   workload <id>         show one workload's request, state, and captured output
-  cancel <workload-id>  request cancellation of a running workload`)
+  cancel <workload-id>  request cancellation of a running workload
+  update <id>           push a self-update if the node isn't already running
+                        the binary this manager currently serves (manager
+                        started with -agent-binary); the node reconnects on
+                        its own once done — no manual file transfer or
+                        restart. "nodes" flags any node this would affect.`)
 }
 
 // cmdRun parses "run"'s own flags separately from the top-level FlagSet,
@@ -243,6 +250,7 @@ type nodeView struct {
 	Hostname     string              `json:"hostname"`
 	Platform     domain.Platform     `json:"platform"`
 	AgentVersion string              `json:"agentVersion"`
+	BinaryHash   string              `json:"binaryHash,omitempty"`
 	State        domain.NodeState    `json:"state"`
 	LastSeen     time.Time           `json:"lastSeen"`
 	Metrics      domain.RuntimeState `json:"metrics"`
@@ -257,14 +265,29 @@ func (c *apiClient) cmdNodes() error {
 		fmt.Println("No nodes known to the harness yet.")
 		return nil
 	}
+
+	// Self-update outdated marker: one extra request for the manager's
+	// currently-served hash, compared against each listed node's own —
+	// closes the "no fleet-wide version visibility" gap without a
+	// per-node comparison endpoint. currentHash stays "" (marker never
+	// shown) if self-update is disabled or the request fails.
+	var hashResp struct {
+		SHA256 string `json:"sha256"`
+	}
+	_ = c.get("/agent-binary/hash", &hashResp)
+
 	fmt.Printf("%-24s %-20s %-12s %-8s %-14s %s\n", "NODE ID", "NAME", "STATE", "CPU%", "LAST SEEN", "AGENT")
 	for _, n := range nodes {
 		lastSeen := "-"
 		if !n.LastSeen.IsZero() {
 			lastSeen = time.Since(n.LastSeen).Round(time.Second).String() + " ago"
 		}
+		agent := n.AgentVersion
+		if hashResp.SHA256 != "" && n.BinaryHash != "" && n.BinaryHash != hashResp.SHA256 {
+			agent += " (outdated)"
+		}
 		fmt.Printf("%-24s %-20s %-12s %-8.1f %-14s %s\n",
-			n.NodeID, truncate(n.Name, 20), n.State, n.Metrics.CPUPercent, lastSeen, n.AgentVersion)
+			n.NodeID, truncate(n.Name, 20), n.State, n.Metrics.CPUPercent, lastSeen, agent)
 	}
 	return nil
 }
@@ -485,6 +508,38 @@ func (c *apiClient) cmdCancelWorkload(id string) error {
 		return fmt.Errorf("manager returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
 	fmt.Println("Cancellation requested.")
+	return nil
+}
+
+func (c *apiClient) cmdUpdateNode(id string) error {
+	resp, err := c.http.Post(c.base+"/nodes/"+id+"/update", "application/json", nil)
+	if err != nil {
+		return fmt.Errorf("update node: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("manager returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	// Two distinct response shapes share this 200: the already-up-to-date
+	// short-circuit (map[string]string{"status": "already-up-to-date"}) and
+	// the dispatch path's raw domain.CommandResult (a bool Success field,
+	// which map[string]string can't hold) — decode loosely and branch on
+	// whichever fields are actually present.
+	var result map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return err
+	}
+	if status, _ := result["status"].(string); status == "already-up-to-date" {
+		fmt.Println("Already up to date.")
+		return nil
+	}
+	if success, ok := result["success"].(bool); ok && !success {
+		errMsg, _ := result["error"].(string)
+		fmt.Printf("Update rejected: %s\n", errMsg)
+		return nil
+	}
+	fmt.Println("Update accepted — the node will reconnect on its own once it's applied.")
 	return nil
 }
 

@@ -23,6 +23,24 @@ func (a *Agent) handleCommand(ctx context.Context, conn domain.Conn, env *protoc
 		return // malformed command from the manager: nothing sensible to reply with
 	}
 
+	// SELF_UPDATE is special-cased ahead of the generic executeCommand
+	// dispatch below: unlike every other command, the goroutine performing
+	// it (performSelfUpdate) ends this process, so "go f(); return ack"
+	// would not actually guarantee the ack goes out first — go doesn't
+	// yield, and the spawned goroutine can start running immediately on
+	// another core. Sending the ack synchronously here first, then
+	// launching the goroutine, makes the ordering explicit rather than
+	// timing-dependent.
+	if payload.Command.Name == domain.CommandSelfUpdate {
+		result := domain.CommandResult{CommandID: payload.Command.ID, Success: true, Output: map[string]string{"status": "update started"}}
+		if err := a.send(ctx, conn, protocol.MsgCommandResult, env.Source, protocol.CommandResultPayload{Result: result}); err != nil {
+			errCh <- fmt.Errorf("send COMMAND_RESULT: %w", err)
+			return
+		}
+		go a.performSelfUpdate(payload.Command.Args["sha256"])
+		return
+	}
+
 	result := a.executeCommand(ctx, conn, payload.Command)
 	if err := a.send(ctx, conn, protocol.MsgCommandResult, env.Source, protocol.CommandResultPayload{Result: result}); err != nil {
 		errCh <- fmt.Errorf("send COMMAND_RESULT: %w", err)

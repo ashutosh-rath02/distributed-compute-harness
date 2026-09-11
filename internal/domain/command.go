@@ -12,6 +12,15 @@ const (
 	CommandGetSystemInfo          CommandName = "GET_SYSTEM_INFO"
 	CommandGetAgentStatus         CommandName = "GET_AGENT_STATUS"
 	CommandRequestResourceRefresh CommandName = "REQUEST_RESOURCE_REFRESH"
+	// CommandSelfUpdate tells the agent to download, verify, and swap in a
+	// new binary of itself, then relaunch with its original flags — see
+	// internal/agent/selfupdate.go. Args carries "sha256", the expected
+	// hex digest of the binary the manager serves at /agent-binary; unlike
+	// every other command, an agent that handles this one successfully
+	// never gets the chance to report failure/success the normal way
+	// (see handleCommand's special-casing of this name) since the process
+	// that would report it is the one being replaced.
+	CommandSelfUpdate CommandName = "SELF_UPDATE"
 )
 
 // Command is a request dispatched from the manager to a specific node.

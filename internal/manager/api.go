@@ -18,6 +18,7 @@ type nodeView struct {
 	Hostname     string              `json:"hostname"`
 	Platform     domain.Platform     `json:"platform"`
 	AgentVersion string              `json:"agentVersion"`
+	BinaryHash   string              `json:"binaryHash,omitempty"`
 	State        domain.NodeState    `json:"state"`
 	LastSeen     time.Time           `json:"lastSeen"`
 	Metrics      domain.RuntimeState `json:"metrics"`
@@ -30,6 +31,7 @@ func toNodeView(rec *NodeRecord) nodeView {
 		Hostname:     rec.Node.Hostname,
 		Platform:     rec.Node.Platform,
 		AgentVersion: rec.Node.AgentVersion,
+		BinaryHash:   rec.Node.BinaryHash,
 		State:        rec.State,
 		LastSeen:     rec.LastSeen,
 		Metrics:      rec.LastMetrics,
@@ -46,6 +48,8 @@ func toNodeView(rec *NodeRecord) nodeView {
 //	GET  /resources/total           resource totals summed across all nodes
 //	GET  /events                    Server-Sent Events stream of harness events
 //	POST /nodes/{id}/commands        dispatch a command: {"name":"...","args":{...},"timeoutMs":...}
+//	POST /nodes/{id}/update          push a self-update if the node isn't already current
+//	GET  /agent-binary/hash          the manager's currently-served agent binary hash
 //	POST /workloads                 submit a workload: {"target":"...optional...","command":"...","args":[...],"requirements":{...optional...}}
 //	GET  /workloads                 list all known workloads
 //	GET  /workloads/{id}             one workload's request + status
@@ -68,6 +72,8 @@ func (s *Server) NewHTTPHandler() http.Handler {
 	mux.HandleFunc("GET /resources/total", s.apiGetTotalResources)
 	mux.HandleFunc("GET /events", s.apiEvents)
 	mux.HandleFunc("POST /nodes/{id}/commands", s.apiPostCommand)
+	mux.HandleFunc("POST /nodes/{id}/update", s.apiPostUpdate)
+	mux.HandleFunc("GET /agent-binary/hash", s.apiGetAgentBinaryHash)
 	mux.HandleFunc("POST /workloads", s.apiPostWorkload)
 	mux.HandleFunc("GET /workloads", s.apiListWorkloads)
 	mux.HandleFunc("GET /workloads/{id}", s.apiGetWorkload)
@@ -148,6 +154,52 @@ func (s *Server) apiPostCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+// apiPostUpdate triggers a self-update (internal/agent/selfupdate.go) on
+// one node, short-circuiting if it's already running the binary this
+// manager currently serves — reuses SendCommand's exact dispatch/wait/
+// timeout machinery via domain.CommandSelfUpdate, so a 200 here means "the
+// agent acknowledged and started," not "the update finished": completion
+// is only observable via the node going OFFLINE and reconnecting with a
+// new BinaryHash (GET /nodes/{id} or the outdated marker harnessctl nodes
+// shows via GET /agent-binary/hash).
+func (s *Server) apiPostUpdate(w http.ResponseWriter, r *http.Request) {
+	nodeID := domain.NodeID(r.PathValue("id"))
+
+	rec, ok := s.Registry.Get(nodeID)
+	if !ok {
+		http.Error(w, "node not found", http.StatusNotFound)
+		return
+	}
+	if s.agentBinaryHash == "" {
+		http.Error(w, "manager: self-update disabled (-agent-binary not set)", http.StatusConflict)
+		return
+	}
+	if !s.NeedsUpdate(rec) {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "already-up-to-date"})
+		return
+	}
+
+	result, err := s.SendCommand(r.Context(), nodeID, domain.CommandSelfUpdate, map[string]string{"sha256": s.agentBinaryHash}, defaultCommandTimeout)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrNodeNotConnected):
+			http.Error(w, err.Error(), http.StatusConflict)
+		default:
+			http.Error(w, err.Error(), http.StatusGatewayTimeout)
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+// apiGetAgentBinaryHash returns the manager's currently-served agent
+// binary hash (empty string if self-update is disabled) — harnessctl uses
+// this once per `nodes` listing to flag any node whose last-reported
+// BinaryHash differs, without needing a comparison endpoint per node.
+func (s *Server) apiGetAgentBinaryHash(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"sha256": s.AgentBinaryHash()})
 }
 
 // workloadSummaryView is the JSON shape for a workload in a list — request

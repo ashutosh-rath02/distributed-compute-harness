@@ -2,6 +2,8 @@ package ws
 
 import (
 	"context"
+	"io"
+	"net/http"
 	"testing"
 	"time"
 
@@ -74,6 +76,48 @@ func assertRoundTrip(t *testing.T, server, client *Transport, addr string) {
 
 func TestRoundTrip(t *testing.T) {
 	assertRoundTrip(t, New(), New(), "127.0.0.1:18181")
+}
+
+// TestHandleServesAlongsideWebSocketUpgrade proves an extra route
+// registered via Handle is reachable on the exact same address/port the
+// WebSocket upgrade is served on, with no new listener — the mechanism
+// internal/agent/selfupdate.go's binary download relies on.
+func TestHandleServesAlongsideWebSocketUpgrade(t *testing.T) {
+	const addr = "127.0.0.1:18182"
+	server := New()
+	server.Handle("/extra", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("extra-route-response"))
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if _, err := server.Listen(ctx, addr); err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var resp *http.Response
+	var err error
+	for {
+		resp, err = http.Get("http://" + addr + "/extra")
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("GET /extra: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != "extra-route-response" {
+		t.Fatalf("expected the registered handler's response, got %q", body)
+	}
 }
 
 func TestTLSRoundTrip(t *testing.T) {

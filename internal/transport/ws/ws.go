@@ -26,6 +26,13 @@ import (
 type Transport struct {
 	serverTLS *tls.Config
 	clientTLS *tls.Config
+	// extraRoutes holds plain HTTP handlers registered via Handle, applied
+	// to the same mux/listener/port Listen already serves the WebSocket
+	// upgrade on — e.g. the manager's agent-binary download for self-update
+	// (internal/agent/selfupdate.go), which needs to be reachable by
+	// exactly the agents already dialing this address, with no new port or
+	// firewall rule.
+	extraRoutes map[string]http.HandlerFunc
 }
 
 // New returns a plaintext WebSocket transport.
@@ -59,6 +66,17 @@ func (t *Transport) Dial(ctx context.Context, addr string) (domain.Conn, error) 
 	return &conn{ws: c, remote: addr}, nil
 }
 
+// Handle registers an additional plain HTTP handler at pattern, served on
+// the same address/port Listen will later bind, alongside the WebSocket
+// upgrade at "/harness". Must be called before Listen — Listen reads
+// extraRoutes once to build its mux and does not observe later changes.
+func (t *Transport) Handle(pattern string, handler http.HandlerFunc) {
+	if t.extraRoutes == nil {
+		t.extraRoutes = make(map[string]http.HandlerFunc)
+	}
+	t.extraRoutes[pattern] = handler
+}
+
 // Listen starts an HTTP server on addr and delivers each accepted
 // WebSocket upgrade as a domain.Conn on the returned channel.
 func (t *Transport) Listen(ctx context.Context, addr string) (<-chan domain.Conn, error) {
@@ -72,6 +90,9 @@ func (t *Transport) Listen(ctx context.Context, addr string) (<-chan domain.Conn
 
 	conns := make(chan domain.Conn)
 	mux := http.NewServeMux()
+	for pattern, handler := range t.extraRoutes {
+		mux.HandleFunc(pattern, handler)
+	}
 	mux.HandleFunc("/harness", func(w http.ResponseWriter, r *http.Request) {
 		c, err := websocket.Accept(w, r, nil)
 		if err != nil {

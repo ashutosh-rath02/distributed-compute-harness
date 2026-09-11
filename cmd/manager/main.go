@@ -31,6 +31,7 @@ func main() {
 	pairingToken := flag.String("pairing-token", "", "shared secret agents must present to register (required)")
 	heartbeatTimeout := flag.Duration("heartbeat-timeout", 15*time.Second, "how long without a heartbeat before a node is marked offline")
 	reconcileInterval := flag.Duration("reconcile-interval", 5*time.Second, "how often to check for workloads that need restarting (RestartPolicy on-failure/always)")
+	agentBinaryPath := flag.String("agent-binary", "", "path to the agent executable to serve for self-update (POST /nodes/{id}/update); self-update disabled if unset")
 	disableDiscovery := flag.Bool("disable-discovery", false, "disable the LAN multicast discovery beacon")
 	insecure := flag.Bool("insecure", false, "disable TLS: agents connect over plaintext ws:// with no manager authentication (dev/local use only). POST /workloads still returns 202 and dispatches ASSIGN, but an agent run with its own -insecure will refuse to execute it (see cmd/agent's -insecure) rather than run arbitrary code for a manager it can't verify")
 	flag.Parse()
@@ -62,7 +63,12 @@ func main() {
 		PairingToken:      *pairingToken,
 		HeartbeatTimeout:  *heartbeatTimeout,
 		ReconcileInterval: *reconcileInterval,
+		AgentBinaryPath:   *agentBinaryPath,
 	})
+	// Registered before Run (which calls transport.Listen) — puts the
+	// download on the exact address/port agents already dial, no new port
+	// or firewall rule needed for self-update (internal/agent/selfupdate.go).
+	transport.Handle("/agent-binary", srv.AgentBinaryHandler())
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

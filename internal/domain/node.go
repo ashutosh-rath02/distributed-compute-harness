@@ -49,4 +49,11 @@ type Node struct {
 	Name         string   `json:"name"`
 	Platform     Platform `json:"platform"`
 	AgentVersion string   `json:"agentVersion"`
+	// BinaryHash is the SHA-256 (hex) of the agent's own currently-running
+	// executable, computed once at startup — unlike AgentVersion (a
+	// hardcoded string nothing ever overrides today), this is the actual
+	// signal the manager uses to decide whether a node needs a self-update
+	// (see internal/manager's NeedsUpdate): a content hash needs no human
+	// to remember to bump a version number.
+	BinaryHash string `json:"binaryHash,omitempty"`
 }

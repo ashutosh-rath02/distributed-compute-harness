@@ -51,6 +51,14 @@ func main() {
 		Name:                      *name,
 		HeartbeatInterval:         *heartbeatInterval,
 		InsecureWorkloadsDisabled: *insecure,
+		// LaunchArgs/Insecure/ManagerFingerprint exist solely for
+		// selfupdate.go: a self-relaunch execs this same binary with these
+		// exact flags, and the download needs to know the scheme and (if
+		// not insecure) the pinned fingerprint to trust for its own
+		// short-lived HTTP connection to the manager.
+		LaunchArgs:         os.Args[1:],
+		Insecure:           *insecure,
+		ManagerFingerprint: *managerFingerprint,
 	})
 	if err != nil {
 		log.Fatalf("agent: %v", err)

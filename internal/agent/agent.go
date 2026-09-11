@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"runtime"
+	"sync"
 	"time"
 
 	"home-harness/internal/domain"
@@ -56,6 +57,25 @@ type Config struct {
 	// — a much worse thing to hand to an unauthenticated peer than the
 	// harmless v0 command set.
 	InsecureWorkloadsDisabled bool
+	// LaunchArgs is the exact argv (os.Args[1:]) this process was started
+	// with, captured once in cmd/agent/main.go. A self-update (see
+	// selfupdate.go) execs the new binary with these same args rather than
+	// trying to reconstruct or guess at any flag — including
+	// -manager-fingerprint and -insecure below, which aren't otherwise
+	// threaded into Config at all since nothing but the relaunch needs them
+	// as values (main() only ever needed them to build the transport).
+	LaunchArgs []string
+	// Insecure mirrors the -insecure flag: whether this process is running
+	// with a plaintext, unauthenticated transport. selfupdate.go uses it to
+	// decide http:// vs https:// (and whether ManagerFingerprint below is
+	// even meaningful) for its own binary download.
+	Insecure bool
+	// ManagerFingerprint is the -manager-fingerprint flag's value (empty
+	// when Insecure). selfupdate.go builds its download client's TLS trust
+	// from this via the same mtls.PinnedClientConfig cmd/agent/main.go
+	// already calls to build the main WS transport — not a new trust
+	// mechanism, just reused for a second connection.
+	ManagerFingerprint string
 }
 
 const defaultAgentVersion = "0.1.0"
@@ -68,6 +88,19 @@ type Agent struct {
 	identity  *identity.Identity
 	startedAt time.Time
 	executor  *Executor
+	// binaryHash is this process's own executable's SHA-256, computed once
+	// in New — see selfupdate.go's hashFile. Empty if it couldn't be
+	// computed (e.g. os.Executable() failing on an unusual platform);
+	// reported as-is, an empty BinaryHash just means the manager can never
+	// consider this node up to date, never a crash.
+	binaryHash string
+
+	// addrMu guards currentManagerAddr, set by connectAndServe and read by
+	// a SELF_UPDATE command handler running on a different goroutine (the
+	// receive loop) — the only field on Agent that's written after
+	// construction from more than one goroutine.
+	addrMu             sync.Mutex
+	currentManagerAddr string
 }
 
 // New loads (or generates, on first run) the agent's identity and returns
@@ -91,11 +124,35 @@ func New(transport domain.Transport, cfg Config) (*Agent, error) {
 		return nil, fmt.Errorf("agent: load identity: %w", err)
 	}
 
-	return &Agent{cfg: cfg, transport: transport, identity: id, startedAt: time.Now(), executor: NewExecutor()}, nil
+	binaryHash := ""
+	if exePath, err := os.Executable(); err != nil {
+		log.Printf("agent %s: could not determine own executable path, self-update unavailable: %v", id.NodeID, err)
+	} else {
+		removeStaleUpdateFile(exePath)
+		if h, err := hashFile(exePath); err != nil {
+			log.Printf("agent %s: could not hash own executable, self-update unavailable: %v", id.NodeID, err)
+		} else {
+			binaryHash = h
+		}
+	}
+
+	return &Agent{cfg: cfg, transport: transport, identity: id, startedAt: time.Now(), executor: NewExecutor(), binaryHash: binaryHash}, nil
 }
 
 // NodeID returns this agent's persistent node identity.
 func (a *Agent) NodeID() domain.NodeID { return a.identity.NodeID }
+
+func (a *Agent) setCurrentManagerAddr(addr string) {
+	a.addrMu.Lock()
+	a.currentManagerAddr = addr
+	a.addrMu.Unlock()
+}
+
+func (a *Agent) getCurrentManagerAddr() string {
+	a.addrMu.Lock()
+	defer a.addrMu.Unlock()
+	return a.currentManagerAddr
+}
 
 // Run connects to the manager and services the connection until ctx is
 // canceled, reconnecting with exponential backoff on failure (v1.md §16
@@ -148,6 +205,7 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("resolve manager address: %w", err)
 	}
+	a.setCurrentManagerAddr(addr)
 
 	conn, err := a.transport.Dial(ctx, addr)
 	if err != nil {
@@ -230,6 +288,7 @@ func (a *Agent) buildManifest(ctx context.Context) domain.Manifest {
 			Name:         name,
 			Platform:     domain.Platform{OS: runtime.GOOS, Architecture: runtime.GOARCH},
 			AgentVersion: a.cfg.AgentVersion,
+			BinaryHash:   a.binaryHash,
 		},
 		Resources:    resources,
 		Capabilities: capabilities,
