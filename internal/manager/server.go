@@ -168,12 +168,18 @@ func (s *Server) failPendingCommandsFor(nodeID domain.NodeID, reason string) {
 // no node is currently READY to receive one.
 var ErrNoReadyNode = errors.New("manager: no target given and no node is currently ready")
 
+// ErrNoEligibleNode is returned by SubmitWorkload when one or more nodes
+// are READY but none satisfies the workload's stated resource
+// requirements — distinct from ErrNoReadyNode, which means no node is
+// READY at all.
+var ErrNoEligibleNode = errors.New("manager: no node satisfies the workload's resource requirements")
+
 // SubmitWorkload dispatches a workload for execution. If target is empty,
 // the first READY node found is used — v1's "scheduling" is exactly this
 // (an explicit target, or the first available node) and nothing more; there
 // is no resource-fit or load-based placement (that is v2 scope, v1.md §22).
-func (s *Server) SubmitWorkload(ctx context.Context, target domain.NodeID, command string, args []string) (domain.Workload, error) {
-	rec, target, err := s.resolveWorkloadTarget(target)
+func (s *Server) SubmitWorkload(ctx context.Context, target domain.NodeID, command string, args []string, req domain.ResourceRequirements) (domain.Workload, error) {
+	rec, target, err := s.resolveWorkloadTarget(target, req)
 	if err != nil {
 		return domain.Workload{}, err
 	}
@@ -182,7 +188,7 @@ func (s *Server) SubmitWorkload(ctx context.Context, target domain.NodeID, comma
 	if err != nil {
 		return domain.Workload{}, err
 	}
-	w := domain.Workload{ID: domain.WorkloadID(id), Target: target, Command: command, Args: args}
+	w := domain.Workload{ID: domain.WorkloadID(id), Target: target, Command: command, Args: args, Requirements: req}
 	status := domain.WorkloadStatus{ID: w.ID, Target: target, State: domain.WorkloadPending}
 
 	s.Workloads.Put(w, status)
@@ -195,20 +201,37 @@ func (s *Server) SubmitWorkload(ctx context.Context, target domain.NodeID, comma
 	return w, nil
 }
 
-func (s *Server) resolveWorkloadTarget(target domain.NodeID) (*NodeRecord, domain.NodeID, error) {
+// resolveWorkloadTarget picks the node a workload will run on. An explicit
+// target is still checked against req — specifying both a target and
+// requirements is not a way to bypass them, since silently ignoring
+// requirements for explicit targets would be a surprising inconsistency.
+// An empty target selects among every READY, connected node via
+// selectNode (v2's resource-aware placement, v1.md §22); with an empty req
+// this keeps v1's eligible set unchanged, only its ordering becomes
+// deterministic instead of arbitrary map order.
+func (s *Server) resolveWorkloadTarget(target domain.NodeID, req domain.ResourceRequirements) (*NodeRecord, domain.NodeID, error) {
 	if target != "" {
 		rec, ok := s.Registry.Get(target)
 		if !ok || rec.Conn == nil || rec.State != domain.NodeReady {
 			return nil, "", ErrNodeNotConnected
 		}
+		if ok, reason := nodeFits(rec, req); !ok {
+			return nil, "", fmt.Errorf("%w (%s: %s)", ErrNoEligibleNode, target, reason)
+		}
 		return rec, target, nil
 	}
+
+	var candidates []*NodeRecord
 	for _, rec := range s.Registry.List() {
 		if rec.State == domain.NodeReady && rec.Conn != nil {
-			return rec, rec.Node.Identity.NodeID, nil
+			candidates = append(candidates, rec)
 		}
 	}
-	return nil, "", ErrNoReadyNode
+	best, err := selectNode(candidates, req)
+	if err != nil {
+		return nil, "", err
+	}
+	return best, best.Node.Identity.NodeID, nil
 }
 
 // CancelWorkload requests termination of a running workload. It only sends

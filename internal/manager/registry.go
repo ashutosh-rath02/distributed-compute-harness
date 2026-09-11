@@ -64,6 +64,13 @@ func (r *Registry) Upsert(manifest domain.Manifest, conn domain.Conn) (rec *Node
 	existing.Capabilities = manifest.Capabilities
 	existing.Conn = conn
 	existing.LastSeen = time.Now()
+	// A reconnect (new process, new connection) invalidates any previous
+	// live metrics — LastSeen alone doesn't catch this, since it's
+	// refreshed by this same call. Without clearing LastMetrics here, a
+	// resource-aware placement decision (nodeFits) could trust a reading
+	// from a since-restarted process as if it were current, until the
+	// first fresh heartbeat overwrites it.
+	existing.LastMetrics = domain.RuntimeState{}
 	return existing, false
 }
 

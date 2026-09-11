@@ -46,7 +46,7 @@ func TestInsecureAgentRefusesWorkload(t *testing.T) {
 
 	submitCtx, submitCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer submitCancel()
-	wl, err := srv.SubmitWorkload(submitCtx, a.NodeID(), "echo", []string{"should-not-run"})
+	wl, err := srv.SubmitWorkload(submitCtx, a.NodeID(), "echo", []string{"should-not-run"}, domain.ResourceRequirements{})
 	if err != nil {
 		t.Fatalf("SubmitWorkload: %v", err)
 	}

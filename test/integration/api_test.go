@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -212,6 +213,75 @@ func TestAPIWorkloadLifecycle(t *testing.T) {
 	defer resp2.Body.Close()
 	if resp2.StatusCode != http.StatusConflict {
 		t.Fatalf("expected 409 when no node is ready, got %d", resp2.StatusCode)
+	}
+}
+
+// TestAPIWorkloadWithSatisfiableRequirementsSucceeds proves the
+// "requirements" field on POST /workloads actually reaches SubmitWorkload
+// end-to-end (JSON decode -> resolveWorkloadTarget -> nodeFits), using a
+// trivially satisfiable requirement so the test doesn't depend on the real
+// test machine's actual free memory.
+func TestAPIWorkloadWithSatisfiableRequirementsSucceeds(t *testing.T) {
+	const addr = "127.0.0.1:19226"
+	srv, apiSrv := startManagerWithAPI(t, addr, 2*time.Second)
+	a := startRegisteredAgent(t, addr, "api-agent-requirements-ok")
+
+	waitFor(t, 3*time.Second, func() bool {
+		rec, ok := srv.Registry.Get(a.NodeID())
+		return ok && rec.State == domain.NodeReady && !rec.LastMetrics.LastHeartbeat.IsZero()
+	})
+
+	cmd, cmdArgs := echoArgs("with-requirements")
+	body, _ := json.Marshal(map[string]any{
+		"command":      cmd,
+		"args":         cmdArgs,
+		"requirements": map[string]any{"minMemoryBytes": 1},
+	})
+	resp, err := http.Post(apiSrv.URL+"/workloads", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /workloads: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 202, got %d: %s", resp.StatusCode, respBody)
+	}
+	var wl domain.Workload
+	if err := json.NewDecoder(resp.Body).Decode(&wl); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	waitFor(t, 3*time.Second, func() bool {
+		rec, ok := srv.Workloads.Get(wl.ID)
+		return ok && rec.Status.State == domain.WorkloadCompleted
+	})
+}
+
+// TestAPIWorkloadWithImpossibleRequirementsFails proves a requirement no
+// node can satisfy is rejected with 409, not a hang or a misplaced
+// assignment.
+func TestAPIWorkloadWithImpossibleRequirementsFails(t *testing.T) {
+	const addr = "127.0.0.1:19227"
+	srv, apiSrv := startManagerWithAPI(t, addr, 2*time.Second)
+	a := startRegisteredAgent(t, addr, "api-agent-requirements-fail")
+
+	waitFor(t, 3*time.Second, func() bool {
+		rec, ok := srv.Registry.Get(a.NodeID())
+		return ok && rec.State == domain.NodeReady && !rec.LastMetrics.LastHeartbeat.IsZero()
+	})
+
+	body, _ := json.Marshal(map[string]any{
+		"command":      "hostname",
+		"requirements": map[string]any{"minMemoryBytes": uint64(1) << 60}, // 1 exabyte, unsatisfiable
+	})
+	resp, err := http.Post(apiSrv.URL+"/workloads", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /workloads: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 409 for an unsatisfiable requirement, got %d: %s", resp.StatusCode, respBody)
 	}
 }
 

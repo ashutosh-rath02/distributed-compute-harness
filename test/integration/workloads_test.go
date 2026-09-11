@@ -46,7 +46,7 @@ func TestWorkloadRunsToCompletion(t *testing.T) {
 	cmd, args := echoArgs("hello-workload")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	wl, err := srv.SubmitWorkload(ctx, a.NodeID(), cmd, args)
+	wl, err := srv.SubmitWorkload(ctx, a.NodeID(), cmd, args, domain.ResourceRequirements{})
 	if err != nil {
 		t.Fatalf("SubmitWorkload: %v", err)
 	}
@@ -78,9 +78,10 @@ func TestWorkloadAutoPicksReadyNode(t *testing.T) {
 	cmd, args := echoArgs("auto")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	// Empty target: v1's entire "scheduling" is "explicit target, or the
-	// first READY node" — no resource-fit logic.
-	wl, err := srv.SubmitWorkload(ctx, "", cmd, args)
+	// Empty target with no requirements: v2's resource-aware placement
+	// still picks among all READY nodes when nothing is required, so with
+	// only one candidate it must be the one chosen.
+	wl, err := srv.SubmitWorkload(ctx, "", cmd, args, domain.ResourceRequirements{})
 	if err != nil {
 		t.Fatalf("SubmitWorkload with empty target: %v", err)
 	}
@@ -96,7 +97,7 @@ func TestWorkloadNoReadyNodeFails(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	cmd, args := echoArgs("nobody-home")
-	if _, err := srv.SubmitWorkload(ctx, "", cmd, args); err == nil {
+	if _, err := srv.SubmitWorkload(ctx, "", cmd, args, domain.ResourceRequirements{}); err == nil {
 		t.Fatal("expected SubmitWorkload to fail when no node is READY")
 	}
 }
@@ -114,7 +115,7 @@ func TestWorkloadCapturesNonZeroExit(t *testing.T) {
 	cmd, args := failArgs()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	wl, err := srv.SubmitWorkload(ctx, a.NodeID(), cmd, args)
+	wl, err := srv.SubmitWorkload(ctx, a.NodeID(), cmd, args, domain.ResourceRequirements{})
 	if err != nil {
 		t.Fatalf("SubmitWorkload: %v", err)
 	}
@@ -142,7 +143,7 @@ func TestWorkloadCancel(t *testing.T) {
 	cmd, args := sleepArgs("30")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	wl, err := srv.SubmitWorkload(ctx, a.NodeID(), cmd, args)
+	wl, err := srv.SubmitWorkload(ctx, a.NodeID(), cmd, args, domain.ResourceRequirements{})
 	if err != nil {
 		t.Fatalf("SubmitWorkload: %v", err)
 	}
@@ -179,7 +180,7 @@ func TestWorkloadFailsWhenNodeDisconnectsMidRun(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	wl, err := srv.SubmitWorkload(ctx, nodeID, "sleep", []string{"30"})
+	wl, err := srv.SubmitWorkload(ctx, nodeID, "sleep", []string{"30"}, domain.ResourceRequirements{})
 	if err != nil {
 		t.Fatalf("SubmitWorkload: %v", err)
 	}
@@ -228,7 +229,7 @@ func TestWorkloadDisconnectFreesNodeForNewWorkload(t *testing.T) {
 	sleepCmd, sleepArgv := sleepArgs("30")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	first, err := srv.SubmitWorkload(ctx, a.NodeID(), sleepCmd, sleepArgv)
+	first, err := srv.SubmitWorkload(ctx, a.NodeID(), sleepCmd, sleepArgv, domain.ResourceRequirements{})
 	if err != nil {
 		t.Fatalf("SubmitWorkload (first): %v", err)
 	}
@@ -259,7 +260,7 @@ func TestWorkloadDisconnectFreesNodeForNewWorkload(t *testing.T) {
 	})
 
 	echoCmd, echoArgv := echoArgs("after-reconnect")
-	second, err := srv.SubmitWorkload(ctx, a.NodeID(), echoCmd, echoArgv)
+	second, err := srv.SubmitWorkload(ctx, a.NodeID(), echoCmd, echoArgv, domain.ResourceRequirements{})
 	if err != nil {
 		t.Fatalf("SubmitWorkload (second, after reconnect): %v", err)
 	}
@@ -282,7 +283,7 @@ func TestWorkloadRejectsSecondConcurrentAssignOnSameNode(t *testing.T) {
 	sleepCmd, sleepArgv := sleepArgs("5")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	first, err := srv.SubmitWorkload(ctx, a.NodeID(), sleepCmd, sleepArgv)
+	first, err := srv.SubmitWorkload(ctx, a.NodeID(), sleepCmd, sleepArgv, domain.ResourceRequirements{})
 	if err != nil {
 		t.Fatalf("SubmitWorkload (first): %v", err)
 	}
@@ -293,7 +294,7 @@ func TestWorkloadRejectsSecondConcurrentAssignOnSameNode(t *testing.T) {
 	})
 
 	echoCmd, echoArgv := echoArgs("second")
-	second, err := srv.SubmitWorkload(ctx, a.NodeID(), echoCmd, echoArgv)
+	second, err := srv.SubmitWorkload(ctx, a.NodeID(), echoCmd, echoArgv, domain.ResourceRequirements{})
 	if err != nil {
 		t.Fatalf("SubmitWorkload (second): %v", err)
 	}

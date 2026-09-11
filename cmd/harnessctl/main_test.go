@@ -17,6 +17,40 @@ func TestTruncate(t *testing.T) {
 	}
 }
 
+func TestParseBytes(t *testing.T) {
+	cases := []struct {
+		in   string
+		want uint64
+	}{
+		{"", 0},
+		{"1024", 1024},
+		{"2KiB", 2 << 10},
+		{"2kib", 2 << 10},
+		{"2KB", 2 << 10},
+		{"512MiB", 512 << 20},
+		{"1GiB", 1 << 30},
+		{"1.5G", uint64(1.5 * (1 << 30))},
+		{"1TB", 1 << 40},
+	}
+	for _, c := range cases {
+		got, err := parseBytes(c.in)
+		if err != nil {
+			t.Fatalf("parseBytes(%q): %v", c.in, err)
+		}
+		if got != c.want {
+			t.Fatalf("parseBytes(%q) = %d, want %d", c.in, got, c.want)
+		}
+	}
+}
+
+func TestParseBytesRejectsGarbage(t *testing.T) {
+	for _, in := range []string{"abc", "12XB", "-5GiB"} {
+		if _, err := parseBytes(in); err == nil {
+			t.Fatalf("expected parseBytes(%q) to fail", in)
+		}
+	}
+}
+
 func TestHumanBytes(t *testing.T) {
 	cases := []struct {
 		in   uint64

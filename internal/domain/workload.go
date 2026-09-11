@@ -33,6 +33,11 @@ type Workload struct {
 	Target  NodeID     `json:"target"`
 	Command string     `json:"command"`
 	Args    []string   `json:"args,omitempty"`
+	// Requirements records what placement constraints, if any, this
+	// workload was submitted with — kept on the workload itself (not just
+	// the API request) so a persisted/historical record is self-explaining
+	// about why it landed where it did.
+	Requirements ResourceRequirements `json:"requirements,omitempty"`
 }
 
 // outputCap bounds how much of a workload's stdout/stderr is retained and

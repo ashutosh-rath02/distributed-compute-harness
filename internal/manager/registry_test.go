@@ -41,6 +41,29 @@ func TestUpsertMarksNewVsKnown(t *testing.T) {
 	}
 }
 
+// TestUpsertClearsStaleMetricsOnReconnect proves a reconnecting node
+// (agent process restarted, new connection) doesn't keep its previous
+// session's live metrics lingering with a non-zero LastHeartbeat — that
+// would let a resource-aware placement decision trust arbitrarily old data
+// as current until the next real heartbeat arrives.
+func TestUpsertClearsStaleMetricsOnReconnect(t *testing.T) {
+	r := NewRegistry()
+	r.Upsert(testNode("node-a"), &fakeConn{tag: "old"})
+	r.RecordHeartbeat("node-a", domain.RuntimeState{MemoryAvailableBytes: 8 << 30, LastHeartbeat: time.Now()})
+
+	rec, _ := r.Get("node-a")
+	if rec.LastMetrics.LastHeartbeat.IsZero() {
+		t.Fatal("test setup: expected a recorded heartbeat before reconnect")
+	}
+
+	r.Upsert(testNode("node-a"), &fakeConn{tag: "new"})
+
+	rec, _ = r.Get("node-a")
+	if !rec.LastMetrics.LastHeartbeat.IsZero() {
+		t.Fatal("expected reconnect to clear stale LastMetrics from the previous session")
+	}
+}
+
 func TestExpireStaleTransitionsOnlyTimedOutNodes(t *testing.T) {
 	r := NewRegistry()
 	r.Upsert(testNode("node-stale"), nil)

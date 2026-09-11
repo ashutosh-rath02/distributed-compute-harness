@@ -16,7 +16,7 @@ import (
 
 // Version is the protocol version this build speaks. It follows "vMAJOR.MINOR";
 // messages are accepted when their major version matches ours (see CheckVersion).
-const Version = "v0.2"
+const Version = "v0.3"
 
 // MessageType enumerates the Harness Protocol message types for v0 (v1.md §8).
 type MessageType string

@@ -56,13 +56,7 @@ func main() {
 	case "events":
 		err = client.cmdEvents()
 	case "run":
-		err = requireArgs(args, 3, "run <id|-> <command> [args...]", func() error {
-			target := args[1]
-			if target == "-" {
-				target = ""
-			}
-			return client.cmdRunWorkload(target, args[2], args[3:])
-		})
+		err = cmdRun(client, args[1:])
 	case "workloads":
 		err = client.cmdWorkloads()
 	case "workload":
@@ -93,14 +87,57 @@ Commands:
   info <id>             send GET_SYSTEM_INFO, print the result
   refresh <id>          send REQUEST_RESOURCE_REFRESH, print the result
   events                tail the harness event stream
-  run <id|-> <cmd> [args...]  submit a workload (id or "-" for auto-pick), print its ID
-                        cmd/args are passed directly to exec, not a shell — on
-                        Windows, shell builtins like "echo" need
-                        "cmd /C echo ...". "hostname" is a real .exe on both
-                        Windows and Unix and proves the workload ran remotely.
+  run [-min-mem SIZE] [-min-cores N] [-max-cpu PCT] <id|-> <cmd> [args...]
+                        submit a workload (id or "-" for auto-pick using v2's
+                        resource-aware placement), print its ID. cmd/args are
+                        passed directly to exec, not a shell — on Windows,
+                        shell builtins like "echo" need "cmd /C echo ...".
+                        "hostname" is a real .exe on both Windows and Unix
+                        and proves the workload ran remotely. -min-mem takes
+                        a size like "2GiB"; with an explicit id, the node is
+                        still checked against any given requirements.
   workloads             list all known workloads
   workload <id>         show one workload's request, state, and captured output
   cancel <workload-id>  request cancellation of a running workload`)
+}
+
+// cmdRun parses "run"'s own flags separately from the top-level FlagSet,
+// since flag.Parse stops at the first non-flag argument ("run" itself) and
+// can't see subcommand-specific flags declared on the global FlagSet.
+func cmdRun(client *apiClient, args []string) error {
+	fs := flag.NewFlagSet("run", flag.ContinueOnError)
+	minMem := fs.String("min-mem", "", "minimum available memory required on the target node, e.g. 2GiB")
+	minCores := fs.Float64("min-cores", 0, "minimum declared CPU cores required on the target node")
+	maxCPU := fs.Float64("max-cpu", 0, "maximum acceptable live CPU load percent on the target node")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: harnessctl run [-min-mem SIZE] [-min-cores N] [-max-cpu PCT] <id|-> <command> [args...]")
+	}
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	rest := fs.Args()
+	if len(rest) < 2 {
+		fs.Usage()
+		return fmt.Errorf("missing required arguments")
+	}
+	target := rest[0]
+	if target == "-" {
+		target = ""
+	}
+
+	var req domain.ResourceRequirements
+	if *minMem != "" {
+		bytes, err := parseBytes(*minMem)
+		if err != nil {
+			return fmt.Errorf("-min-mem: %w", err)
+		}
+		req.MinMemoryBytes = bytes
+	}
+	req.MinCPUCores = *minCores
+	req.MaxCPUPercent = *maxCPU
+
+	return client.cmdRunWorkload(target, rest[1], rest[2:], req)
 }
 
 func requireArgs(args []string, n int, usage string, fn func() error) error {
@@ -224,22 +261,23 @@ func (c *apiClient) cmdCommand(id string, name domain.CommandName, args map[stri
 }
 
 type workloadView struct {
-	ID         domain.WorkloadID    `json:"id"`
-	Target     domain.NodeID        `json:"target"`
-	Command    string               `json:"command"`
-	Args       []string             `json:"args,omitempty"`
-	State      domain.WorkloadState `json:"state"`
-	Stdout     string               `json:"stdout,omitempty"`
-	Stderr     string               `json:"stderr,omitempty"`
-	Truncated  bool                 `json:"truncated,omitempty"`
-	ExitCode   *int                 `json:"exitCode,omitempty"`
-	Error      string               `json:"error,omitempty"`
-	StartedAt  time.Time            `json:"startedAt,omitempty"`
-	FinishedAt time.Time            `json:"finishedAt,omitempty"`
+	ID           domain.WorkloadID           `json:"id"`
+	Target       domain.NodeID               `json:"target"`
+	Command      string                      `json:"command"`
+	Args         []string                    `json:"args,omitempty"`
+	State        domain.WorkloadState        `json:"state"`
+	Requirements domain.ResourceRequirements `json:"requirements,omitempty"`
+	Stdout       string                      `json:"stdout,omitempty"`
+	Stderr       string                      `json:"stderr,omitempty"`
+	Truncated    bool                        `json:"truncated,omitempty"`
+	ExitCode     *int                        `json:"exitCode,omitempty"`
+	Error        string                      `json:"error,omitempty"`
+	StartedAt    time.Time                   `json:"startedAt,omitempty"`
+	FinishedAt   time.Time                   `json:"finishedAt,omitempty"`
 }
 
-func (c *apiClient) cmdRunWorkload(target, command string, args []string) error {
-	reqBody, err := json.Marshal(map[string]any{"target": target, "command": command, "args": args})
+func (c *apiClient) cmdRunWorkload(target, command string, args []string, req domain.ResourceRequirements) error {
+	reqBody, err := json.Marshal(map[string]any{"target": target, "command": command, "args": args, "requirements": req})
 	if err != nil {
 		return err
 	}
@@ -288,6 +326,19 @@ func (c *apiClient) cmdWorkload(id string) error {
 	fmt.Printf("Target         %s\n", w.Target)
 	fmt.Printf("Command        %s %s\n", w.Command, strings.Join(w.Args, " "))
 	fmt.Printf("State          %s\n", w.State)
+	if !w.Requirements.IsEmpty() {
+		var parts []string
+		if w.Requirements.MinCPUCores > 0 {
+			parts = append(parts, fmt.Sprintf("min %.2f CPU cores", w.Requirements.MinCPUCores))
+		}
+		if w.Requirements.MinMemoryBytes > 0 {
+			parts = append(parts, fmt.Sprintf("min %s available memory", humanBytes(w.Requirements.MinMemoryBytes)))
+		}
+		if w.Requirements.MaxCPUPercent > 0 {
+			parts = append(parts, fmt.Sprintf("max %.1f%% CPU load", w.Requirements.MaxCPUPercent))
+		}
+		fmt.Printf("Requirements   %s\n", strings.Join(parts, ", "))
+	}
 	if !w.StartedAt.IsZero() {
 		fmt.Printf("Started        %s\n", w.StartedAt.Format(time.RFC3339))
 	}
@@ -366,6 +417,45 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n-1] + "…"
+}
+
+// parseBytes parses a human-readable byte size like "2GiB", "512MB", "1024",
+// or "1.5G" (case-insensitive, decimal and binary suffixes treated the
+// same way) — the inverse of humanBytes, for the "-min-mem" flag.
+func parseBytes(s string) (uint64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, nil
+	}
+	i := 0
+	for i < len(s) && (s[i] >= '0' && s[i] <= '9' || s[i] == '.') {
+		i++
+	}
+	if i == 0 {
+		return 0, fmt.Errorf("invalid size %q: no numeric value", s)
+	}
+	n, err := strconv.ParseFloat(s[:i], 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid size %q: %w", s, err)
+	}
+
+	suffix := strings.ToUpper(strings.TrimSpace(s[i:]))
+	var mult float64
+	switch suffix {
+	case "", "B":
+		mult = 1
+	case "K", "KB", "KIB":
+		mult = 1 << 10
+	case "M", "MB", "MIB":
+		mult = 1 << 20
+	case "G", "GB", "GIB":
+		mult = 1 << 30
+	case "T", "TB", "TIB":
+		mult = 1 << 40
+	default:
+		return 0, fmt.Errorf("invalid size %q: unrecognized unit %q", s, suffix)
+	}
+	return uint64(n * mult), nil
 }
 
 func humanBytes(b uint64) string {

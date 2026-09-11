@@ -46,7 +46,7 @@ func toNodeView(rec *NodeRecord) nodeView {
 //	GET  /resources/total           resource totals summed across all nodes
 //	GET  /events                    Server-Sent Events stream of harness events
 //	POST /nodes/{id}/commands        dispatch a command: {"name":"...","args":{...},"timeoutMs":...}
-//	POST /workloads                 submit a workload: {"target":"...optional...","command":"...","args":[...]}
+//	POST /workloads                 submit a workload: {"target":"...optional...","command":"...","args":[...],"requirements":{...optional...}}
 //	GET  /workloads                 list all known workloads
 //	GET  /workloads/{id}             one workload's request + status
 //	POST /workloads/{id}/cancel      request cancellation of a running workload
@@ -168,12 +168,13 @@ type workloadSummaryView struct {
 // its full captured output.
 type workloadView struct {
 	workloadSummaryView
-	Stdout     string    `json:"stdout,omitempty"`
-	Stderr     string    `json:"stderr,omitempty"`
-	Truncated  bool      `json:"truncated,omitempty"`
-	Error      string    `json:"error,omitempty"`
-	StartedAt  time.Time `json:"startedAt,omitempty"`
-	FinishedAt time.Time `json:"finishedAt,omitempty"`
+	Requirements domain.ResourceRequirements `json:"requirements,omitempty"`
+	Stdout       string                      `json:"stdout,omitempty"`
+	Stderr       string                      `json:"stderr,omitempty"`
+	Truncated    bool                        `json:"truncated,omitempty"`
+	Error        string                      `json:"error,omitempty"`
+	StartedAt    time.Time                   `json:"startedAt,omitempty"`
+	FinishedAt   time.Time                   `json:"finishedAt,omitempty"`
 }
 
 // exitCode returns a pointer to the process's actual exit code, or nil if
@@ -205,6 +206,7 @@ func toWorkloadSummaryView(rec WorkloadRecord) workloadSummaryView {
 func toWorkloadView(rec WorkloadRecord) workloadView {
 	return workloadView{
 		workloadSummaryView: toWorkloadSummaryView(rec),
+		Requirements:        rec.Workload.Requirements,
 		Stdout:              rec.Status.Stdout,
 		Stderr:              rec.Status.Stderr,
 		Truncated:           rec.Status.Truncated,
@@ -215,9 +217,10 @@ func toWorkloadView(rec WorkloadRecord) workloadView {
 }
 
 type workloadRequest struct {
-	Target  domain.NodeID `json:"target"`
-	Command string        `json:"command"`
-	Args    []string      `json:"args"`
+	Target       domain.NodeID               `json:"target"`
+	Command      string                      `json:"command"`
+	Args         []string                    `json:"args"`
+	Requirements domain.ResourceRequirements `json:"requirements,omitempty"`
 }
 
 func (s *Server) apiPostWorkload(w http.ResponseWriter, r *http.Request) {
@@ -231,10 +234,10 @@ func (s *Server) apiPostWorkload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	wl, err := s.SubmitWorkload(r.Context(), req.Target, req.Command, req.Args)
+	wl, err := s.SubmitWorkload(r.Context(), req.Target, req.Command, req.Args, req.Requirements)
 	if err != nil {
 		switch {
-		case errors.Is(err, ErrNodeNotConnected), errors.Is(err, ErrNoReadyNode):
+		case errors.Is(err, ErrNodeNotConnected), errors.Is(err, ErrNoReadyNode), errors.Is(err, ErrNoEligibleNode):
 			http.Error(w, err.Error(), http.StatusConflict)
 		default:
 			http.Error(w, err.Error(), http.StatusInternalServerError)
