@@ -2,8 +2,12 @@ package manager
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"home-harness/internal/domain"
@@ -38,6 +42,19 @@ type Server struct {
 	transport domain.Transport
 	store     PersistentStore
 	Registry  *Registry
+
+	pendingMu sync.Mutex
+	pending   map[string]pendingCommand
+}
+
+// pendingCommand tracks who a dispatched command was sent to, so its
+// COMMAND_RESULT can be rejected unless it actually comes back on that
+// same node's connection — otherwise any registered node could forge a
+// result for a command dispatched to a different node, by guessing or
+// observing a command ID (the same spoofing class closed for HEARTBEAT).
+type pendingCommand struct {
+	target domain.NodeID
+	result chan domain.CommandResult
 }
 
 // NewServer builds a manager bound to a concrete transport (e.g. the ws
@@ -49,7 +66,70 @@ func NewServer(transport domain.Transport, store PersistentStore, cfg Config) *S
 		transport: transport,
 		store:     store,
 		Registry:  NewRegistry(),
+		pending:   make(map[string]pendingCommand),
 	}
+}
+
+// ErrNodeNotConnected is returned by SendCommand when the target node has
+// no live connection to send the command over.
+var ErrNodeNotConnected = errors.New("manager: node is not connected")
+
+// SendCommand dispatches a command to a specific node and blocks until a
+// correlated COMMAND_RESULT arrives, ctx is canceled, or timeout elapses —
+// this is what proves the manager can invoke an operation on a node and
+// get a structured result back (v1.md §10).
+func (s *Server) SendCommand(ctx context.Context, nodeID domain.NodeID, name domain.CommandName, args map[string]string, timeout time.Duration) (domain.CommandResult, error) {
+	rec, ok := s.Registry.Get(nodeID)
+	if !ok || rec.Conn == nil || rec.State != domain.NodeReady {
+		return domain.CommandResult{}, ErrNodeNotConnected
+	}
+
+	cmdID, err := newCommandID()
+	if err != nil {
+		return domain.CommandResult{}, err
+	}
+	cmd := domain.Command{ID: cmdID, Name: name, Target: nodeID, Args: args}
+
+	resultCh := make(chan domain.CommandResult, 1)
+	s.pendingMu.Lock()
+	s.pending[cmdID] = pendingCommand{target: nodeID, result: resultCh}
+	s.pendingMu.Unlock()
+	defer func() {
+		s.pendingMu.Lock()
+		delete(s.pending, cmdID)
+		s.pendingMu.Unlock()
+	}()
+
+	s.send(ctx, rec.Conn, protocol.MsgCommand, domain.ManagerNodeID, nodeID, protocol.CommandPayload{Command: cmd})
+	log.Printf("command.sent: %s to %s (id=%s)", name, nodeID, cmdID)
+
+	sendCtx := ctx
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		sendCtx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+
+	select {
+	case result := <-resultCh:
+		if result.Success {
+			log.Printf("command.completed: %s to %s (id=%s)", name, nodeID, cmdID)
+		} else {
+			log.Printf("command.failed: %s to %s (id=%s): %s", name, nodeID, cmdID, result.Error)
+		}
+		return result, nil
+	case <-sendCtx.Done():
+		log.Printf("command.failed: %s to %s (id=%s): %v", name, nodeID, cmdID, sendCtx.Err())
+		return domain.CommandResult{}, sendCtx.Err()
+	}
+}
+
+func newCommandID() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("manager: generate command id: %w", err)
+	}
+	return hex.EncodeToString(b), nil
 }
 
 // Run loads any previously-known nodes from the persistent store, then
@@ -143,6 +223,10 @@ func (s *Server) handleConn(ctx context.Context, conn domain.Conn) {
 			s.handleHeartbeat(nodeID, env)
 		case protocol.MsgPing:
 			s.handlePing(ctx, conn, nodeID)
+		case protocol.MsgCommandResult:
+			s.handleCommandResult(nodeID, env)
+		case protocol.MsgCapabilityUpdate:
+			s.handleCapabilityUpdate(nodeID, env)
 		default:
 			s.sendError(ctx, conn, domain.ManagerNodeID, nodeID, "UNSUPPORTED_TYPE", string(env.Type))
 		}
@@ -219,6 +303,42 @@ func (s *Server) handleHeartbeat(nodeID domain.NodeID, env *protocol.Envelope) {
 
 func (s *Server) handlePing(ctx context.Context, conn domain.Conn, nodeID domain.NodeID) {
 	s.send(ctx, conn, protocol.MsgPong, domain.ManagerNodeID, nodeID, nil)
+}
+
+func (s *Server) handleCommandResult(nodeID domain.NodeID, env *protocol.Envelope) {
+	var payload protocol.CommandResultPayload
+	if err := env.DecodePayload(&payload); err != nil {
+		log.Printf("manager: bad command result payload from %s: %v", nodeID, err)
+		return
+	}
+
+	s.pendingMu.Lock()
+	pending, ok := s.pending[payload.Result.CommandID]
+	if ok {
+		delete(s.pending, payload.Result.CommandID)
+	}
+	s.pendingMu.Unlock()
+
+	if !ok {
+		log.Printf("manager: command result from %s for unknown/expired command %s", nodeID, payload.Result.CommandID)
+		return
+	}
+	if pending.target != nodeID {
+		log.Printf("manager: ignoring command result from %s claiming to answer a command sent to %s", nodeID, pending.target)
+		return
+	}
+
+	pending.result <- payload.Result
+}
+
+func (s *Server) handleCapabilityUpdate(nodeID domain.NodeID, env *protocol.Envelope) {
+	var payload protocol.CapabilityUpdatePayload
+	if err := env.DecodePayload(&payload); err != nil {
+		log.Printf("manager: bad capability update payload from %s: %v", nodeID, err)
+		return
+	}
+	s.Registry.UpdateResources(nodeID, payload.Resources, payload.Capabilities)
+	log.Printf("node.updated: %s (resources/capabilities refreshed)", nodeID)
 }
 
 func (s *Server) sendError(ctx context.Context, conn domain.Conn, source, dest domain.NodeID, code, message string) {

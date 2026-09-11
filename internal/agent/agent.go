@@ -50,6 +50,7 @@ type Agent struct {
 	cfg       Config
 	transport domain.Transport
 	identity  *identity.Identity
+	startedAt time.Time
 }
 
 // New loads (or generates, on first run) the agent's identity and returns
@@ -70,7 +71,7 @@ func New(transport domain.Transport, cfg Config) (*Agent, error) {
 		return nil, fmt.Errorf("agent: load identity: %w", err)
 	}
 
-	return &Agent{cfg: cfg, transport: transport, identity: id}, nil
+	return &Agent{cfg: cfg, transport: transport, identity: id, startedAt: time.Now()}, nil
 }
 
 // NodeID returns this agent's persistent node identity.
@@ -229,6 +230,8 @@ func (a *Agent) receiveLoop(ctx context.Context, conn domain.Conn, errCh chan<- 
 				errCh <- fmt.Errorf("send PONG: %w", err)
 				return
 			}
+		case protocol.MsgCommand:
+			a.handleCommand(ctx, conn, env, errCh)
 		case protocol.MsgError:
 			var payload protocol.ErrorPayload
 			_ = env.DecodePayload(&payload)
