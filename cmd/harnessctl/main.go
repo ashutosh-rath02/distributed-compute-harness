@@ -11,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -67,6 +68,8 @@ func main() {
 		err = requireArgs(args, 2, "cancel <workload-id>", func() error { return client.cmdCancelWorkload(args[1]) })
 	case "update":
 		err = requireArgs(args, 2, "update <id>", func() error { return client.cmdUpdateNode(args[1]) })
+	case "join":
+		err = requireArgs(args, 2, "join <manager-lan-addr>", func() error { return client.cmdJoin(args[1]) })
 	default:
 		usage()
 		os.Exit(2)
@@ -116,7 +119,15 @@ Commands:
                         the binary this manager currently serves (manager
                         started with -agent-binary); the node reconnects on
                         its own once done — no manual file transfer or
-                        restart. "nodes" flags any node this would affect.`)
+                        restart. "nodes" flags any node this would affect.
+  join <manager-addr>   print a ready-to-run PowerShell block (v5) that
+                        downloads agent.exe from this manager and registers
+                        it — paste it into a terminal on any new LAN
+                        machine to onboard it, with no manual file transfer,
+                        fingerprint lookup, or flag-typing. <manager-addr>
+                        is the manager's own -addr value (e.g.
+                        192.168.10.11:7420); requires the manager to have
+                        been started with -agent-binary.`)
 }
 
 // cmdRun parses "run"'s own flags separately from the top-level FlagSet,
@@ -508,6 +519,71 @@ func (c *apiClient) cmdCancelWorkload(id string) error {
 		return fmt.Errorf("manager returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
 	fmt.Println("Cancellation requested.")
+	return nil
+}
+
+// joinInfoView mirrors manager.JoinInfo's JSON shape (internal/manager/join.go) —
+// harnessctl duplicates the manager's small API view structs rather than
+// importing internal/manager, matching this file's existing nodeView.
+type joinInfoView struct {
+	Fingerprint          string `json:"fingerprint"`
+	PairingToken         string `json:"pairingToken"`
+	Insecure             bool   `json:"insecure"`
+	AgentBinaryAvailable bool   `json:"agentBinaryAvailable"`
+	AgentBinarySHA256    string `json:"agentBinarySha256"`
+}
+
+// cmdJoin prints a ready-to-run PowerShell block for onboarding a new LAN
+// machine (v5 part 1) — see GET /join-info (internal/manager/join.go) for
+// where the embedded fingerprint/token come from, and why they must come
+// from this trusted, loopback-scoped source rather than the LAN discovery
+// beacon (which is unauthenticated multicast and therefore spoofable).
+//
+// The generated script uses curl.exe -k (bundled on Windows 10 1803+)
+// rather than Invoke-WebRequest for its download: the brand-new machine
+// has no pinned fingerprint yet (that's the whole point of this bootstrap
+// step), so this one download necessarily runs with certificate chain
+// validation off — exactly the reasoning v4's /agent-binary endpoint
+// already documents (integrity comes from an explicit hash check, not the
+// transport). The script verifies AgentBinarySHA256 immediately after
+// downloading and refuses to run a binary that doesn't match.
+func (c *apiClient) cmdJoin(addr string) error {
+	// net.SplitHostPort(":7420") returns host="", nil error — a legal
+	// listen-address form, but useless here: it's also the manager's own
+	// -addr default and startup log text, so an operator copying that
+	// literally would otherwise sail past this check and generate a
+	// download URL pointing at nothing ("https://:7420/agent-binary").
+	if host, _, err := net.SplitHostPort(addr); err != nil || host == "" {
+		return fmt.Errorf("invalid manager address %q (want host:port, e.g. 192.168.10.11:7420)", addr)
+	}
+
+	var info joinInfoView
+	if err := c.get("/join-info", &info); err != nil {
+		return err
+	}
+	if !info.AgentBinaryAvailable {
+		return fmt.Errorf("manager has no agent binary configured — restart it with -agent-binary to enable joining")
+	}
+
+	scheme := "https"
+	curlFlag := "-k "
+	authFlag := fmt.Sprintf("-manager-fingerprint %s", info.Fingerprint)
+	if info.Insecure {
+		scheme = "http"
+		curlFlag = ""
+		authFlag = "-insecure"
+	}
+
+	// The hash check and launch are one statement (if/else), not two
+	// sequential lines: pasted into an interactive PowerShell session, each
+	// top-level line runs independently, so a separate "if (...) { throw }"
+	// followed by ".\agent.exe" would still launch the unverified binary
+	// after the throw merely printed an error and moved on.
+	fmt.Printf(`Paste this into a PowerShell terminal on the new machine:
+
+curl.exe %s"%s://%s/agent-binary" -o agent.exe
+if ((Get-FileHash agent.exe -Algorithm SHA256).Hash -ne "%s") { throw "agent.exe hash mismatch — download corrupted or tampered with, aborting" } else { .\agent.exe -manager-addr %s -pairing-token %s %s }
+`, curlFlag, scheme, addr, strings.ToUpper(info.AgentBinarySHA256), addr, info.PairingToken, authFlag)
 	return nil
 }
 

@@ -8,7 +8,8 @@
 package mtls
 
 import (
-	"crypto/ed25519"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
@@ -85,7 +86,16 @@ func PinnedClientConfig(expectedFingerprint string) *tls.Config {
 }
 
 func generateAndSave(certPath, keyPath string) (tls.Certificate, error) {
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	// ECDSA P-256, not Ed25519: confirmed via hardware testing that Windows
+	// schannel (curl.exe, PowerShell Invoke-WebRequest — anything that
+	// isn't Go's own crypto/tls) cannot complete a handshake against an
+	// Ed25519 certificate at all (schannel has never implemented Ed25519
+	// support), while Go-to-Go connections were unaffected — the asymmetry
+	// that made this easy to miss. P-256 is universally supported and still
+	// fully appropriate for TOFU fingerprint pinning (v5's `harnessctl
+	// join` script needs a plain Invoke-WebRequest to work against this
+	// same cert).
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return tls.Certificate{}, fmt.Errorf("mtls: generate keypair: %w", err)
 	}
@@ -99,7 +109,7 @@ func generateAndSave(certPath, keyPath string) (tls.Certificate, error) {
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
 	}
-	derBytes, err := x509.CreateCertificate(rand.Reader, template, template, pub, priv)
+	derBytes, err := x509.CreateCertificate(rand.Reader, template, template, &priv.PublicKey, priv)
 	if err != nil {
 		return tls.Certificate{}, fmt.Errorf("mtls: create certificate: %w", err)
 	}

@@ -50,6 +50,7 @@ func toNodeView(rec *NodeRecord) nodeView {
 //	POST /nodes/{id}/commands        dispatch a command: {"name":"...","args":{...},"timeoutMs":...}
 //	POST /nodes/{id}/update          push a self-update if the node isn't already current
 //	GET  /agent-binary/hash          the manager's currently-served agent binary hash
+//	GET  /join-info                  what a new node needs to onboard (fingerprint, pairing token, ...)
 //	POST /workloads                 submit a workload: {"target":"...optional...","command":"...","args":[...],"requirements":{...optional...}}
 //	GET  /workloads                 list all known workloads
 //	GET  /workloads/{id}             one workload's request + status
@@ -74,6 +75,7 @@ func (s *Server) NewHTTPHandler() http.Handler {
 	mux.HandleFunc("POST /nodes/{id}/commands", s.apiPostCommand)
 	mux.HandleFunc("POST /nodes/{id}/update", s.apiPostUpdate)
 	mux.HandleFunc("GET /agent-binary/hash", s.apiGetAgentBinaryHash)
+	mux.HandleFunc("GET /join-info", s.apiGetJoinInfo)
 	mux.HandleFunc("POST /workloads", s.apiPostWorkload)
 	mux.HandleFunc("GET /workloads", s.apiListWorkloads)
 	mux.HandleFunc("GET /workloads/{id}", s.apiGetWorkload)
@@ -200,6 +202,12 @@ func (s *Server) apiPostUpdate(w http.ResponseWriter, r *http.Request) {
 // BinaryHash differs, without needing a comparison endpoint per node.
 func (s *Server) apiGetAgentBinaryHash(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"sha256": s.AgentBinaryHash()})
+}
+
+// apiGetJoinInfo returns what a new node needs to onboard itself — see
+// JoinInfo (join.go) and cmd/harnessctl's `join` command.
+func (s *Server) apiGetJoinInfo(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.JoinInfo())
 }
 
 // workloadSummaryView is the JSON shape for a workload in a list — request

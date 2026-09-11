@@ -47,12 +47,14 @@ func main() {
 	defer store.Close()
 
 	transport := ws.New()
+	var fingerprint string
 	if !*insecure {
 		cert, err := mtls.LoadOrCreateCert(*tlsDir)
 		if err != nil {
 			log.Fatalf("manager: %v", err)
 		}
-		log.Printf("Manager TLS fingerprint (give this to agents via -manager-fingerprint):\n  %s", mtls.Fingerprint(cert))
+		fingerprint = mtls.Fingerprint(cert)
+		log.Printf("Manager TLS fingerprint (give this to agents via -manager-fingerprint):\n  %s", fingerprint)
 		transport = ws.NewTLSServer(cert)
 	} else {
 		log.Println("manager: running with -insecure: plaintext transport, no manager authentication")
@@ -64,6 +66,7 @@ func main() {
 		HeartbeatTimeout:  *heartbeatTimeout,
 		ReconcileInterval: *reconcileInterval,
 		AgentBinaryPath:   *agentBinaryPath,
+		Fingerprint:       fingerprint,
 	})
 	// Registered before Run (which calls transport.Listen) — puts the
 	// download on the exact address/port agents already dial, no new port

@@ -35,6 +35,13 @@ type Config struct {
 	// restarted without this flag simply can't push updates until it's
 	// set again.
 	AgentBinaryPath string
+	// Fingerprint is the manager's own TLS fingerprint (mtls.Fingerprint),
+	// the same value cmd/manager/main.go already logs on startup for an
+	// operator to copy into -manager-fingerprint by hand. Stored here too so
+	// GET /join-info (api.go) can hand it out over the manager's own
+	// loopback API instead — see cmd/harnessctl's `join` command. Empty
+	// when running -insecure.
+	Fingerprint string
 }
 
 // PersistentStore is the subset of persistent storage the manager needs:
