@@ -16,6 +16,7 @@ import (
 )
 
 var nodesBucket = []byte("nodes")
+var workloadsBucket = []byte("workloads")
 
 // Record is what the persistent store keeps for a node: its last-known
 // manifest plus registration bookkeeping.
@@ -37,7 +38,10 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("persistent: open %q: %w", path, err)
 	}
 	err = db.Update(func(tx *bbolt.Tx) error {
-		_, err := tx.CreateBucketIfNotExists(nodesBucket)
+		if _, err := tx.CreateBucketIfNotExists(nodesBucket); err != nil {
+			return err
+		}
+		_, err := tx.CreateBucketIfNotExists(workloadsBucket)
 		return err
 	})
 	if err != nil {
@@ -114,6 +118,38 @@ func (s *Store) ListNodes() ([]domain.Manifest, error) {
 		return nil, fmt.Errorf("persistent: list nodes: %w", err)
 	}
 	return manifests, nil
+}
+
+// UpsertWorkload records a workload's current request/status, replacing
+// any previous record for the same WorkloadID.
+func (s *Store) UpsertWorkload(pw domain.PersistedWorkload) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		data, err := json.Marshal(pw)
+		if err != nil {
+			return fmt.Errorf("marshal workload %s: %w", pw.Workload.ID, err)
+		}
+		return tx.Bucket(workloadsBucket).Put([]byte(pw.Workload.ID), data)
+	})
+}
+
+// ListWorkloads returns every persisted workload, e.g. to seed the
+// manager's in-memory WorkloadRegistry after a restart.
+func (s *Store) ListWorkloads() ([]domain.PersistedWorkload, error) {
+	var out []domain.PersistedWorkload
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		return tx.Bucket(workloadsBucket).ForEach(func(_, data []byte) error {
+			var pw domain.PersistedWorkload
+			if err := json.Unmarshal(data, &pw); err != nil {
+				return err
+			}
+			out = append(out, pw)
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, fmt.Errorf("persistent: list workloads: %w", err)
+	}
+	return out, nil
 }
 
 // DeleteNode removes a node's persisted record (e.g. explicit un-trust).

@@ -119,3 +119,65 @@ func TestNodeSurvivesManagerRestart(t *testing.T) {
 		t.Fatalf("expected exactly 1 node after reconnect to restarted manager, got %d", got)
 	}
 }
+
+// TestRunningWorkloadBecomesUnknownAfterManagerRestart proves v1's
+// declared non-goal: a workload that was RUNNING (or still PENDING) the
+// last time its status was persisted has its true outcome marked UNKNOWN
+// on the next manager startup, not silently kept RUNNING forever and not
+// guessed at — v1 does not reconcile with the agent's actual state (that
+// is v3 scope).
+//
+// This writes the persisted record directly rather than driving it through
+// a live node/connection: a real disconnect (closing the connection,
+// canceling the manager's context, which unblocks that connection's
+// Receive) already resolves the workload to FAILED via
+// failWorkloadsFor — the exact mechanism proven in
+// TestWorkloadFailsWhenNodeDisconnectsMidRun. The UNKNOWN path is for the
+// other case that mechanism cannot see: the manager process itself dies
+// (power loss, kill -9) without any of its own cleanup running at all, so
+// whatever was last durably persisted is genuinely all that's known.
+func TestRunningWorkloadBecomesUnknownAfterManagerRestart(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "harness-workload.db")
+
+	store1, err := persistent.Open(dbPath)
+	if err != nil {
+		t.Fatalf("persistent.Open: %v", err)
+	}
+	wl := domain.Workload{ID: "wl-orphaned", Target: "node-orphaned", Command: "sleep", Args: []string{"30"}}
+	pending := domain.WorkloadStatus{ID: wl.ID, Target: wl.Target, State: domain.WorkloadRunning}
+	if err := store1.UpsertWorkload(domain.PersistedWorkload{Workload: wl, Status: pending}); err != nil {
+		t.Fatalf("UpsertWorkload: %v", err)
+	}
+	if err := store1.Close(); err != nil {
+		t.Fatalf("store1.Close: %v", err)
+	}
+
+	store2, err := persistent.Open(dbPath)
+	if err != nil {
+		t.Fatalf("persistent.Open (reopen): %v", err)
+	}
+	defer store2.Close()
+
+	const addr2 = "127.0.0.1:19200"
+	mgrCtx2, mgrCancel2 := context.WithCancel(context.Background())
+	defer mgrCancel2()
+	srv2 := manager.NewServer(ws.New(), store2, manager.Config{
+		Addr:             addr2,
+		PairingToken:     pairingToken,
+		HeartbeatTimeout: 2 * time.Second,
+	})
+	go srv2.Run(mgrCtx2)
+
+	waitFor(t, 2*time.Second, func() bool {
+		_, ok := srv2.Workloads.Get(wl.ID)
+		return ok
+	})
+
+	rec, ok := srv2.Workloads.Get(wl.ID)
+	if !ok {
+		t.Fatal("expected workload to survive manager restart")
+	}
+	if rec.Status.State != domain.WorkloadUnknown {
+		t.Fatalf("expected UNKNOWN for an in-flight workload after restart, got %s", rec.Status.State)
+	}
+}

@@ -44,12 +44,13 @@ func main() {
 	}
 
 	a, err := agent.New(transport, agent.Config{
-		ManagerAddr:       *managerAddr,
-		Discoverer:        &udp.Discoverer{},
-		PairingToken:      *pairingToken,
-		IdentityDir:       *identityDir,
-		Name:              *name,
-		HeartbeatInterval: *heartbeatInterval,
+		ManagerAddr:               *managerAddr,
+		Discoverer:                &udp.Discoverer{},
+		PairingToken:              *pairingToken,
+		IdentityDir:               *identityDir,
+		Name:                      *name,
+		HeartbeatInterval:         *heartbeatInterval,
+		InsecureWorkloadsDisabled: *insecure,
 	})
 	if err != nil {
 		log.Fatalf("agent: %v", err)

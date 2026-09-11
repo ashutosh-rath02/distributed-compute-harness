@@ -69,6 +69,23 @@ type CommandResultPayload struct {
 	Result domain.CommandResult `json:"result"`
 }
 
+// WorkloadAssignPayload dispatches a workload for execution to a node.
+type WorkloadAssignPayload struct {
+	Workload domain.Workload `json:"workload"`
+}
+
+// WorkloadStatusPayload reports a workload's current or final status. Sent
+// by the agent on state transitions (started, completed, failed, canceled)
+// and stored by the manager against the workload's record.
+type WorkloadStatusPayload struct {
+	Status domain.WorkloadStatus `json:"status"`
+}
+
+// WorkloadCancelPayload requests that a running workload be terminated.
+type WorkloadCancelPayload struct {
+	ID domain.WorkloadID `json:"id"`
+}
+
 // ErrorPayload is a generic protocol-level error report.
 type ErrorPayload struct {
 	Code    string `json:"code"`

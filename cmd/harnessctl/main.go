@@ -55,6 +55,20 @@ func main() {
 		err = requireArgs(args, 2, "info <id>", func() error { return client.cmdCommand(args[1], domain.CommandGetSystemInfo, nil) })
 	case "events":
 		err = client.cmdEvents()
+	case "run":
+		err = requireArgs(args, 3, "run <id|-> <command> [args...]", func() error {
+			target := args[1]
+			if target == "-" {
+				target = ""
+			}
+			return client.cmdRunWorkload(target, args[2], args[3:])
+		})
+	case "workloads":
+		err = client.cmdWorkloads()
+	case "workload":
+		err = requireArgs(args, 2, "workload <id>", func() error { return client.cmdWorkload(args[1]) })
+	case "cancel":
+		err = requireArgs(args, 2, "cancel <workload-id>", func() error { return client.cmdCancelWorkload(args[1]) })
 	default:
 		usage()
 		os.Exit(2)
@@ -78,7 +92,15 @@ Commands:
   status <id>           send GET_AGENT_STATUS, print the result
   info <id>             send GET_SYSTEM_INFO, print the result
   refresh <id>          send REQUEST_RESOURCE_REFRESH, print the result
-  events                tail the harness event stream`)
+  events                tail the harness event stream
+  run <id|-> <cmd> [args...]  submit a workload (id or "-" for auto-pick), print its ID
+                        cmd/args are passed directly to exec, not a shell — on
+                        Windows, shell builtins like "echo" need
+                        "cmd /C echo ...". "hostname" is a real .exe on both
+                        Windows and Unix and proves the workload ran remotely.
+  workloads             list all known workloads
+  workload <id>         show one workload's request, state, and captured output
+  cancel <workload-id>  request cancellation of a running workload`)
 }
 
 func requireArgs(args []string, n int, usage string, fn func() error) error {
@@ -198,6 +220,108 @@ func (c *apiClient) cmdCommand(id string, name domain.CommandName, args map[stri
 	for k, v := range result.Output {
 		fmt.Printf("  %-16s %s\n", k, v)
 	}
+	return nil
+}
+
+type workloadView struct {
+	ID         domain.WorkloadID    `json:"id"`
+	Target     domain.NodeID        `json:"target"`
+	Command    string               `json:"command"`
+	Args       []string             `json:"args,omitempty"`
+	State      domain.WorkloadState `json:"state"`
+	Stdout     string               `json:"stdout,omitempty"`
+	Stderr     string               `json:"stderr,omitempty"`
+	Truncated  bool                 `json:"truncated,omitempty"`
+	ExitCode   *int                 `json:"exitCode,omitempty"`
+	Error      string               `json:"error,omitempty"`
+	StartedAt  time.Time            `json:"startedAt,omitempty"`
+	FinishedAt time.Time            `json:"finishedAt,omitempty"`
+}
+
+func (c *apiClient) cmdRunWorkload(target, command string, args []string) error {
+	reqBody, err := json.Marshal(map[string]any{"target": target, "command": command, "args": args})
+	if err != nil {
+		return err
+	}
+	resp, err := c.http.Post(c.base+"/workloads", "application/json", strings.NewReader(string(reqBody)))
+	if err != nil {
+		return fmt.Errorf("submit workload: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusAccepted {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("manager returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+
+	var wl domain.Workload
+	if err := json.NewDecoder(resp.Body).Decode(&wl); err != nil {
+		return err
+	}
+	fmt.Printf("Workload submitted: %s (target: %s)\n", wl.ID, wl.Target)
+	fmt.Printf("Check status with: harnessctl workload %s\n", wl.ID)
+	return nil
+}
+
+func (c *apiClient) cmdWorkloads() error {
+	var workloads []workloadView
+	if err := c.get("/workloads", &workloads); err != nil {
+		return err
+	}
+	if len(workloads) == 0 {
+		fmt.Println("No workloads submitted yet.")
+		return nil
+	}
+	fmt.Printf("%-34s %-24s %-10s %s\n", "WORKLOAD ID", "TARGET", "STATE", "COMMAND")
+	for _, w := range workloads {
+		fmt.Printf("%-34s %-24s %-10s %s\n", w.ID, w.Target, w.State, w.Command)
+	}
+	return nil
+}
+
+func (c *apiClient) cmdWorkload(id string) error {
+	var w workloadView
+	if err := c.get("/workloads/"+id, &w); err != nil {
+		return err
+	}
+	fmt.Printf("Workload ID    %s\n", w.ID)
+	fmt.Printf("Target         %s\n", w.Target)
+	fmt.Printf("Command        %s %s\n", w.Command, strings.Join(w.Args, " "))
+	fmt.Printf("State          %s\n", w.State)
+	if !w.StartedAt.IsZero() {
+		fmt.Printf("Started        %s\n", w.StartedAt.Format(time.RFC3339))
+	}
+	if !w.FinishedAt.IsZero() {
+		fmt.Printf("Finished       %s\n", w.FinishedAt.Format(time.RFC3339))
+	}
+	if w.Error != "" {
+		fmt.Printf("Error          %s\n", w.Error)
+	} else if w.ExitCode != nil {
+		fmt.Printf("Exit code      %d\n", *w.ExitCode)
+	}
+	if w.Stdout != "" {
+		fmt.Printf("\nStdout:\n%s\n", w.Stdout)
+	}
+	if w.Stderr != "" {
+		fmt.Printf("\nStderr:\n%s\n", w.Stderr)
+	}
+	if w.Truncated {
+		fmt.Println("(output truncated)")
+	}
+	return nil
+}
+
+func (c *apiClient) cmdCancelWorkload(id string) error {
+	resp, err := c.http.Post(c.base+"/workloads/"+id+"/cancel", "application/json", nil)
+	if err != nil {
+		return fmt.Errorf("cancel workload: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("manager returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	fmt.Println("Cancellation requested.")
 	return nil
 }
 

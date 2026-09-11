@@ -24,13 +24,15 @@ type Config struct {
 }
 
 // PersistentStore is the subset of persistent storage the manager needs:
-// last-known node manifests that must survive a restart. The manager
-// depends only on this interface, never on the concrete store package
-// (e.g. internal/store/persistent), so storage can change later without
-// touching manager logic.
+// last-known node manifests and workload records that must survive a
+// restart. The manager depends only on this interface, never on the
+// concrete store package (e.g. internal/store/persistent), so storage can
+// change later without touching manager logic.
 type PersistentStore interface {
 	UpsertNode(manifest domain.Manifest) error
 	ListNodes() ([]domain.Manifest, error)
+	UpsertWorkload(pw domain.PersistedWorkload) error
+	ListWorkloads() ([]domain.PersistedWorkload, error)
 }
 
 // Server is the control-plane process: it accepts connections over a
@@ -43,6 +45,7 @@ type Server struct {
 	transport domain.Transport
 	store     PersistentStore
 	Registry  *Registry
+	Workloads *WorkloadRegistry
 	// Events publishes lifecycle/command events (v1.md §12) — a future
 	// scheduler, the HTTP API's SSE stream, or a CLI can subscribe without
 	// coupling to networking code.
@@ -71,6 +74,7 @@ func NewServer(transport domain.Transport, store PersistentStore, cfg Config) *S
 		transport: transport,
 		store:     store,
 		Registry:  NewRegistry(),
+		Workloads: NewWorkloadRegistry(),
 		Events:    eventbus.New(),
 		pending:   make(map[string]pendingCommand),
 	}
@@ -94,7 +98,7 @@ func (s *Server) SendCommand(ctx context.Context, nodeID domain.NodeID, name dom
 		return domain.CommandResult{}, ErrNodeNotConnected
 	}
 
-	cmdID, err := newCommandID()
+	cmdID, err := newRandomID()
 	if err != nil {
 		return domain.CommandResult{}, err
 	}
@@ -160,10 +164,100 @@ func (s *Server) failPendingCommandsFor(nodeID domain.NodeID, reason string) {
 	}
 }
 
-func newCommandID() (string, error) {
+// ErrNoReadyNode is returned by SubmitWorkload when no target was given and
+// no node is currently READY to receive one.
+var ErrNoReadyNode = errors.New("manager: no target given and no node is currently ready")
+
+// SubmitWorkload dispatches a workload for execution. If target is empty,
+// the first READY node found is used — v1's "scheduling" is exactly this
+// (an explicit target, or the first available node) and nothing more; there
+// is no resource-fit or load-based placement (that is v2 scope, v1.md §22).
+func (s *Server) SubmitWorkload(ctx context.Context, target domain.NodeID, command string, args []string) (domain.Workload, error) {
+	rec, target, err := s.resolveWorkloadTarget(target)
+	if err != nil {
+		return domain.Workload{}, err
+	}
+
+	id, err := newRandomID()
+	if err != nil {
+		return domain.Workload{}, err
+	}
+	w := domain.Workload{ID: domain.WorkloadID(id), Target: target, Command: command, Args: args}
+	status := domain.WorkloadStatus{ID: w.ID, Target: target, State: domain.WorkloadPending}
+
+	s.Workloads.Put(w, status)
+	s.persistWorkload(w, status)
+
+	s.send(ctx, rec.Conn, protocol.MsgWorkloadAssign, domain.ManagerNodeID, target, protocol.WorkloadAssignPayload{Workload: w})
+	log.Printf("workload.assigned: %s to %s", w.ID, target)
+	s.publish(domain.EventWorkloadAssigned, target, map[string]any{"workloadId": string(w.ID), "command": command})
+
+	return w, nil
+}
+
+func (s *Server) resolveWorkloadTarget(target domain.NodeID) (*NodeRecord, domain.NodeID, error) {
+	if target != "" {
+		rec, ok := s.Registry.Get(target)
+		if !ok || rec.Conn == nil || rec.State != domain.NodeReady {
+			return nil, "", ErrNodeNotConnected
+		}
+		return rec, target, nil
+	}
+	for _, rec := range s.Registry.List() {
+		if rec.State == domain.NodeReady && rec.Conn != nil {
+			return rec, rec.Node.Identity.NodeID, nil
+		}
+	}
+	return nil, "", ErrNoReadyNode
+}
+
+// CancelWorkload requests termination of a running workload. It only sends
+// the request to the node — the workload's status transitions to CANCELED
+// once the agent actually reports it via WORKLOAD_STATUS, not immediately.
+func (s *Server) CancelWorkload(ctx context.Context, id domain.WorkloadID) error {
+	wrec, ok := s.Workloads.Get(id)
+	if !ok {
+		return fmt.Errorf("manager: unknown workload %s", id)
+	}
+	rec, ok := s.Registry.Get(wrec.Workload.Target)
+	if !ok || rec.Conn == nil {
+		return ErrNodeNotConnected
+	}
+	s.send(ctx, rec.Conn, protocol.MsgWorkloadCancel, domain.ManagerNodeID, wrec.Workload.Target, protocol.WorkloadCancelPayload{ID: id})
+	return nil
+}
+
+func (s *Server) persistWorkload(w domain.Workload, status domain.WorkloadStatus) {
+	if s.store == nil {
+		return
+	}
+	if err := s.store.UpsertWorkload(domain.PersistedWorkload{Workload: w, Status: status}); err != nil {
+		log.Printf("manager: failed to persist workload %s: %v", w.ID, err)
+	}
+}
+
+// newRandomID generates a random 128-bit hex ID, used for both command and
+// workload IDs.
+// failWorkloadsFor marks every in-flight workload targeting nodeID as
+// FAILED and persists the change, mirroring failPendingCommandsFor for
+// workloads (which, unlike a Command, have a durable record to update, not
+// just a caller to unblock).
+func (s *Server) failWorkloadsFor(nodeID domain.NodeID, reason string) {
+	for _, id := range s.Workloads.FailInFlightFor(nodeID, reason) {
+		rec, ok := s.Workloads.Get(id)
+		if !ok {
+			continue
+		}
+		s.persistWorkload(rec.Workload, rec.Status)
+		log.Printf("workload.failed: %s (%s)", id, reason)
+		s.publish(domain.EventWorkloadFailed, nodeID, map[string]any{"workloadId": string(id), "error": reason})
+	}
+}
+
+func newRandomID() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("manager: generate command id: %w", err)
+		return "", fmt.Errorf("manager: generate id: %w", err)
 	}
 	return hex.EncodeToString(b), nil
 }
@@ -179,6 +273,14 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 		for _, m := range manifests {
 			s.Registry.Seed(m)
+		}
+
+		workloads, err := s.store.ListWorkloads()
+		if err != nil {
+			return fmt.Errorf("manager: load persisted workloads: %w", err)
+		}
+		for _, pw := range workloads {
+			s.Workloads.Seed(pw)
 		}
 	}
 
@@ -214,6 +316,7 @@ func (s *Server) monitorHeartbeats(ctx context.Context) {
 				log.Printf("node.offline: %s", id)
 				s.publish(domain.EventNodeOffline, id, map[string]any{"reason": "heartbeat timeout"})
 				s.failPendingCommandsFor(id, "node went offline: heartbeat timeout")
+				s.failWorkloadsFor(id, "node went offline: heartbeat timeout")
 			}
 		}
 	}
@@ -226,6 +329,7 @@ func (s *Server) handleConn(ctx context.Context, conn domain.Conn) {
 			log.Printf("node.offline: %s (connection closed)", nodeID)
 			s.publish(domain.EventNodeOffline, nodeID, map[string]any{"reason": "connection closed"})
 			s.failPendingCommandsFor(nodeID, "node went offline: connection closed")
+			s.failWorkloadsFor(nodeID, "node went offline: connection closed")
 		}
 		conn.Close()
 	}()
@@ -267,6 +371,8 @@ func (s *Server) handleConn(ctx context.Context, conn domain.Conn) {
 			s.handleCommandResult(nodeID, env)
 		case protocol.MsgCapabilityUpdate:
 			s.handleCapabilityUpdate(nodeID, env)
+		case protocol.MsgWorkloadStatus:
+			s.handleWorkloadStatus(nodeID, env)
 		default:
 			s.sendError(ctx, conn, domain.ManagerNodeID, nodeID, "UNSUPPORTED_TYPE", string(env.Type))
 		}
@@ -383,6 +489,45 @@ func (s *Server) handleCapabilityUpdate(nodeID domain.NodeID, env *protocol.Enve
 	s.Registry.UpdateResources(nodeID, payload.Resources, payload.Capabilities)
 	log.Printf("node.updated: %s (resources/capabilities refreshed)", nodeID)
 	s.publish(domain.EventNodeUpdated, nodeID, nil)
+}
+
+// handleWorkloadStatus records a workload status update from a node. Like
+// handleCommandResult, it rejects a report unless it actually comes from
+// that workload's target node's connection — otherwise any registered node
+// could forge status for a workload assigned to a different node.
+func (s *Server) handleWorkloadStatus(nodeID domain.NodeID, env *protocol.Envelope) {
+	var payload protocol.WorkloadStatusPayload
+	if err := env.DecodePayload(&payload); err != nil {
+		log.Printf("manager: bad workload status payload from %s: %v", nodeID, err)
+		return
+	}
+
+	w, ok := s.Workloads.UpdateStatus(payload.Status)
+	if !ok {
+		log.Printf("manager: workload status from %s for unknown workload %s", nodeID, payload.Status.ID)
+		return
+	}
+	if w.Target != nodeID {
+		log.Printf("manager: ignoring workload status from %s claiming to report on a workload assigned to %s", nodeID, w.Target)
+		return
+	}
+
+	s.persistWorkload(w, payload.Status)
+
+	switch payload.Status.State {
+	case domain.WorkloadRunning:
+		log.Printf("workload.started: %s on %s", payload.Status.ID, nodeID)
+		s.publish(domain.EventWorkloadStarted, nodeID, map[string]any{"workloadId": string(payload.Status.ID)})
+	case domain.WorkloadCompleted:
+		log.Printf("workload.completed: %s on %s", payload.Status.ID, nodeID)
+		s.publish(domain.EventWorkloadCompleted, nodeID, map[string]any{"workloadId": string(payload.Status.ID), "exitCode": payload.Status.ExitCode})
+	case domain.WorkloadFailed:
+		log.Printf("workload.failed: %s on %s: %s", payload.Status.ID, nodeID, payload.Status.Error)
+		s.publish(domain.EventWorkloadFailed, nodeID, map[string]any{"workloadId": string(payload.Status.ID), "error": payload.Status.Error})
+	case domain.WorkloadCanceled:
+		log.Printf("workload.canceled: %s on %s", payload.Status.ID, nodeID)
+		s.publish(domain.EventWorkloadCanceled, nodeID, map[string]any{"workloadId": string(payload.Status.ID)})
+	}
 }
 
 func (s *Server) sendError(ctx context.Context, conn domain.Conn, source, dest domain.NodeID, code, message string) {

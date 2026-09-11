@@ -18,6 +18,12 @@ const (
 	EventCommandSent      EventType = "command.sent"
 	EventCommandCompleted EventType = "command.completed"
 	EventCommandFailed    EventType = "command.failed"
+
+	EventWorkloadAssigned  EventType = "workload.assigned"
+	EventWorkloadStarted   EventType = "workload.started"
+	EventWorkloadCompleted EventType = "workload.completed"
+	EventWorkloadFailed    EventType = "workload.failed"
+	EventWorkloadCanceled  EventType = "workload.canceled"
 )
 
 // Event is a single state change emitted by the harness.

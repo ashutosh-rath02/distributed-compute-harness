@@ -16,7 +16,7 @@ import (
 
 // Version is the protocol version this build speaks. It follows "vMAJOR.MINOR";
 // messages are accepted when their major version matches ours (see CheckVersion).
-const Version = "v0.1"
+const Version = "v0.2"
 
 // MessageType enumerates the Harness Protocol message types for v0 (v1.md §8).
 type MessageType string
@@ -31,6 +31,9 @@ const (
 	MsgCapabilityUpdate MessageType = "CAPABILITY_UPDATE"
 	MsgCommand          MessageType = "COMMAND"
 	MsgCommandResult    MessageType = "COMMAND_RESULT"
+	MsgWorkloadAssign   MessageType = "WORKLOAD_ASSIGN"
+	MsgWorkloadStatus   MessageType = "WORKLOAD_STATUS"
+	MsgWorkloadCancel   MessageType = "WORKLOAD_CANCEL"
 	MsgPing             MessageType = "PING"
 	MsgPong             MessageType = "PONG"
 	MsgError            MessageType = "ERROR"

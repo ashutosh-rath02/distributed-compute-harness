@@ -148,6 +148,73 @@ func TestAPIDispatchCommand(t *testing.T) {
 	}
 }
 
+func TestAPIWorkloadLifecycle(t *testing.T) {
+	const addr = "127.0.0.1:19224"
+	srv, apiSrv := startManagerWithAPI(t, addr, 2*time.Second)
+	a := startRegisteredAgent(t, addr, "api-agent-workload")
+
+	waitFor(t, 3*time.Second, func() bool {
+		rec, ok := srv.Registry.Get(a.NodeID())
+		return ok && rec.State == domain.NodeReady
+	})
+
+	cmd, cmdArgs := echoArgs("via-api")
+	body, _ := json.Marshal(map[string]any{"target": a.NodeID(), "command": cmd, "args": cmdArgs})
+	resp, err := http.Post(apiSrv.URL+"/workloads", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /workloads: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d", resp.StatusCode)
+	}
+	var wl domain.Workload
+	if err := json.NewDecoder(resp.Body).Decode(&wl); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if wl.Target != a.NodeID() {
+		t.Fatalf("expected target %s, got %s", a.NodeID(), wl.Target)
+	}
+
+	waitFor(t, 3*time.Second, func() bool {
+		resp, err := http.Get(fmt.Sprintf("%s/workloads/%s", apiSrv.URL, wl.ID))
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		var w map[string]any
+		json.NewDecoder(resp.Body).Decode(&w)
+		return w["state"] == "COMPLETED"
+	})
+
+	listResp, err := http.Get(apiSrv.URL + "/workloads")
+	if err != nil {
+		t.Fatalf("GET /workloads: %v", err)
+	}
+	defer listResp.Body.Close()
+	var workloads []map[string]any
+	if err := json.NewDecoder(listResp.Body).Decode(&workloads); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(workloads) != 1 {
+		t.Fatalf("expected 1 workload, got %d", len(workloads))
+	}
+
+	// Submitting with no target and no ready node should be a client error,
+	// not a hang or 500.
+	body2, _ := json.Marshal(map[string]any{"command": "echo", "args": []string{"x"}})
+	badAddr := "127.0.0.1:19225"
+	_, unusedAPI := startManagerWithAPI(t, badAddr, 2*time.Second)
+	resp2, err := http.Post(unusedAPI.URL+"/workloads", "application/json", bytes.NewReader(body2))
+	if err != nil {
+		t.Fatalf("POST /workloads (no ready node): %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409 when no node is ready, got %d", resp2.StatusCode)
+	}
+}
+
 func TestAPIEventsStream(t *testing.T) {
 	const addr = "127.0.0.1:19223"
 	_, apiSrv := startManagerWithAPI(t, addr, 2*time.Second)

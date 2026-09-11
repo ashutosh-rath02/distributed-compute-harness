@@ -13,6 +13,54 @@ import (
 	"home-harness/internal/transport/ws"
 )
 
+// TestInsecureAgentRefusesWorkload proves the mitigation for the sharper
+// risk -insecure introduces once workload execution exists: a workload is
+// arbitrary code execution, and over an unauthenticated plaintext
+// connection the agent cannot tell a legitimate manager from a rogue one
+// on the same network. An agent configured with InsecureWorkloadsDisabled
+// must refuse every WORKLOAD_ASSIGN rather than silently running it.
+func TestInsecureAgentRefusesWorkload(t *testing.T) {
+	const addr = "127.0.0.1:19252"
+	srv := startManager(t, addr, 2*time.Second)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	a, err := agent.New(ws.New(), agent.Config{
+		ManagerAddr:               addr,
+		PairingToken:              pairingToken,
+		IdentityDir:               filepath.Join(t.TempDir(), "insecure-agent"),
+		Name:                      "insecure-agent",
+		HeartbeatInterval:         100 * time.Millisecond,
+		InsecureWorkloadsDisabled: true,
+	})
+	if err != nil {
+		t.Fatalf("agent.New: %v", err)
+	}
+	go a.Run(ctx)
+
+	waitFor(t, 3*time.Second, func() bool {
+		rec, ok := srv.Registry.Get(a.NodeID())
+		return ok && rec.State == domain.NodeReady
+	})
+
+	submitCtx, submitCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer submitCancel()
+	wl, err := srv.SubmitWorkload(submitCtx, a.NodeID(), "echo", []string{"should-not-run"})
+	if err != nil {
+		t.Fatalf("SubmitWorkload: %v", err)
+	}
+
+	waitFor(t, 3*time.Second, func() bool {
+		rec, ok := srv.Workloads.Get(wl.ID)
+		return ok && rec.Status.State == domain.WorkloadFailed
+	})
+	rec, _ := srv.Workloads.Get(wl.ID)
+	if rec.Status.Error == "" {
+		t.Fatal("expected a non-empty rejection reason")
+	}
+}
+
 func TestRegisterOverTLSWithPinnedFingerprint(t *testing.T) {
 	const addr = "127.0.0.1:19250"
 

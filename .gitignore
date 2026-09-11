@@ -4,3 +4,5 @@
 *.out
 .identity/
 *.db
+*.log
+harness-manager-tls/

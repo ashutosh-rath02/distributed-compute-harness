@@ -46,9 +46,19 @@ func toNodeView(rec *NodeRecord) nodeView {
 //	GET  /resources/total           resource totals summed across all nodes
 //	GET  /events                    Server-Sent Events stream of harness events
 //	POST /nodes/{id}/commands        dispatch a command: {"name":"...","args":{...},"timeoutMs":...}
+//	POST /workloads                 submit a workload: {"target":"...optional...","command":"...","args":[...]}
+//	GET  /workloads                 list all known workloads
+//	GET  /workloads/{id}             one workload's request + status
+//	POST /workloads/{id}/cancel      request cancellation of a running workload
 //
 // It is a thin adapter over Registry/SendCommand/Events — the manager's
 // core logic has no HTTP dependency of its own.
+//
+// This API binds to loopback by default (see cmd/manager's -api-addr help
+// text): POST /workloads inherits that default and it is now load-bearing
+// in a way it wasn't for the harmless v0 command set — widening -api-addr
+// exposes unauthenticated arbitrary code execution on every registered
+// node, not just PING/ECHO.
 func (s *Server) NewHTTPHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /nodes", s.apiListNodes)
@@ -58,6 +68,10 @@ func (s *Server) NewHTTPHandler() http.Handler {
 	mux.HandleFunc("GET /resources/total", s.apiGetTotalResources)
 	mux.HandleFunc("GET /events", s.apiEvents)
 	mux.HandleFunc("POST /nodes/{id}/commands", s.apiPostCommand)
+	mux.HandleFunc("POST /workloads", s.apiPostWorkload)
+	mux.HandleFunc("GET /workloads", s.apiListWorkloads)
+	mux.HandleFunc("GET /workloads/{id}", s.apiGetWorkload)
+	mux.HandleFunc("POST /workloads/{id}/cancel", s.apiCancelWorkload)
 	return mux
 }
 
@@ -134,6 +148,132 @@ func (s *Server) apiPostCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+// workloadSummaryView is the JSON shape for a workload in a list — request
+// identity plus state, deliberately excluding captured stdout/stderr so
+// listing every workload can't balloon into megabytes of output (each
+// individually already capped at domain.OutputCapBytes, but summed across
+// many workloads that adds up).
+type workloadSummaryView struct {
+	ID       domain.WorkloadID    `json:"id"`
+	Target   domain.NodeID        `json:"target"`
+	Command  string               `json:"command"`
+	Args     []string             `json:"args,omitempty"`
+	State    domain.WorkloadState `json:"state"`
+	ExitCode *int                 `json:"exitCode,omitempty"`
+}
+
+// workloadView is the JSON shape for a single workload — the summary plus
+// its full captured output.
+type workloadView struct {
+	workloadSummaryView
+	Stdout     string    `json:"stdout,omitempty"`
+	Stderr     string    `json:"stderr,omitempty"`
+	Truncated  bool      `json:"truncated,omitempty"`
+	Error      string    `json:"error,omitempty"`
+	StartedAt  time.Time `json:"startedAt,omitempty"`
+	FinishedAt time.Time `json:"finishedAt,omitempty"`
+}
+
+// exitCode returns a pointer to the process's actual exit code, or nil if
+// none was ever produced (still in progress, canceled, or rejected before
+// a process was launched at all) — as a plain int with omitempty, exit
+// code 0 would be indistinguishable from "no exit code" over JSON.
+func exitCode(status domain.WorkloadStatus) *int {
+	if status.StartedAt.IsZero() {
+		return nil
+	}
+	if status.State != domain.WorkloadCompleted && status.State != domain.WorkloadFailed {
+		return nil
+	}
+	ec := status.ExitCode
+	return &ec
+}
+
+func toWorkloadSummaryView(rec WorkloadRecord) workloadSummaryView {
+	return workloadSummaryView{
+		ID:       rec.Workload.ID,
+		Target:   rec.Workload.Target,
+		Command:  rec.Workload.Command,
+		Args:     rec.Workload.Args,
+		State:    rec.Status.State,
+		ExitCode: exitCode(rec.Status),
+	}
+}
+
+func toWorkloadView(rec WorkloadRecord) workloadView {
+	return workloadView{
+		workloadSummaryView: toWorkloadSummaryView(rec),
+		Stdout:              rec.Status.Stdout,
+		Stderr:              rec.Status.Stderr,
+		Truncated:           rec.Status.Truncated,
+		Error:               rec.Status.Error,
+		StartedAt:           rec.Status.StartedAt,
+		FinishedAt:          rec.Status.FinishedAt,
+	}
+}
+
+type workloadRequest struct {
+	Target  domain.NodeID `json:"target"`
+	Command string        `json:"command"`
+	Args    []string      `json:"args"`
+}
+
+func (s *Server) apiPostWorkload(w http.ResponseWriter, r *http.Request) {
+	var req workloadRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Command == "" {
+		http.Error(w, "bad request: command is required", http.StatusBadRequest)
+		return
+	}
+
+	wl, err := s.SubmitWorkload(r.Context(), req.Target, req.Command, req.Args)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrNodeNotConnected), errors.Is(err, ErrNoReadyNode):
+			http.Error(w, err.Error(), http.StatusConflict)
+		default:
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+	writeJSON(w, http.StatusAccepted, wl)
+}
+
+func (s *Server) apiListWorkloads(w http.ResponseWriter, r *http.Request) {
+	recs := s.Workloads.List()
+	views := make([]workloadSummaryView, 0, len(recs))
+	for _, rec := range recs {
+		views = append(views, toWorkloadSummaryView(rec))
+	}
+	writeJSON(w, http.StatusOK, views)
+}
+
+func (s *Server) apiGetWorkload(w http.ResponseWriter, r *http.Request) {
+	rec, ok := s.Workloads.Get(domain.WorkloadID(r.PathValue("id")))
+	if !ok {
+		http.Error(w, "workload not found", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, toWorkloadView(rec))
+}
+
+func (s *Server) apiCancelWorkload(w http.ResponseWriter, r *http.Request) {
+	id := domain.WorkloadID(r.PathValue("id"))
+	if err := s.CancelWorkload(r.Context(), id); err != nil {
+		switch {
+		case errors.Is(err, ErrNodeNotConnected):
+			http.Error(w, err.Error(), http.StatusConflict)
+		default:
+			http.Error(w, err.Error(), http.StatusNotFound)
+		}
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
 }
 
 func (s *Server) apiEvents(w http.ResponseWriter, r *http.Request) {

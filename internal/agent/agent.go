@@ -48,6 +48,14 @@ type Config struct {
 	ReconnectBackoff time.Duration
 	// MaxReconnectBackoff caps the doubling. Defaults to 30s.
 	MaxReconnectBackoff time.Duration
+	// InsecureWorkloadsDisabled, when true, makes the agent refuse every
+	// WORKLOAD_ASSIGN instead of running it. Set when the transport is
+	// plaintext with no manager authentication (-insecure): over such a
+	// connection the agent cannot tell a legitimate manager from a rogue
+	// one on the same network, and a workload is arbitrary code execution
+	// — a much worse thing to hand to an unauthenticated peer than the
+	// harmless v0 command set.
+	InsecureWorkloadsDisabled bool
 }
 
 const defaultAgentVersion = "0.1.0"
@@ -59,6 +67,7 @@ type Agent struct {
 	transport domain.Transport
 	identity  *identity.Identity
 	startedAt time.Time
+	executor  *Executor
 }
 
 // New loads (or generates, on first run) the agent's identity and returns
@@ -82,7 +91,7 @@ func New(transport domain.Transport, cfg Config) (*Agent, error) {
 		return nil, fmt.Errorf("agent: load identity: %w", err)
 	}
 
-	return &Agent{cfg: cfg, transport: transport, identity: id, startedAt: time.Now()}, nil
+	return &Agent{cfg: cfg, transport: transport, identity: id, startedAt: time.Now(), executor: NewExecutor()}, nil
 }
 
 // NodeID returns this agent's persistent node identity.
@@ -104,6 +113,11 @@ func (a *Agent) Run(ctx context.Context) error {
 		if err := a.connectAndServe(ctx); err != nil {
 			log.Printf("agent %s: connection error: %v", a.identity.NodeID, err)
 		}
+		// The manager marks this node's in-flight workloads FAILED as soon
+		// as it notices the disconnect (failWorkloadsFor) — keeping a
+		// workload running past that point would leave the manager and
+		// agent permanently disagreeing about whether it's still going.
+		a.executor.CancelCurrent()
 
 		if time.Since(connectedAt) >= resetThreshold {
 			backoff = a.cfg.ReconnectBackoff
@@ -267,6 +281,10 @@ func (a *Agent) receiveLoop(ctx context.Context, conn domain.Conn, errCh chan<- 
 			}
 		case protocol.MsgCommand:
 			a.handleCommand(ctx, conn, env, errCh)
+		case protocol.MsgWorkloadAssign:
+			a.handleWorkloadAssign(ctx, conn, env)
+		case protocol.MsgWorkloadCancel:
+			a.handleWorkloadCancel(ctx, conn, env)
 		case protocol.MsgError:
 			var payload protocol.ErrorPayload
 			_ = env.DecodePayload(&payload)
