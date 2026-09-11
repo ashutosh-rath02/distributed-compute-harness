@@ -181,3 +181,90 @@ func TestRunningWorkloadBecomesUnknownAfterManagerRestart(t *testing.T) {
 		t.Fatalf("expected UNKNOWN for an in-flight workload after restart, got %s", rec.Status.State)
 	}
 }
+
+// TestOrphanedRestartAlwaysWorkloadResumesAfterManagerRestart is v3's
+// headline claim end to end: a workload with a non-Never RestartPolicy that
+// was orphaned to UNKNOWN by a manager restart (the exact gap
+// TestRunningWorkloadBecomesUnknownAfterManagerRestart proves exists) must
+// not just sit at UNKNOWN forever — the reconciliation loop has to pick it
+// up on its own once a node is available, and the restart bookkeeping
+// already on disk before the crash (both the lifetime Count AND
+// BackoffCount, which is what actually drives the backoff curve) must
+// carry forward rather than resetting to zero.
+func TestOrphanedRestartAlwaysWorkloadResumesAfterManagerRestart(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "harness-workload-restart.db")
+
+	store1, err := persistent.Open(dbPath)
+	if err != nil {
+		t.Fatalf("persistent.Open: %v", err)
+	}
+	wl := domain.Workload{ID: "wl-orphaned-restart", RestartPolicy: domain.RestartAlways}
+	pending := domain.WorkloadStatus{ID: wl.ID, State: domain.WorkloadRunning, StartedAt: time.Now()}
+	persisted := domain.PersistedWorkload{Workload: wl, Status: pending, Restart: domain.RestartState{Count: 3, BackoffCount: 3}}
+	if err := store1.UpsertWorkload(persisted); err != nil {
+		t.Fatalf("UpsertWorkload: %v", err)
+	}
+	if err := store1.Close(); err != nil {
+		t.Fatalf("store1.Close: %v", err)
+	}
+
+	store2, err := persistent.Open(dbPath)
+	if err != nil {
+		t.Fatalf("persistent.Open (reopen): %v", err)
+	}
+	defer store2.Close()
+
+	const addr2 = "127.0.0.1:19201"
+	mgrCtx2, mgrCancel2 := context.WithCancel(context.Background())
+	defer mgrCancel2()
+	srv2 := manager.NewServer(ws.New(), store2, manager.Config{
+		Addr:              addr2,
+		PairingToken:      pairingToken,
+		HeartbeatTimeout:  2 * time.Second,
+		ReconcileInterval: 150 * time.Millisecond,
+	})
+	go srv2.Run(mgrCtx2)
+
+	// Confirm it's seeded as UNKNOWN first, same as the sibling test above —
+	// there is no node yet for the reconciler to place it on.
+	waitFor(t, 2*time.Second, func() bool {
+		rec, ok := srv2.Workloads.Get(wl.ID)
+		return ok && rec.Status.State == domain.WorkloadUnknown
+	})
+	if rec, _ := srv2.Workloads.Get(wl.ID); rec.Restart.Count != 3 || rec.Restart.BackoffCount != 3 {
+		t.Fatalf("expected persisted restart bookkeeping (Count=3, BackoffCount=3) to survive the manager restart, got %+v", rec.Restart)
+	}
+
+	// Now bring a node online — the reconciler should place it there on its
+	// own, with no API call, and the bookkeeping already on disk must carry
+	// forward (3 -> 4 for both), not reset to 0 for what is really attempt 4.
+	// The UNKNOWN path has no terminal FinishedAt to judge a healthy run
+	// by, so BackoffCount always increments here rather than resetting.
+	agentCtx, agentCancel := context.WithCancel(context.Background())
+	defer agentCancel()
+	a, err := agent.New(ws.New(), agent.Config{
+		ManagerAddr:       addr2,
+		PairingToken:      pairingToken,
+		IdentityDir:       filepath.Join(t.TempDir(), "agent-restart-resume"),
+		Name:              "restart-resume-agent",
+		HeartbeatInterval: 100 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("agent.New: %v", err)
+	}
+	go a.Run(agentCtx)
+
+	waitFor(t, 3*time.Second, func() bool {
+		rec, ok := srv2.Registry.Get(a.NodeID())
+		return ok && rec.State == domain.NodeReady
+	})
+
+	waitFor(t, 3*time.Second, func() bool {
+		rec, ok := srv2.Workloads.Get(wl.ID)
+		return ok && rec.Restart.Count == 4 && rec.Restart.BackoffCount == 4
+	})
+	finalRec, _ := srv2.Workloads.Get(wl.ID)
+	if finalRec.Status.State == domain.WorkloadUnknown {
+		t.Fatal("expected the workload to move off UNKNOWN once a node became available")
+	}
+}

@@ -30,6 +30,7 @@ func main() {
 	tlsDir := flag.String("tls-dir", "harness-manager-tls", "directory holding the manager's persistent TLS certificate")
 	pairingToken := flag.String("pairing-token", "", "shared secret agents must present to register (required)")
 	heartbeatTimeout := flag.Duration("heartbeat-timeout", 15*time.Second, "how long without a heartbeat before a node is marked offline")
+	reconcileInterval := flag.Duration("reconcile-interval", 5*time.Second, "how often to check for workloads that need restarting (RestartPolicy on-failure/always)")
 	disableDiscovery := flag.Bool("disable-discovery", false, "disable the LAN multicast discovery beacon")
 	insecure := flag.Bool("insecure", false, "disable TLS: agents connect over plaintext ws:// with no manager authentication (dev/local use only). POST /workloads still returns 202 and dispatches ASSIGN, but an agent run with its own -insecure will refuse to execute it (see cmd/agent's -insecure) rather than run arbitrary code for a manager it can't verify")
 	flag.Parse()
@@ -57,9 +58,10 @@ func main() {
 	}
 
 	srv := manager.NewServer(transport, store, manager.Config{
-		Addr:             *addr,
-		PairingToken:     *pairingToken,
-		HeartbeatTimeout: *heartbeatTimeout,
+		Addr:              *addr,
+		PairingToken:      *pairingToken,
+		HeartbeatTimeout:  *heartbeatTimeout,
+		ReconcileInterval: *reconcileInterval,
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

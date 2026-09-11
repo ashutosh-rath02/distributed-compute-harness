@@ -109,8 +109,9 @@ func cmdRun(client *apiClient, args []string) error {
 	minMem := fs.String("min-mem", "", "minimum available memory required on the target node, e.g. 2GiB")
 	minCores := fs.Float64("min-cores", 0, "minimum declared CPU cores required on the target node")
 	maxCPU := fs.Float64("max-cpu", 0, "maximum acceptable live CPU load percent on the target node")
+	restart := fs.String("restart", "never", `restart policy: "never" (default), "on-failure", or "always" — a non-"never" policy makes this a v3 "service" the manager keeps restarting after it stops`)
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: harnessctl run [-min-mem SIZE] [-min-cores N] [-max-cpu PCT] <id|-> <command> [args...]")
+		fmt.Fprintln(os.Stderr, "usage: harnessctl run [-min-mem SIZE] [-min-cores N] [-max-cpu PCT] [-restart POLICY] <id|-> <command> [args...]")
 	}
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -137,7 +138,11 @@ func cmdRun(client *apiClient, args []string) error {
 	req.MinCPUCores = *minCores
 	req.MaxCPUPercent = *maxCPU
 
-	return client.cmdRunWorkload(target, rest[1], rest[2:], req)
+	if _, err := domain.ParseRestartPolicy(*restart); err != nil {
+		return err
+	}
+
+	return client.cmdRunWorkload(target, rest[1], rest[2:], req, *restart)
 }
 
 func requireArgs(args []string, n int, usage string, fn func() error) error {
@@ -261,23 +266,26 @@ func (c *apiClient) cmdCommand(id string, name domain.CommandName, args map[stri
 }
 
 type workloadView struct {
-	ID           domain.WorkloadID           `json:"id"`
-	Target       domain.NodeID               `json:"target"`
-	Command      string                      `json:"command"`
-	Args         []string                    `json:"args,omitempty"`
-	State        domain.WorkloadState        `json:"state"`
-	Requirements domain.ResourceRequirements `json:"requirements,omitempty"`
-	Stdout       string                      `json:"stdout,omitempty"`
-	Stderr       string                      `json:"stderr,omitempty"`
-	Truncated    bool                        `json:"truncated,omitempty"`
-	ExitCode     *int                        `json:"exitCode,omitempty"`
-	Error        string                      `json:"error,omitempty"`
-	StartedAt    time.Time                   `json:"startedAt,omitempty"`
-	FinishedAt   time.Time                   `json:"finishedAt,omitempty"`
+	ID            domain.WorkloadID           `json:"id"`
+	Target        domain.NodeID               `json:"target"`
+	Command       string                      `json:"command"`
+	Args          []string                    `json:"args,omitempty"`
+	State         domain.WorkloadState        `json:"state"`
+	Requirements  domain.ResourceRequirements `json:"requirements,omitempty"`
+	RestartPolicy domain.RestartPolicy        `json:"restartPolicy,omitempty"`
+	RestartCount  int                         `json:"restartCount,omitempty"`
+	NextRestartAt time.Time                   `json:"nextRestartAt,omitempty"`
+	Stdout        string                      `json:"stdout,omitempty"`
+	Stderr        string                      `json:"stderr,omitempty"`
+	Truncated     bool                        `json:"truncated,omitempty"`
+	ExitCode      *int                        `json:"exitCode,omitempty"`
+	Error         string                      `json:"error,omitempty"`
+	StartedAt     time.Time                   `json:"startedAt,omitempty"`
+	FinishedAt    time.Time                   `json:"finishedAt,omitempty"`
 }
 
-func (c *apiClient) cmdRunWorkload(target, command string, args []string, req domain.ResourceRequirements) error {
-	reqBody, err := json.Marshal(map[string]any{"target": target, "command": command, "args": args, "requirements": req})
+func (c *apiClient) cmdRunWorkload(target, command string, args []string, req domain.ResourceRequirements, restartPolicy string) error {
+	reqBody, err := json.Marshal(map[string]any{"target": target, "command": command, "args": args, "requirements": req, "restartPolicy": restartPolicy})
 	if err != nil {
 		return err
 	}
@@ -338,6 +346,13 @@ func (c *apiClient) cmdWorkload(id string) error {
 			parts = append(parts, fmt.Sprintf("max %.1f%% CPU load", w.Requirements.MaxCPUPercent))
 		}
 		fmt.Printf("Requirements   %s\n", strings.Join(parts, ", "))
+	}
+	if w.RestartPolicy != domain.RestartNever {
+		fmt.Printf("Restart policy %s\n", w.RestartPolicy)
+		fmt.Printf("Restart count  %d\n", w.RestartCount)
+		if !w.NextRestartAt.IsZero() {
+			fmt.Printf("Next restart   %s\n", w.NextRestartAt.Format(time.RFC3339))
+		}
 	}
 	if !w.StartedAt.IsZero() {
 		fmt.Printf("Started        %s\n", w.StartedAt.Format(time.RFC3339))

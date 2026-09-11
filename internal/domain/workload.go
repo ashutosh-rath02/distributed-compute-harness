@@ -33,11 +33,23 @@ type Workload struct {
 	Target  NodeID     `json:"target"`
 	Command string     `json:"command"`
 	Args    []string   `json:"args,omitempty"`
+	// Pinned records whether the original submission named an explicit
+	// Target (true) or left placement to auto-selection (false). Target
+	// itself gets overwritten with whatever node was actually resolved to
+	// on submission (and again on each restart), so this is the only place
+	// that original intent survives — without it, a restart couldn't tell
+	// "stay on this exact node" from "any eligible node is fine" once
+	// Target already holds a concrete resolved value either way.
+	Pinned bool `json:"pinned,omitempty"`
 	// Requirements records what placement constraints, if any, this
 	// workload was submitted with — kept on the workload itself (not just
 	// the API request) so a persisted/historical record is self-explaining
 	// about why it landed where it did.
 	Requirements ResourceRequirements `json:"requirements,omitempty"`
+	// RestartPolicy is immutable once submitted, unlike RestartState (see
+	// restart_policy.go), which is manager-only bookkeeping that changes
+	// over the workload's lifetime.
+	RestartPolicy RestartPolicy `json:"restartPolicy,omitempty"`
 }
 
 // outputCap bounds how much of a workload's stdout/stderr is retained and
@@ -69,4 +81,11 @@ type WorkloadStatus struct {
 type PersistedWorkload struct {
 	Workload Workload       `json:"workload"`
 	Status   WorkloadStatus `json:"status"`
+	// Restart is manager-only bookkeeping (see RestartState) persisted
+	// alongside the workload so restart count/backoff survive a manager
+	// restart instead of resetting to zero — without this, a crash-looping
+	// workload would get hammered at full reconcile-tick frequency right
+	// when the fleet is least ready for it. Old persisted records (before
+	// v3) decode with this as its zero value; no migration needed.
+	Restart RestartState `json:"restart,omitempty"`
 }

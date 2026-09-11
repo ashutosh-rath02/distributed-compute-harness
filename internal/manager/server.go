@@ -21,6 +21,12 @@ type Config struct {
 	Addr             string
 	PairingToken     string
 	HeartbeatTimeout time.Duration
+	// ReconcileInterval is how often the reconciliation loop
+	// (reconcile.go) checks for restart-eligible workloads. Deliberately
+	// its own tunable, not derived from HeartbeatTimeout: heartbeat cadence
+	// and restart-backoff resolution are different concerns. Defaults to
+	// 5s (see cmd/manager's -reconcile-interval flag).
+	ReconcileInterval time.Duration
 }
 
 // PersistentStore is the subset of persistent storage the manager needs:
@@ -69,6 +75,9 @@ type pendingCommand struct {
 // package) but coded only against domain.Transport, and an optional
 // PersistentStore for node identity/metadata to survive a restart.
 func NewServer(transport domain.Transport, store PersistentStore, cfg Config) *Server {
+	if cfg.ReconcileInterval <= 0 {
+		cfg.ReconcileInterval = defaultReconcileInterval
+	}
 	return &Server{
 		cfg:       cfg,
 		transport: transport,
@@ -175,10 +184,12 @@ var ErrNoReadyNode = errors.New("manager: no target given and no node is current
 var ErrNoEligibleNode = errors.New("manager: no node satisfies the workload's resource requirements")
 
 // SubmitWorkload dispatches a workload for execution. If target is empty,
-// the first READY node found is used — v1's "scheduling" is exactly this
-// (an explicit target, or the first available node) and nothing more; there
-// is no resource-fit or load-based placement (that is v2 scope, v1.md §22).
-func (s *Server) SubmitWorkload(ctx context.Context, target domain.NodeID, command string, args []string, req domain.ResourceRequirements) (domain.Workload, error) {
+// placement is resolved via v2's resource-aware selectNode (v1.md §22).
+// A non-Never restartPolicy makes this workload a "service" in v3's sense:
+// the reconciliation loop (reconcile.go) will re-run it after it stops,
+// per RestartPolicy.WantsRestartAfter.
+func (s *Server) SubmitWorkload(ctx context.Context, target domain.NodeID, command string, args []string, req domain.ResourceRequirements, restartPolicy domain.RestartPolicy) (domain.Workload, error) {
+	pinned := target != ""
 	rec, target, err := s.resolveWorkloadTarget(target, req)
 	if err != nil {
 		return domain.Workload{}, err
@@ -188,11 +199,11 @@ func (s *Server) SubmitWorkload(ctx context.Context, target domain.NodeID, comma
 	if err != nil {
 		return domain.Workload{}, err
 	}
-	w := domain.Workload{ID: domain.WorkloadID(id), Target: target, Command: command, Args: args, Requirements: req}
+	w := domain.Workload{ID: domain.WorkloadID(id), Target: target, Pinned: pinned, Command: command, Args: args, Requirements: req, RestartPolicy: restartPolicy}
 	status := domain.WorkloadStatus{ID: w.ID, Target: target, State: domain.WorkloadPending}
 
-	s.Workloads.Put(w, status)
-	s.persistWorkload(w, status)
+	wrec := s.Workloads.Put(w, status)
+	s.persistWorkloadRecord(wrec)
 
 	s.send(ctx, rec.Conn, protocol.MsgWorkloadAssign, domain.ManagerNodeID, target, protocol.WorkloadAssignPayload{Workload: w})
 	log.Printf("workload.assigned: %s to %s", w.ID, target)
@@ -250,12 +261,17 @@ func (s *Server) CancelWorkload(ctx context.Context, id domain.WorkloadID) error
 	return nil
 }
 
-func (s *Server) persistWorkload(w domain.Workload, status domain.WorkloadStatus) {
+// persistWorkloadRecord persists a workload's full current record —
+// request, status, and restart bookkeeping — as one unit, so a manager
+// restart never sees a status without the restart count/backoff that goes
+// with it (or vice versa).
+func (s *Server) persistWorkloadRecord(rec WorkloadRecord) {
 	if s.store == nil {
 		return
 	}
-	if err := s.store.UpsertWorkload(domain.PersistedWorkload{Workload: w, Status: status}); err != nil {
-		log.Printf("manager: failed to persist workload %s: %v", w.ID, err)
+	pw := domain.PersistedWorkload{Workload: rec.Workload, Status: rec.Status, Restart: rec.Restart}
+	if err := s.store.UpsertWorkload(pw); err != nil {
+		log.Printf("manager: failed to persist workload %s: %v", rec.Workload.ID, err)
 	}
 }
 
@@ -265,15 +281,31 @@ func (s *Server) persistWorkload(w domain.Workload, status domain.WorkloadStatus
 // FAILED and persists the change, mirroring failPendingCommandsFor for
 // workloads (which, unlike a Command, have a durable record to update, not
 // just a caller to unblock).
-func (s *Server) failWorkloadsFor(nodeID domain.NodeID, reason string) {
-	for _, id := range s.Workloads.FailInFlightFor(nodeID, reason) {
-		rec, ok := s.Workloads.Get(id)
-		if !ok {
-			continue
+//
+// It also best-effort sends WORKLOAD_CANCEL over the node's registry
+// connection, if any. This matters specifically for the heartbeat-timeout
+// path (monitorHeartbeats -> ExpireStale): a node that's merely slow to
+// heartbeat, not actually disconnected, still has a live rec.Conn here,
+// and the process this function is about to mark FAILED (and which v3's
+// reconciler may restart elsewhere) could still genuinely be running. This
+// is not airtight — the CANCEL itself can be lost on a degraded one-way
+// link — but it meaningfully reduces the chance of two live instances of
+// the same restart-policy workload existing at once, using a message the
+// agent already knows how to handle. On the connection-actually-closed
+// path (handleConn's defer), this send is a harmless no-op.
+func (s *Server) failWorkloadsFor(ctx context.Context, nodeID domain.NodeID, reason string) {
+	var conn domain.Conn
+	if rec, ok := s.Registry.Get(nodeID); ok {
+		conn = rec.Conn
+	}
+
+	for _, rec := range s.Workloads.FailInFlightFor(nodeID, reason) {
+		s.persistWorkloadRecord(rec)
+		log.Printf("workload.failed: %s (%s)", rec.Workload.ID, reason)
+		s.publish(domain.EventWorkloadFailed, nodeID, map[string]any{"workloadId": string(rec.Workload.ID), "error": reason})
+		if conn != nil {
+			s.send(ctx, conn, protocol.MsgWorkloadCancel, domain.ManagerNodeID, nodeID, protocol.WorkloadCancelPayload{ID: rec.Workload.ID})
 		}
-		s.persistWorkload(rec.Workload, rec.Status)
-		log.Printf("workload.failed: %s (%s)", id, reason)
-		s.publish(domain.EventWorkloadFailed, nodeID, map[string]any{"workloadId": string(id), "error": reason})
 	}
 }
 
@@ -313,6 +345,7 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 
 	go s.monitorHeartbeats(ctx)
+	go s.reconcileWorkloads(ctx)
 
 	for {
 		select {
@@ -339,7 +372,7 @@ func (s *Server) monitorHeartbeats(ctx context.Context) {
 				log.Printf("node.offline: %s", id)
 				s.publish(domain.EventNodeOffline, id, map[string]any{"reason": "heartbeat timeout"})
 				s.failPendingCommandsFor(id, "node went offline: heartbeat timeout")
-				s.failWorkloadsFor(id, "node went offline: heartbeat timeout")
+				s.failWorkloadsFor(ctx, id, "node went offline: heartbeat timeout")
 			}
 		}
 	}
@@ -352,7 +385,7 @@ func (s *Server) handleConn(ctx context.Context, conn domain.Conn) {
 			log.Printf("node.offline: %s (connection closed)", nodeID)
 			s.publish(domain.EventNodeOffline, nodeID, map[string]any{"reason": "connection closed"})
 			s.failPendingCommandsFor(nodeID, "node went offline: connection closed")
-			s.failWorkloadsFor(nodeID, "node went offline: connection closed")
+			s.failWorkloadsFor(ctx, nodeID, "node went offline: connection closed")
 		}
 		conn.Close()
 	}()
@@ -518,6 +551,12 @@ func (s *Server) handleCapabilityUpdate(nodeID domain.NodeID, env *protocol.Enve
 // handleCommandResult, it rejects a report unless it actually comes from
 // that workload's target node's connection — otherwise any registered node
 // could forge status for a workload assigned to a different node.
+//
+// This same check also (harmlessly) fires for a more benign reason once
+// restarts exist (reconcile.go): a superseded attempt's tardy terminal
+// status can arrive from its old node after the reconciler has already
+// re-placed the workload on a new one. That's correctly dropped here too —
+// not every rejection on this path is an identity-forgery attempt.
 func (s *Server) handleWorkloadStatus(nodeID domain.NodeID, env *protocol.Envelope) {
 	var payload protocol.WorkloadStatusPayload
 	if err := env.DecodePayload(&payload); err != nil {
@@ -525,17 +564,25 @@ func (s *Server) handleWorkloadStatus(nodeID domain.NodeID, env *protocol.Envelo
 		return
 	}
 
-	w, ok := s.Workloads.UpdateStatus(payload.Status)
+	// Checked against a Get snapshot before mutating: UpdateStatus writes
+	// unconditionally, so validating the target only *after* calling it
+	// would let a rejected report still corrupt the live record first —
+	// harmless for a one-shot workload, but dangerous once restarts exist
+	// (a stale FAILED from a superseded node could make a genuinely
+	// healthy restart attempt look crashed, and it also self-corrupts
+	// domain.Workload.Target, which restarts and persistence rely on).
+	current, ok := s.Workloads.Get(payload.Status.ID)
 	if !ok {
 		log.Printf("manager: workload status from %s for unknown workload %s", nodeID, payload.Status.ID)
 		return
 	}
-	if w.Target != nodeID {
-		log.Printf("manager: ignoring workload status from %s claiming to report on a workload assigned to %s", nodeID, w.Target)
+	if current.Workload.Target != nodeID {
+		log.Printf("manager: ignoring workload status from %s claiming to report on a workload assigned to %s (may be a stale report from a superseded restart attempt, not necessarily a forgery)", nodeID, current.Workload.Target)
 		return
 	}
 
-	s.persistWorkload(w, payload.Status)
+	wrec, _ := s.Workloads.UpdateStatus(payload.Status)
+	s.persistWorkloadRecord(wrec)
 
 	switch payload.Status.State {
 	case domain.WorkloadRunning:

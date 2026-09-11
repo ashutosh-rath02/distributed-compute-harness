@@ -168,13 +168,16 @@ type workloadSummaryView struct {
 // its full captured output.
 type workloadView struct {
 	workloadSummaryView
-	Requirements domain.ResourceRequirements `json:"requirements,omitempty"`
-	Stdout       string                      `json:"stdout,omitempty"`
-	Stderr       string                      `json:"stderr,omitempty"`
-	Truncated    bool                        `json:"truncated,omitempty"`
-	Error        string                      `json:"error,omitempty"`
-	StartedAt    time.Time                   `json:"startedAt,omitempty"`
-	FinishedAt   time.Time                   `json:"finishedAt,omitempty"`
+	Requirements  domain.ResourceRequirements `json:"requirements,omitempty"`
+	RestartPolicy domain.RestartPolicy        `json:"restartPolicy,omitempty"`
+	RestartCount  int                         `json:"restartCount,omitempty"`
+	NextRestartAt time.Time                   `json:"nextRestartAt,omitempty"`
+	Stdout        string                      `json:"stdout,omitempty"`
+	Stderr        string                      `json:"stderr,omitempty"`
+	Truncated     bool                        `json:"truncated,omitempty"`
+	Error         string                      `json:"error,omitempty"`
+	StartedAt     time.Time                   `json:"startedAt,omitempty"`
+	FinishedAt    time.Time                   `json:"finishedAt,omitempty"`
 }
 
 // exitCode returns a pointer to the process's actual exit code, or nil if
@@ -204,9 +207,11 @@ func toWorkloadSummaryView(rec WorkloadRecord) workloadSummaryView {
 }
 
 func toWorkloadView(rec WorkloadRecord) workloadView {
-	return workloadView{
+	view := workloadView{
 		workloadSummaryView: toWorkloadSummaryView(rec),
 		Requirements:        rec.Workload.Requirements,
+		RestartPolicy:       rec.Workload.RestartPolicy,
+		RestartCount:        rec.Restart.Count,
 		Stdout:              rec.Status.Stdout,
 		Stderr:              rec.Status.Stderr,
 		Truncated:           rec.Status.Truncated,
@@ -214,13 +219,23 @@ func toWorkloadView(rec WorkloadRecord) workloadView {
 		StartedAt:           rec.Status.StartedAt,
 		FinishedAt:          rec.Status.FinishedAt,
 	}
+	// NextRestartAt is only meaningful while the reconciler would actually
+	// act on it — once a workload leaves restart eligibility (e.g. CANCELED
+	// permanently excludes it, see RestartPolicy.WantsRestartAfter), the
+	// value left over from its last-scheduled attempt is stale and would
+	// otherwise display as if a restart were still pending forever.
+	if rec.Workload.RestartPolicy.WantsRestartAfter(rec.Status.State) {
+		view.NextRestartAt = rec.Restart.NextRestartAt
+	}
+	return view
 }
 
 type workloadRequest struct {
-	Target       domain.NodeID               `json:"target"`
-	Command      string                      `json:"command"`
-	Args         []string                    `json:"args"`
-	Requirements domain.ResourceRequirements `json:"requirements,omitempty"`
+	Target        domain.NodeID               `json:"target"`
+	Command       string                      `json:"command"`
+	Args          []string                    `json:"args"`
+	Requirements  domain.ResourceRequirements `json:"requirements,omitempty"`
+	RestartPolicy string                      `json:"restartPolicy,omitempty"`
 }
 
 func (s *Server) apiPostWorkload(w http.ResponseWriter, r *http.Request) {
@@ -233,8 +248,13 @@ func (s *Server) apiPostWorkload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request: command is required", http.StatusBadRequest)
 		return
 	}
+	restartPolicy, err := domain.ParseRestartPolicy(req.RestartPolicy)
+	if err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
 
-	wl, err := s.SubmitWorkload(r.Context(), req.Target, req.Command, req.Args, req.Requirements)
+	wl, err := s.SubmitWorkload(r.Context(), req.Target, req.Command, req.Args, req.Requirements, restartPolicy)
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrNodeNotConnected), errors.Is(err, ErrNoReadyNode), errors.Is(err, ErrNoEligibleNode):
