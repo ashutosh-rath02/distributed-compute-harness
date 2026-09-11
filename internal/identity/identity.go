@@ -30,14 +30,23 @@ func (id *Identity) Sign(data []byte) []byte {
 	return ed25519.Sign(id.PrivateKey, data)
 }
 
-// Verify checks a signature against a domain.Identity's public key.
+// Verify checks a signature against a domain.Identity's public key. It
+// returns false (never panics) for a malformed public key, since callers
+// may pass attacker-controlled data (e.g. a manifest received over the
+// network) before it has been validated.
 func Verify(id domain.Identity, data, sig []byte) bool {
+	if len(id.PublicKey) != ed25519.PublicKeySize {
+		return false
+	}
 	return ed25519.Verify(ed25519.PublicKey(id.PublicKey), data, sig)
 }
 
-// deriveNodeID hashes the public key to produce a stable, unspoofable
+// DeriveNodeID hashes a public key to produce a stable, content-derived
 // NodeID: "node-" followed by the first 20 hex characters of its SHA-256.
-func deriveNodeID(pub ed25519.PublicKey) domain.NodeID {
+// Because it is a pure function of the public key, a receiver can
+// recompute it independently to check that a claimed NodeID actually
+// matches the claimed public key, rather than trusting the pair as given.
+func DeriveNodeID(pub ed25519.PublicKey) domain.NodeID {
 	sum := sha256.Sum256(pub)
 	return domain.NodeID("node-" + hex.EncodeToString(sum[:])[:20])
 }
@@ -64,7 +73,7 @@ func LoadOrCreate(dir string) (*Identity, error) {
 	pub := priv.Public().(ed25519.PublicKey)
 	return &Identity{
 		Identity: domain.Identity{
-			NodeID:    deriveNodeID(pub),
+			NodeID:    DeriveNodeID(pub),
 			PublicKey: []byte(pub),
 		},
 		PrivateKey: priv,

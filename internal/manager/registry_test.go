@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -10,6 +11,15 @@ import (
 func testNode(id domain.NodeID) domain.Node {
 	return domain.Node{Identity: domain.Identity{NodeID: id}, Name: string(id)}
 }
+
+// fakeConn is a minimal domain.Conn for identity comparisons in registry
+// tests; its methods are never actually invoked.
+type fakeConn struct{ tag string }
+
+func (f *fakeConn) Send(context.Context, []byte) error      { return nil }
+func (f *fakeConn) Receive(context.Context) ([]byte, error) { return nil, nil }
+func (f *fakeConn) RemoteAddr() string                      { return f.tag }
+func (f *fakeConn) Close() error                            { return nil }
 
 func TestUpsertMarksNewVsKnown(t *testing.T) {
 	r := NewRegistry()
@@ -55,6 +65,40 @@ func TestExpireStaleTransitionsOnlyTimedOutNodes(t *testing.T) {
 	freshRec, _ := r.Get("node-fresh")
 	if freshRec.State != domain.NodeReady {
 		t.Fatalf("expected node-fresh to remain READY, got %s", freshRec.State)
+	}
+}
+
+func TestSetOfflineIfCurrentIgnoresStaleConnection(t *testing.T) {
+	r := NewRegistry()
+	oldConn := &fakeConn{tag: "old"}
+	newConn := &fakeConn{tag: "new"}
+
+	r.Upsert(testNode("node-a"), oldConn)
+	r.SetState("node-a", domain.NodeReady)
+
+	// Simulate a fast reconnect: the node re-registers on a new
+	// connection before the old connection's own read loop has noticed
+	// it is dead.
+	r.Upsert(testNode("node-a"), newConn)
+	r.SetState("node-a", domain.NodeReady)
+
+	// The stale old connection's cleanup fires late and must not clobber
+	// the live reconnect.
+	if transitioned := r.SetOfflineIfCurrent("node-a", oldConn); transitioned {
+		t.Fatal("expected stale connection's cleanup not to transition a node that has since reconnected on a new connection")
+	}
+	rec, _ := r.Get("node-a")
+	if rec.State != domain.NodeReady {
+		t.Fatalf("expected node to remain READY after stale cleanup, got %s", rec.State)
+	}
+
+	// The current connection's own cleanup must still work.
+	if transitioned := r.SetOfflineIfCurrent("node-a", newConn); !transitioned {
+		t.Fatal("expected current connection's cleanup to transition the node offline")
+	}
+	rec, _ = r.Get("node-a")
+	if rec.State != domain.NodeOffline {
+		t.Fatalf("expected node to be OFFLINE after current connection's cleanup, got %s", rec.State)
 	}
 }
 

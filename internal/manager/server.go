@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"home-harness/internal/domain"
+	"home-harness/internal/identity"
 	"home-harness/internal/protocol"
 )
 
@@ -76,8 +77,7 @@ func (s *Server) monitorHeartbeats(ctx context.Context) {
 func (s *Server) handleConn(ctx context.Context, conn domain.Conn) {
 	var nodeID domain.NodeID
 	defer func() {
-		if nodeID != "" {
-			s.Registry.SetState(nodeID, domain.NodeOffline)
+		if nodeID != "" && s.Registry.SetOfflineIfCurrent(nodeID, conn) {
 			log.Printf("node.offline: %s (connection closed)", nodeID)
 		}
 		conn.Close()
@@ -98,15 +98,26 @@ func (s *Server) handleConn(ctx context.Context, conn domain.Conn) {
 			continue
 		}
 
+		// Every message type except REGISTER requires this connection to
+		// already be bound to a verified identity. Trusting env.Source
+		// instead would let a registered connection forge messages on
+		// behalf of a different node (baseline §5: network presence must
+		// never imply execution authority — that extends to claimed
+		// identity on an already-open connection, not just to admission).
+		if env.Type != protocol.MsgRegister && nodeID == "" {
+			s.sendError(ctx, conn, domain.ManagerNodeID, env.Source, "NOT_REGISTERED", "register before sending other messages")
+			continue
+		}
+
 		switch env.Type {
 		case protocol.MsgRegister:
 			nodeID = s.handleRegister(ctx, conn, env)
 		case protocol.MsgHeartbeat:
-			s.handleHeartbeat(env)
+			s.handleHeartbeat(nodeID, env)
 		case protocol.MsgPing:
-			s.handlePing(ctx, conn, env)
+			s.handlePing(ctx, conn, nodeID)
 		default:
-			s.sendError(ctx, conn, domain.ManagerNodeID, env.Source, "UNSUPPORTED_TYPE", string(env.Type))
+			s.sendError(ctx, conn, domain.ManagerNodeID, nodeID, "UNSUPPORTED_TYPE", string(env.Type))
 		}
 	}
 }
@@ -118,41 +129,63 @@ func (s *Server) handleRegister(ctx context.Context, conn domain.Conn, env *prot
 		return ""
 	}
 
-	if payload.PairingToken != s.cfg.PairingToken {
-		s.send(ctx, conn, protocol.MsgRegisterReject, domain.ManagerNodeID, env.Source,
-			protocol.RegisterRejectPayload{Reason: "invalid pairing token"})
-		log.Printf("manager: rejected registration from %s: bad pairing token", conn.RemoteAddr())
+	node := payload.Manifest.Node
+	claimedID := node.Identity.NodeID
+
+	// Recompute the NodeID from the claimed public key rather than trusting
+	// the claimed NodeID field as given — otherwise NodeID is just a
+	// string with no cryptographic meaning.
+	if identity.DeriveNodeID(node.Identity.PublicKey) != claimedID {
+		s.reject(ctx, conn, env.Source, "identity mismatch: NodeID does not match public key")
 		return ""
 	}
 
-	node := payload.Manifest.Node
-	rec, isNew := s.Registry.Upsert(node, conn)
-	s.Registry.SetState(node.Identity.NodeID, domain.NodeReady)
+	// Verify proof of possession of the private key for that public key.
+	// Without this, knowing a valid pairing token would be enough to
+	// register as ANY existing NodeID.
+	signed := protocol.RegisterSignedData(payload.PairingToken, claimedID)
+	if !identity.Verify(node.Identity, signed, payload.Signature) {
+		s.reject(ctx, conn, env.Source, "invalid signature: proof of key possession failed")
+		return ""
+	}
+
+	if payload.PairingToken != s.cfg.PairingToken {
+		s.reject(ctx, conn, env.Source, "invalid pairing token")
+		return ""
+	}
+
+	_, isNew := s.Registry.Upsert(node, conn)
+	s.Registry.SetState(claimedID, domain.NodeReady)
 
 	if isNew {
-		log.Printf("node.registered: %s (%s)", node.Identity.NodeID, node.Name)
+		log.Printf("node.registered: %s (%s)", claimedID, node.Name)
 	} else {
-		log.Printf("node.reconnected: %s (%s)", node.Identity.NodeID, node.Name)
+		log.Printf("node.reconnected: %s (%s)", claimedID, node.Name)
 	}
-	_ = rec
 
-	s.send(ctx, conn, protocol.MsgRegisterAck, domain.ManagerNodeID, node.Identity.NodeID,
-		protocol.RegisterAckPayload{NodeID: node.Identity.NodeID, ServerTime: time.Now().UTC()})
+	s.send(ctx, conn, protocol.MsgRegisterAck, domain.ManagerNodeID, claimedID,
+		protocol.RegisterAckPayload{NodeID: claimedID, ServerTime: time.Now().UTC()})
 
-	return node.Identity.NodeID
+	return claimedID
 }
 
-func (s *Server) handleHeartbeat(env *protocol.Envelope) {
+func (s *Server) reject(ctx context.Context, conn domain.Conn, dest domain.NodeID, reason string) {
+	s.send(ctx, conn, protocol.MsgRegisterReject, domain.ManagerNodeID, dest,
+		protocol.RegisterRejectPayload{Reason: reason})
+	log.Printf("manager: rejected registration from %s: %s", conn.RemoteAddr(), reason)
+}
+
+func (s *Server) handleHeartbeat(nodeID domain.NodeID, env *protocol.Envelope) {
 	var payload protocol.HeartbeatPayload
 	if err := env.DecodePayload(&payload); err != nil {
-		log.Printf("manager: bad heartbeat payload from %s: %v", env.Source, err)
+		log.Printf("manager: bad heartbeat payload from %s: %v", nodeID, err)
 		return
 	}
-	s.Registry.Touch(env.Source)
+	s.Registry.Touch(nodeID)
 }
 
-func (s *Server) handlePing(ctx context.Context, conn domain.Conn, env *protocol.Envelope) {
-	s.send(ctx, conn, protocol.MsgPong, domain.ManagerNodeID, env.Source, nil)
+func (s *Server) handlePing(ctx context.Context, conn domain.Conn, nodeID domain.NodeID) {
+	s.send(ctx, conn, protocol.MsgPong, domain.ManagerNodeID, nodeID, nil)
 }
 
 func (s *Server) sendError(ctx context.Context, conn domain.Conn, source, dest domain.NodeID, code, message string) {

@@ -9,10 +9,23 @@ import (
 // RegisterPayload is sent by an agent to request admission to the fabric.
 // PairingToken is the minimum viable "identity credential" from v1.md
 // §4.2 — network presence alone never grants execution authority
-// (baseline §5).
+// (baseline §5). Signature proves possession of the private key behind
+// Manifest.Node.Identity.PublicKey: it is an Ed25519 signature, made with
+// that key, over RegisterSignedData(PairingToken, NodeID). Without it, a
+// node could claim any public key/NodeID pair it likes as long as it knew
+// the shared pairing token — the signature is what actually makes the
+// identity unspoofable, not just the NodeID's derivation from the key.
 type RegisterPayload struct {
 	Manifest     domain.Manifest `json:"manifest"`
 	PairingToken string          `json:"pairingToken"`
+	Signature    []byte          `json:"signature"`
+}
+
+// RegisterSignedData builds the exact byte sequence a REGISTER's Signature
+// must cover, shared by both the agent (which signs it) and the manager
+// (which verifies it) so the two never drift apart.
+func RegisterSignedData(pairingToken string, nodeID domain.NodeID) []byte {
+	return []byte(pairingToken + ":" + string(nodeID))
 }
 
 // RegisterAckPayload confirms admission and returns the manager's view of

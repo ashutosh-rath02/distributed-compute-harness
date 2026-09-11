@@ -70,6 +70,24 @@ func (r *Registry) SetState(id domain.NodeID, state domain.NodeState) {
 	}
 }
 
+// SetOfflineIfCurrent transitions a node to OFFLINE only if conn is still
+// the record's active connection. This guards against a stale connection's
+// own cleanup (its Receive loop finally erroring out after the node has
+// already reconnected on a new connection) clobbering a live reconnect —
+// churn is normal (baseline §9 rule 4), and a slow-to-notice dead
+// connection must not undo a newer, already-registered one. It reports
+// whether it actually transitioned the node.
+func (r *Registry) SetOfflineIfCurrent(id domain.NodeID, conn domain.Conn) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rec, ok := r.nodes[id]
+	if !ok || rec.Conn != conn {
+		return false
+	}
+	rec.State = domain.NodeOffline
+	return true
+}
+
 // Touch records a heartbeat/activity timestamp for a node.
 func (r *Registry) Touch(id domain.NodeID) {
 	r.mu.Lock()

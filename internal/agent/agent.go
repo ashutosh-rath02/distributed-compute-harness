@@ -105,8 +105,9 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 
 func (a *Agent) register(ctx context.Context, conn domain.Conn) error {
 	manifest := a.buildManifest()
+	signature := a.identity.Sign(protocol.RegisterSignedData(a.cfg.PairingToken, a.identity.NodeID))
 	if err := a.send(ctx, conn, protocol.MsgRegister, domain.ManagerNodeID,
-		protocol.RegisterPayload{Manifest: manifest, PairingToken: a.cfg.PairingToken}); err != nil {
+		protocol.RegisterPayload{Manifest: manifest, PairingToken: a.cfg.PairingToken, Signature: signature}); err != nil {
 		return fmt.Errorf("send REGISTER: %w", err)
 	}
 
