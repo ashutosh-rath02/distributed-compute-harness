@@ -184,13 +184,17 @@ var ErrNoReadyNode = errors.New("manager: no target given and no node is current
 var ErrNoEligibleNode = errors.New("manager: no node satisfies the workload's resource requirements")
 
 // SubmitWorkload dispatches a workload for execution. If target is empty,
-// placement is resolved via v2's resource-aware selectNode (v1.md §22).
+// placement is resolved via v2's resource-aware selectNode (v1.md §22),
+// now also filtered by whether a node actually declares capability (v4).
 // A non-Never restartPolicy makes this workload a "service" in v3's sense:
 // the reconciliation loop (reconcile.go) will re-run it after it stops,
 // per RestartPolicy.WantsRestartAfter.
-func (s *Server) SubmitWorkload(ctx context.Context, target domain.NodeID, command string, args []string, req domain.ResourceRequirements, restartPolicy domain.RestartPolicy) (domain.Workload, error) {
+func (s *Server) SubmitWorkload(ctx context.Context, target domain.NodeID, command string, args []string, capability domain.CapabilityName, params map[string]string, req domain.ResourceRequirements, restartPolicy domain.RestartPolicy) (domain.Workload, error) {
+	if capability == "" {
+		capability = domain.CapabilitySystemExecute
+	}
 	pinned := target != ""
-	rec, target, err := s.resolveWorkloadTarget(target, req)
+	rec, target, err := s.resolveWorkloadTarget(target, capability, req)
 	if err != nil {
 		return domain.Workload{}, err
 	}
@@ -199,7 +203,7 @@ func (s *Server) SubmitWorkload(ctx context.Context, target domain.NodeID, comma
 	if err != nil {
 		return domain.Workload{}, err
 	}
-	w := domain.Workload{ID: domain.WorkloadID(id), Target: target, Pinned: pinned, Command: command, Args: args, Requirements: req, RestartPolicy: restartPolicy}
+	w := domain.Workload{ID: domain.WorkloadID(id), Target: target, Pinned: pinned, Command: command, Args: args, Capability: capability, Params: params, Requirements: req, RestartPolicy: restartPolicy}
 	status := domain.WorkloadStatus{ID: w.ID, Target: target, State: domain.WorkloadPending}
 
 	wrec := s.Workloads.Put(w, status)
@@ -207,7 +211,7 @@ func (s *Server) SubmitWorkload(ctx context.Context, target domain.NodeID, comma
 
 	s.send(ctx, rec.Conn, protocol.MsgWorkloadAssign, domain.ManagerNodeID, target, protocol.WorkloadAssignPayload{Workload: w})
 	log.Printf("workload.assigned: %s to %s", w.ID, target)
-	s.publish(domain.EventWorkloadAssigned, target, map[string]any{"workloadId": string(w.ID), "command": command})
+	s.publish(domain.EventWorkloadAssigned, target, map[string]any{"workloadId": string(w.ID), "command": command, "capability": string(capability)})
 
 	return w, nil
 }
@@ -220,13 +224,13 @@ func (s *Server) SubmitWorkload(ctx context.Context, target domain.NodeID, comma
 // selectNode (v2's resource-aware placement, v1.md §22); with an empty req
 // this keeps v1's eligible set unchanged, only its ordering becomes
 // deterministic instead of arbitrary map order.
-func (s *Server) resolveWorkloadTarget(target domain.NodeID, req domain.ResourceRequirements) (*NodeRecord, domain.NodeID, error) {
+func (s *Server) resolveWorkloadTarget(target domain.NodeID, capability domain.CapabilityName, req domain.ResourceRequirements) (*NodeRecord, domain.NodeID, error) {
 	if target != "" {
 		rec, ok := s.Registry.Get(target)
 		if !ok || rec.Conn == nil || rec.State != domain.NodeReady {
 			return nil, "", ErrNodeNotConnected
 		}
-		if ok, reason := nodeFits(rec, req); !ok {
+		if ok, reason := nodeFits(rec, capability, req); !ok {
 			return nil, "", fmt.Errorf("%w (%s: %s)", ErrNoEligibleNode, target, reason)
 		}
 		return rec, target, nil
@@ -238,7 +242,7 @@ func (s *Server) resolveWorkloadTarget(target domain.NodeID, req domain.Resource
 			candidates = append(candidates, rec)
 		}
 	}
-	best, err := selectNode(candidates, req)
+	best, err := selectNode(candidates, capability, req)
 	if err != nil {
 		return nil, "", err
 	}

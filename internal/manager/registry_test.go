@@ -8,9 +8,16 @@ import (
 	"home-harness/internal/domain"
 )
 
+// testNode builds a Manifest declaring CapabilitySystemExecute by default —
+// matching real reality post-v4 (every real agent always declares it, see
+// sysinfo.Manifest) — so existing placement/reconcile tests that submit a
+// default-capability workload against a fixture built from this don't need
+// individual updates just because capability enforcement now exists. A test
+// specifically about a node lacking a capability builds its own manifest.
 func testNode(id domain.NodeID) domain.Manifest {
 	return domain.Manifest{
-		Node: domain.Node{Identity: domain.Identity{NodeID: id}, Name: string(id)},
+		Node:         domain.Node{Identity: domain.Identity{NodeID: id}, Name: string(id)},
+		Capabilities: []domain.Capability{{Name: domain.CapabilitySystemExecute}},
 	}
 }
 
@@ -22,6 +29,23 @@ func (f *fakeConn) Send(context.Context, []byte) error      { return nil }
 func (f *fakeConn) Receive(context.Context) ([]byte, error) { return nil, nil }
 func (f *fakeConn) RemoteAddr() string                      { return f.tag }
 func (f *fakeConn) Close() error                            { return nil }
+
+func TestHasCapability(t *testing.T) {
+	rec := &NodeRecord{Capabilities: []domain.Capability{{Name: domain.CapabilitySystemExecute}}}
+	if !rec.HasCapability(domain.CapabilitySystemExecute) {
+		t.Fatal("expected HasCapability true for a declared capability")
+	}
+	if rec.HasCapability(domain.CapabilityFilesystemRead) {
+		t.Fatal("expected HasCapability false for an undeclared capability")
+	}
+}
+
+func TestHasCapabilityFalseForNilCapabilities(t *testing.T) {
+	rec := &NodeRecord{}
+	if rec.HasCapability(domain.CapabilitySystemExecute) {
+		t.Fatal("expected HasCapability false when Capabilities is nil")
+	}
+}
 
 func TestUpsertMarksNewVsKnown(t *testing.T) {
 	r := NewRegistry()

@@ -162,6 +162,10 @@ type workloadSummaryView struct {
 	Args     []string             `json:"args,omitempty"`
 	State    domain.WorkloadState `json:"state"`
 	ExitCode *int                 `json:"exitCode,omitempty"`
+	// Capability is only set (and shown) for a non-system.execute
+	// invocation — otherwise Command/Args above already say everything,
+	// and every pre-v4 workload continues to show exactly as before.
+	Capability domain.CapabilityName `json:"capability,omitempty"`
 }
 
 // workloadView is the JSON shape for a single workload — the summary plus
@@ -172,6 +176,7 @@ type workloadView struct {
 	RestartPolicy domain.RestartPolicy        `json:"restartPolicy,omitempty"`
 	RestartCount  int                         `json:"restartCount,omitempty"`
 	NextRestartAt time.Time                   `json:"nextRestartAt,omitempty"`
+	Params        map[string]string           `json:"params,omitempty"`
 	Stdout        string                      `json:"stdout,omitempty"`
 	Stderr        string                      `json:"stderr,omitempty"`
 	Truncated     bool                        `json:"truncated,omitempty"`
@@ -196,13 +201,18 @@ func exitCode(status domain.WorkloadStatus) *int {
 }
 
 func toWorkloadSummaryView(rec WorkloadRecord) workloadSummaryView {
+	var capability domain.CapabilityName
+	if rec.Workload.Capability != domain.CapabilitySystemExecute {
+		capability = rec.Workload.Capability
+	}
 	return workloadSummaryView{
-		ID:       rec.Workload.ID,
-		Target:   rec.Workload.Target,
-		Command:  rec.Workload.Command,
-		Args:     rec.Workload.Args,
-		State:    rec.Status.State,
-		ExitCode: exitCode(rec.Status),
+		ID:         rec.Workload.ID,
+		Target:     rec.Workload.Target,
+		Command:    rec.Workload.Command,
+		Args:       rec.Workload.Args,
+		State:      rec.Status.State,
+		ExitCode:   exitCode(rec.Status),
+		Capability: capability,
 	}
 }
 
@@ -227,6 +237,12 @@ func toWorkloadView(rec WorkloadRecord) workloadView {
 	if rec.Workload.RestartPolicy.WantsRestartAfter(rec.Status.State) {
 		view.NextRestartAt = rec.Restart.NextRestartAt
 	}
+	// Capability itself is already set on the embedded summary view above
+	// (toWorkloadSummaryView) — Params is detail-only (excluded from the
+	// list view, like Stdout/Stderr).
+	if view.Capability != "" {
+		view.Params = rec.Workload.Params
+	}
 	return view
 }
 
@@ -234,6 +250,8 @@ type workloadRequest struct {
 	Target        domain.NodeID               `json:"target"`
 	Command       string                      `json:"command"`
 	Args          []string                    `json:"args"`
+	Capability    string                      `json:"capability,omitempty"`
+	Params        map[string]string           `json:"params,omitempty"`
 	Requirements  domain.ResourceRequirements `json:"requirements,omitempty"`
 	RestartPolicy string                      `json:"restartPolicy,omitempty"`
 }
@@ -244,7 +262,12 @@ func (s *Server) apiPostWorkload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if req.Command == "" {
+	// Command is only required for the default system.execute capability —
+	// any other capability carries its input in Params instead (e.g.
+	// filesystem.read's "path"). The manager stays capability-agnostic
+	// here: it doesn't validate Params' shape, only whether the target
+	// declares the capability at all (SubmitWorkload -> resolveWorkloadTarget).
+	if req.Command == "" && (req.Capability == "" || req.Capability == string(domain.CapabilitySystemExecute)) {
 		http.Error(w, "bad request: command is required", http.StatusBadRequest)
 		return
 	}
@@ -254,7 +277,7 @@ func (s *Server) apiPostWorkload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	wl, err := s.SubmitWorkload(r.Context(), req.Target, req.Command, req.Args, req.Requirements, restartPolicy)
+	wl, err := s.SubmitWorkload(r.Context(), req.Target, req.Command, req.Args, domain.CapabilityName(req.Capability), req.Params, req.Requirements, restartPolicy)
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrNodeNotConnected), errors.Is(err, ErrNoReadyNode), errors.Is(err, ErrNoEligibleNode):

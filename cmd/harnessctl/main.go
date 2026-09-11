@@ -57,6 +57,8 @@ func main() {
 		err = client.cmdEvents()
 	case "run":
 		err = cmdRun(client, args[1:])
+	case "invoke":
+		err = cmdInvoke(client, args[1:])
 	case "workloads":
 		err = client.cmdWorkloads()
 	case "workload":
@@ -87,7 +89,7 @@ Commands:
   info <id>             send GET_SYSTEM_INFO, print the result
   refresh <id>          send REQUEST_RESOURCE_REFRESH, print the result
   events                tail the harness event stream
-  run [-min-mem SIZE] [-min-cores N] [-max-cpu PCT] <id|-> <cmd> [args...]
+  run [-min-mem SIZE] [-min-cores N] [-max-cpu PCT] [-restart POLICY] <id|-> <cmd> [args...]
                         submit a workload (id or "-" for auto-pick using v2's
                         resource-aware placement), print its ID. cmd/args are
                         passed directly to exec, not a shell — on Windows,
@@ -95,7 +97,16 @@ Commands:
                         "hostname" is a real .exe on both Windows and Unix
                         and proves the workload ran remotely. -min-mem takes
                         a size like "2GiB"; with an explicit id, the node is
-                        still checked against any given requirements.
+                        still checked against any given requirements. This is
+                        always the "system.execute" capability (v4).
+  invoke [-min-mem SIZE] [-min-cores N] [-max-cpu PCT] [-restart POLICY]
+         <id|-> <capability> [key=value ...]
+                        submit a workload invoking a named capability other
+                        than plain command execution (v4), e.g.
+                        "filesystem.read path=/some/file" — rejected with a
+                        clear error if the target (or every node, for "-")
+                        doesn't declare that capability. See "node <id>" for
+                        what a node declares.
   workloads             list all known workloads
   workload <id>         show one workload's request, state, and captured output
   cancel <workload-id>  request cancellation of a running workload`)
@@ -142,7 +153,76 @@ func cmdRun(client *apiClient, args []string) error {
 		return err
 	}
 
-	return client.cmdRunWorkload(target, rest[1], rest[2:], req, *restart)
+	return client.cmdRunWorkload(target, rest[1], rest[2:], "", nil, req, *restart)
+}
+
+// cmdInvoke mirrors cmdRun's flag-parsing structure exactly, for a workload
+// whose capability isn't plain command execution — Command/Args stay empty
+// and the invocation's input travels in Params instead (parsed from
+// trailing key=value positional args).
+func cmdInvoke(client *apiClient, args []string) error {
+	fs := flag.NewFlagSet("invoke", flag.ContinueOnError)
+	minMem := fs.String("min-mem", "", "minimum available memory required on the target node, e.g. 2GiB")
+	minCores := fs.Float64("min-cores", 0, "minimum declared CPU cores required on the target node")
+	maxCPU := fs.Float64("max-cpu", 0, "maximum acceptable live CPU load percent on the target node")
+	restart := fs.String("restart", "never", `restart policy: "never" (default), "on-failure", or "always"`)
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: harnessctl invoke [-min-mem SIZE] [-min-cores N] [-max-cpu PCT] [-restart POLICY] <id|-> <capability> [key=value ...]")
+	}
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	rest := fs.Args()
+	if len(rest) < 2 {
+		fs.Usage()
+		return fmt.Errorf("missing required arguments")
+	}
+	target := rest[0]
+	if target == "-" {
+		target = ""
+	}
+	capability := rest[1]
+
+	params, err := parseParams(rest[2:])
+	if err != nil {
+		return err
+	}
+
+	var req domain.ResourceRequirements
+	if *minMem != "" {
+		bytes, err := parseBytes(*minMem)
+		if err != nil {
+			return fmt.Errorf("-min-mem: %w", err)
+		}
+		req.MinMemoryBytes = bytes
+	}
+	req.MinCPUCores = *minCores
+	req.MaxCPUPercent = *maxCPU
+
+	if _, err := domain.ParseRestartPolicy(*restart); err != nil {
+		return err
+	}
+
+	return client.cmdRunWorkload(target, "", nil, capability, params, req, *restart)
+}
+
+// parseParams turns a list of "key=value" positional args into a map, for
+// invoke's capability-specific input — there's no existing key=value parser
+// elsewhere in this CLI to reuse.
+func parseParams(args []string) (map[string]string, error) {
+	if len(args) == 0 {
+		return nil, nil
+	}
+	params := make(map[string]string, len(args))
+	for _, arg := range args {
+		key, value, ok := strings.Cut(arg, "=")
+		if !ok {
+			return nil, fmt.Errorf("invalid param %q: expected key=value", arg)
+		}
+		params[key] = value
+	}
+	return params, nil
 }
 
 func requireArgs(args []string, n int, usage string, fn func() error) error {
@@ -275,6 +355,8 @@ type workloadView struct {
 	RestartPolicy domain.RestartPolicy        `json:"restartPolicy,omitempty"`
 	RestartCount  int                         `json:"restartCount,omitempty"`
 	NextRestartAt time.Time                   `json:"nextRestartAt,omitempty"`
+	Capability    domain.CapabilityName       `json:"capability,omitempty"`
+	Params        map[string]string           `json:"params,omitempty"`
 	Stdout        string                      `json:"stdout,omitempty"`
 	Stderr        string                      `json:"stderr,omitempty"`
 	Truncated     bool                        `json:"truncated,omitempty"`
@@ -284,8 +366,12 @@ type workloadView struct {
 	FinishedAt    time.Time                   `json:"finishedAt,omitempty"`
 }
 
-func (c *apiClient) cmdRunWorkload(target, command string, args []string, req domain.ResourceRequirements, restartPolicy string) error {
-	reqBody, err := json.Marshal(map[string]any{"target": target, "command": command, "args": args, "requirements": req, "restartPolicy": restartPolicy})
+func (c *apiClient) cmdRunWorkload(target, command string, args []string, capability string, params map[string]string, req domain.ResourceRequirements, restartPolicy string) error {
+	reqBody, err := json.Marshal(map[string]any{
+		"target": target, "command": command, "args": args,
+		"capability": capability, "params": params,
+		"requirements": req, "restartPolicy": restartPolicy,
+	})
 	if err != nil {
 		return err
 	}
@@ -320,7 +406,11 @@ func (c *apiClient) cmdWorkloads() error {
 	}
 	fmt.Printf("%-34s %-24s %-10s %s\n", "WORKLOAD ID", "TARGET", "STATE", "COMMAND")
 	for _, w := range workloads {
-		fmt.Printf("%-34s %-24s %-10s %s\n", w.ID, w.Target, w.State, w.Command)
+		command := w.Command
+		if w.Capability != "" {
+			command = string(w.Capability)
+		}
+		fmt.Printf("%-34s %-24s %-10s %s\n", w.ID, w.Target, w.State, command)
 	}
 	return nil
 }
@@ -332,7 +422,14 @@ func (c *apiClient) cmdWorkload(id string) error {
 	}
 	fmt.Printf("Workload ID    %s\n", w.ID)
 	fmt.Printf("Target         %s\n", w.Target)
-	fmt.Printf("Command        %s %s\n", w.Command, strings.Join(w.Args, " "))
+	if w.Capability != "" {
+		fmt.Printf("Capability     %s\n", w.Capability)
+		for k, v := range w.Params {
+			fmt.Printf("  %-12s %s\n", k, v)
+		}
+	} else {
+		fmt.Printf("Command        %s %s\n", w.Command, strings.Join(w.Args, " "))
+	}
 	fmt.Printf("State          %s\n", w.State)
 	if !w.Requirements.IsEmpty() {
 		var parts []string

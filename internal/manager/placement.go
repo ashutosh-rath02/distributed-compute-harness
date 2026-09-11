@@ -6,8 +6,13 @@ import (
 	"home-harness/internal/domain"
 )
 
-// nodeFits reports whether rec currently satisfies req, and if not, a
-// human-readable reason.
+// nodeFits reports whether rec currently satisfies capability and req, and
+// if not, a human-readable reason.
+//
+// The capability check runs first, before the req.IsEmpty() early-return
+// below — a workload with no resource requirements at all must still be
+// filtered by capability, so this can't be folded into (or skipped by) the
+// resource-requirement short-circuit.
 //
 // A node that hasn't heartbeated yet has a zero-value LastMetrics — its
 // CPUPercent and MemoryAvailableBytes read as 0, which looks idle rather
@@ -15,7 +20,11 @@ import (
 // MaxCPUPercent) treats that as ineligible rather than trusting a zero
 // value nobody actually reported. MinCPUCores reads static Resources set
 // at registration, which is available immediately, so it isn't affected.
-func nodeFits(rec *NodeRecord, req domain.ResourceRequirements) (bool, string) {
+func nodeFits(rec *NodeRecord, capability domain.CapabilityName, req domain.ResourceRequirements) (bool, string) {
+	if !rec.HasCapability(capability) {
+		return false, fmt.Sprintf("does not declare capability %q", capability)
+	}
+
 	if req.IsEmpty() {
 		return true, ""
 	}
@@ -57,12 +66,12 @@ func nodeFits(rec *NodeRecord, req domain.ResourceRequirements) (bool, string) {
 // explainability. Not addressed here — would mean consulting
 // WorkloadRegistry's in-flight state from placement, a reasonable v2.1
 // follow-up.
-func selectNode(candidates []*NodeRecord, req domain.ResourceRequirements) (*NodeRecord, error) {
+func selectNode(candidates []*NodeRecord, capability domain.CapabilityName, req domain.ResourceRequirements) (*NodeRecord, error) {
 	var best *NodeRecord
 	var reasons []string
 
 	for _, rec := range candidates {
-		ok, reason := nodeFits(rec, req)
+		ok, reason := nodeFits(rec, capability, req)
 		if !ok {
 			reasons = append(reasons, fmt.Sprintf("%s: %s", rec.Node.Identity.NodeID, reason))
 			continue

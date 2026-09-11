@@ -51,7 +51,7 @@ func TestRestartAlwaysRestartsAfterCleanExit(t *testing.T) {
 	cmd, args := echoArgs("restart-me")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	wl, err := srv.SubmitWorkload(ctx, a.NodeID(), cmd, args, domain.ResourceRequirements{}, domain.RestartAlways)
+	wl, err := srv.SubmitWorkload(ctx, a.NodeID(), cmd, args, "", nil, domain.ResourceRequirements{}, domain.RestartAlways)
 	if err != nil {
 		t.Fatalf("SubmitWorkload: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestRestartOnFailureRestartsAfterRealCrash(t *testing.T) {
 	cmd, args := failArgs()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	wl, err := srv.SubmitWorkload(ctx, a.NodeID(), cmd, args, domain.ResourceRequirements{}, domain.RestartOnFailure)
+	wl, err := srv.SubmitWorkload(ctx, a.NodeID(), cmd, args, "", nil, domain.ResourceRequirements{}, domain.RestartOnFailure)
 	if err != nil {
 		t.Fatalf("SubmitWorkload: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestCanceledWorkloadIsNeverRestarted(t *testing.T) {
 	cmd, args := sleepArgs("30")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	wl, err := srv.SubmitWorkload(ctx, a.NodeID(), cmd, args, domain.ResourceRequirements{}, domain.RestartAlways)
+	wl, err := srv.SubmitWorkload(ctx, a.NodeID(), cmd, args, "", nil, domain.ResourceRequirements{}, domain.RestartAlways)
 	if err != nil {
 		t.Fatalf("SubmitWorkload: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestHeartbeatTimeoutSendsBestEffortCancel(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if _, err := srv.SubmitWorkload(ctx, nodeID, "sleep", []string{"30"}, domain.ResourceRequirements{}, domain.RestartNever); err != nil {
+	if _, err := srv.SubmitWorkload(ctx, nodeID, "sleep", []string{"30"}, "", nil, domain.ResourceRequirements{}, domain.RestartNever); err != nil {
 		t.Fatalf("SubmitWorkload: %v", err)
 	}
 

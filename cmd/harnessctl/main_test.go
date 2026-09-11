@@ -1,6 +1,46 @@
 package main
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
+
+func TestParseParams(t *testing.T) {
+	params, err := parseParams([]string{"path=/tmp/file.txt", "encoding=utf-8"})
+	if err != nil {
+		t.Fatalf("parseParams: %v", err)
+	}
+	want := map[string]string{"path": "/tmp/file.txt", "encoding": "utf-8"}
+	if !reflect.DeepEqual(params, want) {
+		t.Fatalf("parseParams = %+v, want %+v", params, want)
+	}
+}
+
+func TestParseParamsAllowsEmptyValue(t *testing.T) {
+	params, err := parseParams([]string{"flag="})
+	if err != nil {
+		t.Fatalf("parseParams: %v", err)
+	}
+	if params["flag"] != "" {
+		t.Fatalf("expected empty value for %q, got %+v", "flag=", params)
+	}
+}
+
+func TestParseParamsNoArgsReturnsNil(t *testing.T) {
+	params, err := parseParams(nil)
+	if err != nil {
+		t.Fatalf("parseParams: %v", err)
+	}
+	if params != nil {
+		t.Fatalf("expected nil params for no args, got %+v", params)
+	}
+}
+
+func TestParseParamsRejectsMissingEquals(t *testing.T) {
+	if _, err := parseParams([]string{"not-a-key-value-pair"}); err == nil {
+		t.Fatal("expected an error for a param without '='")
+	}
+}
 
 func TestTruncate(t *testing.T) {
 	cases := map[string]string{

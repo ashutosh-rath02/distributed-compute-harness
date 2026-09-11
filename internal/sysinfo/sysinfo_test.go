@@ -28,13 +28,19 @@ func TestManifestReturnsPlausibleResources(t *testing.T) {
 	if kinds[domain.ResourceStorageBytes] <= 0 {
 		t.Fatalf("expected positive storage total, got %v", kinds[domain.ResourceStorageBytes])
 	}
-	// v0 declares no capabilities — nothing invocable exists yet to
-	// advertise (see sysinfo.Manifest's doc comment).
-	if capabilities == nil {
-		t.Fatal("expected a non-nil (even if empty) capabilities slice")
+	// v4 declares the capabilities the agent actually implements
+	// (internal/agent/executor.go) — the manager now enforces this at
+	// placement time, so this is a real, checked claim, not a v0-era
+	// placeholder.
+	names := map[domain.CapabilityName]bool{}
+	for _, c := range capabilities {
+		names[c.Name] = true
 	}
-	if len(capabilities) != 0 {
-		t.Fatalf("expected zero declared capabilities in v0, got %+v", capabilities)
+	if !names[domain.CapabilitySystemExecute] {
+		t.Fatalf("expected system.execute to be declared, got %+v", capabilities)
+	}
+	if !names[domain.CapabilityFilesystemRead] {
+		t.Fatalf("expected filesystem.read to be declared, got %+v", capabilities)
 	}
 }
 

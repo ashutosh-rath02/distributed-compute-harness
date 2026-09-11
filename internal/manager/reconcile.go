@@ -87,7 +87,7 @@ func (s *Server) restartWorkload(ctx context.Context, rec WorkloadRecord) {
 	if rec.Workload.Pinned {
 		restartTarget = rec.Workload.Target
 	}
-	targetRec, resolvedTarget, err := s.resolveWorkloadTarget(restartTarget, rec.Workload.Requirements)
+	targetRec, resolvedTarget, err := s.resolveWorkloadTarget(restartTarget, rec.Workload.EffectiveCapability(), rec.Workload.Requirements)
 	if err != nil {
 		// No eligible node right now (e.g. right after a manager restart,
 		// before any node has reconnected — Registry.Seed starts nodes
@@ -110,6 +110,7 @@ func (s *Server) restartWorkload(ctx context.Context, rec WorkloadRecord) {
 	s.publish(domain.EventWorkloadAssigned, resolvedTarget, map[string]any{
 		"workloadId":   string(newRec.Workload.ID),
 		"command":      newRec.Workload.Command,
+		"capability":   string(newRec.Workload.EffectiveCapability()),
 		"restartCount": newRec.Restart.Count,
 	})
 }

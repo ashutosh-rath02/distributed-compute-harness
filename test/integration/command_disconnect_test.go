@@ -29,6 +29,11 @@ func registerRawSilentNode(t *testing.T, addr, name string) (domain.NodeID, doma
 	manifest := domain.Manifest{
 		SchemaVersion: domain.ManifestSchemaVersion,
 		Node:          domain.Node{Identity: id.Identity, Name: name},
+		// Declares system.execute like a real agent's sysinfo.Manifest does
+		// post-v4, so placement against this raw/silent node (used to test
+		// connection/heartbeat behavior, not capability enforcement) works
+		// the same as it did before capability checking existed.
+		Capabilities: []domain.Capability{{Name: domain.CapabilitySystemExecute}},
 	}
 	signature := id.Sign(protocol.RegisterSignedData(pairingToken, id.NodeID))
 	env, err := protocol.NewEnvelope(protocol.MsgRegister, id.NodeID, domain.ManagerNodeID,

@@ -13,9 +13,10 @@ import (
 // sysinfo or a real Registry.
 func nodeWithProfile(id domain.NodeID, cpuCores float64, memAvailable uint64, cpuPercent float64, heartbeated bool) *NodeRecord {
 	rec := &NodeRecord{
-		Node:      domain.Node{Identity: domain.Identity{NodeID: id}, Name: string(id)},
-		Resources: []domain.Resource{{Kind: domain.ResourceCPUCores, Capacity: cpuCores, Unit: "cores"}},
-		State:     domain.NodeReady,
+		Node:         domain.Node{Identity: domain.Identity{NodeID: id}, Name: string(id)},
+		Resources:    []domain.Resource{{Kind: domain.ResourceCPUCores, Capacity: cpuCores, Unit: "cores"}},
+		Capabilities: []domain.Capability{{Name: domain.CapabilitySystemExecute}},
+		State:        domain.NodeReady,
 	}
 	if heartbeated {
 		rec.LastMetrics = domain.RuntimeState{
@@ -31,7 +32,7 @@ func TestSelectNodePicksMostAvailableMemory(t *testing.T) {
 	low := nodeWithProfile("node-low", 4, 1<<30, 10, true)   // 1 GiB
 	high := nodeWithProfile("node-high", 4, 8<<30, 10, true) // 8 GiB
 
-	got, err := selectNode([]*NodeRecord{low, high}, domain.ResourceRequirements{})
+	got, err := selectNode([]*NodeRecord{low, high}, domain.CapabilitySystemExecute, domain.ResourceRequirements{})
 	if err != nil {
 		t.Fatalf("selectNode: %v", err)
 	}
@@ -45,11 +46,11 @@ func TestSelectNodeDeterministicRegardlessOfInputOrder(t *testing.T) {
 	b := nodeWithProfile("node-b", 4, 8<<30, 10, true)
 	c := nodeWithProfile("node-c", 4, 2<<30, 10, true)
 
-	got1, err := selectNode([]*NodeRecord{a, b, c}, domain.ResourceRequirements{})
+	got1, err := selectNode([]*NodeRecord{a, b, c}, domain.CapabilitySystemExecute, domain.ResourceRequirements{})
 	if err != nil {
 		t.Fatalf("selectNode: %v", err)
 	}
-	got2, err := selectNode([]*NodeRecord{c, a, b}, domain.ResourceRequirements{})
+	got2, err := selectNode([]*NodeRecord{c, a, b}, domain.CapabilitySystemExecute, domain.ResourceRequirements{})
 	if err != nil {
 		t.Fatalf("selectNode: %v", err)
 	}
@@ -65,7 +66,7 @@ func TestSelectNodeTieBreaksByNodeID(t *testing.T) {
 	z := nodeWithProfile("node-z", 4, 4<<30, 10, true)
 	a := nodeWithProfile("node-a", 4, 4<<30, 10, true)
 
-	got, err := selectNode([]*NodeRecord{z, a}, domain.ResourceRequirements{})
+	got, err := selectNode([]*NodeRecord{z, a}, domain.CapabilitySystemExecute, domain.ResourceRequirements{})
 	if err != nil {
 		t.Fatalf("selectNode: %v", err)
 	}
@@ -78,7 +79,7 @@ func TestSelectNodeFiltersOnMinMemoryBytes(t *testing.T) {
 	small := nodeWithProfile("node-small", 4, 1<<30, 10, true)
 	big := nodeWithProfile("node-big", 4, 8<<30, 10, true)
 
-	got, err := selectNode([]*NodeRecord{small, big}, domain.ResourceRequirements{MinMemoryBytes: 4 << 30})
+	got, err := selectNode([]*NodeRecord{small, big}, domain.CapabilitySystemExecute, domain.ResourceRequirements{MinMemoryBytes: 4 << 30})
 	if err != nil {
 		t.Fatalf("selectNode: %v", err)
 	}
@@ -91,7 +92,7 @@ func TestSelectNodeFiltersOnMinCPUCores(t *testing.T) {
 	weak := nodeWithProfile("node-weak", 2, 8<<30, 10, true)
 	strong := nodeWithProfile("node-strong", 16, 8<<30, 10, true)
 
-	got, err := selectNode([]*NodeRecord{weak, strong}, domain.ResourceRequirements{MinCPUCores: 8})
+	got, err := selectNode([]*NodeRecord{weak, strong}, domain.CapabilitySystemExecute, domain.ResourceRequirements{MinCPUCores: 8})
 	if err != nil {
 		t.Fatalf("selectNode: %v", err)
 	}
@@ -102,12 +103,13 @@ func TestSelectNodeFiltersOnMinCPUCores(t *testing.T) {
 
 func TestSelectNodeFailsClosedOnMissingDeclaredResource(t *testing.T) {
 	noCPUDeclared := &NodeRecord{
-		Node:        domain.Node{Identity: domain.Identity{NodeID: "node-nocpu"}},
-		Resources:   nil,
-		LastMetrics: domain.RuntimeState{MemoryAvailableBytes: 8 << 30, LastHeartbeat: time.Now()},
+		Node:         domain.Node{Identity: domain.Identity{NodeID: "node-nocpu"}},
+		Resources:    nil,
+		Capabilities: []domain.Capability{{Name: domain.CapabilitySystemExecute}},
+		LastMetrics:  domain.RuntimeState{MemoryAvailableBytes: 8 << 30, LastHeartbeat: time.Now()},
 	}
 
-	_, err := selectNode([]*NodeRecord{noCPUDeclared}, domain.ResourceRequirements{MinCPUCores: 1})
+	_, err := selectNode([]*NodeRecord{noCPUDeclared}, domain.CapabilitySystemExecute, domain.ResourceRequirements{MinCPUCores: 1})
 	if !errors.Is(err, ErrNoEligibleNode) {
 		t.Fatalf("expected ErrNoEligibleNode for a node with no declared cpu.cores, got %v", err)
 	}
@@ -117,7 +119,7 @@ func TestSelectNodeFiltersOnMaxCPUPercent(t *testing.T) {
 	busy := nodeWithProfile("node-busy", 4, 8<<30, 95, true)
 	idle := nodeWithProfile("node-idle", 4, 8<<30, 5, true)
 
-	got, err := selectNode([]*NodeRecord{busy, idle}, domain.ResourceRequirements{MaxCPUPercent: 50})
+	got, err := selectNode([]*NodeRecord{busy, idle}, domain.CapabilitySystemExecute, domain.ResourceRequirements{MaxCPUPercent: 50})
 	if err != nil {
 		t.Fatalf("selectNode: %v", err)
 	}
@@ -135,7 +137,7 @@ func TestSelectNodeTreatsNoHeartbeatAsIneligibleForLiveRequirements(t *testing.T
 	neverHeartbeated := nodeWithProfile("node-fresh", 4, 0, 0, false)
 	established := nodeWithProfile("node-established", 4, 8<<30, 10, true)
 
-	got, err := selectNode([]*NodeRecord{neverHeartbeated, established}, domain.ResourceRequirements{MaxCPUPercent: 50})
+	got, err := selectNode([]*NodeRecord{neverHeartbeated, established}, domain.CapabilitySystemExecute, domain.ResourceRequirements{MaxCPUPercent: 50})
 	if err != nil {
 		t.Fatalf("selectNode: %v", err)
 	}
@@ -150,7 +152,7 @@ func TestSelectNodeTreatsNoHeartbeatAsIneligibleForLiveRequirements(t *testing.T
 func TestSelectNodeMinCPUCoresIgnoresMissingHeartbeat(t *testing.T) {
 	neverHeartbeated := nodeWithProfile("node-fresh", 8, 0, 0, false)
 
-	got, err := selectNode([]*NodeRecord{neverHeartbeated}, domain.ResourceRequirements{MinCPUCores: 4})
+	got, err := selectNode([]*NodeRecord{neverHeartbeated}, domain.CapabilitySystemExecute, domain.ResourceRequirements{MinCPUCores: 4})
 	if err != nil {
 		t.Fatalf("expected a freshly-registered node to satisfy a static MinCPUCores requirement, got: %v", err)
 	}
@@ -159,8 +161,37 @@ func TestSelectNodeMinCPUCoresIgnoresMissingHeartbeat(t *testing.T) {
 	}
 }
 
+// TestSelectNodeFailsClosedOnMissingCapability mirrors
+// TestSelectNodeFailsClosedOnMissingDeclaredResource's pattern, for
+// capability rather than resource: a READY node with plenty of resources
+// that would otherwise satisfy req, but lacking the requested capability,
+// must still be excluded.
+func TestSelectNodeFailsClosedOnMissingCapability(t *testing.T) {
+	plentyOfResourcesNoCapability := nodeWithProfile("node-nocap", 16, 16<<30, 5, true)
+	plentyOfResourcesNoCapability.Capabilities = nil
+
+	_, err := selectNode([]*NodeRecord{plentyOfResourcesNoCapability}, domain.CapabilityFilesystemRead, domain.ResourceRequirements{MinCPUCores: 1})
+	if !errors.Is(err, ErrNoEligibleNode) {
+		t.Fatalf("expected ErrNoEligibleNode for a node not declaring the requested capability, got %v", err)
+	}
+}
+
+// TestSelectNodeCapabilityCheckIsNotSkippedByEmptyRequirements proves the
+// capability check runs even when ResourceRequirements is entirely empty —
+// nodeFits' req.IsEmpty() early-return must not also skip capability
+// filtering.
+func TestSelectNodeCapabilityCheckIsNotSkippedByEmptyRequirements(t *testing.T) {
+	noCapability := nodeWithProfile("node-nocap", 16, 16<<30, 5, true)
+	noCapability.Capabilities = nil
+
+	_, err := selectNode([]*NodeRecord{noCapability}, domain.CapabilityFilesystemRead, domain.ResourceRequirements{})
+	if !errors.Is(err, ErrNoEligibleNode) {
+		t.Fatalf("expected ErrNoEligibleNode even with empty ResourceRequirements, got %v", err)
+	}
+}
+
 func TestSelectNodeNoCandidatesReturnsErrNoReadyNode(t *testing.T) {
-	_, err := selectNode(nil, domain.ResourceRequirements{})
+	_, err := selectNode(nil, domain.CapabilitySystemExecute, domain.ResourceRequirements{})
 	if !errors.Is(err, ErrNoReadyNode) {
 		t.Fatalf("expected ErrNoReadyNode for an empty candidate list, got %v", err)
 	}
@@ -174,19 +205,21 @@ func TestResolveWorkloadTargetIntegratesWithRegistry(t *testing.T) {
 	connA := &fakeConn{tag: "a"}
 	connB := &fakeConn{tag: "b"}
 
+	defaultCaps := []domain.Capability{{Name: domain.CapabilitySystemExecute}}
+
 	r.Upsert(testNode("node-a"), connA)
 	r.SetState("node-a", domain.NodeReady)
-	r.UpdateResources("node-a", []domain.Resource{{Kind: domain.ResourceCPUCores, Capacity: 4, Unit: "cores"}}, nil)
+	r.UpdateResources("node-a", []domain.Resource{{Kind: domain.ResourceCPUCores, Capacity: 4, Unit: "cores"}}, defaultCaps)
 	r.RecordHeartbeat("node-a", domain.RuntimeState{MemoryAvailableBytes: 2 << 30, CPUPercent: 10, LastHeartbeat: time.Now()})
 
 	r.Upsert(testNode("node-b"), connB)
 	r.SetState("node-b", domain.NodeReady)
-	r.UpdateResources("node-b", []domain.Resource{{Kind: domain.ResourceCPUCores, Capacity: 8, Unit: "cores"}}, nil)
+	r.UpdateResources("node-b", []domain.Resource{{Kind: domain.ResourceCPUCores, Capacity: 8, Unit: "cores"}}, defaultCaps)
 	r.RecordHeartbeat("node-b", domain.RuntimeState{MemoryAvailableBytes: 6 << 30, CPUPercent: 10, LastHeartbeat: time.Now()})
 
 	s := &Server{Registry: r}
 
-	rec, id, err := s.resolveWorkloadTarget("", domain.ResourceRequirements{MinMemoryBytes: 4 << 30})
+	rec, id, err := s.resolveWorkloadTarget("", domain.CapabilitySystemExecute, domain.ResourceRequirements{MinMemoryBytes: 4 << 30})
 	if err != nil {
 		t.Fatalf("resolveWorkloadTarget: %v", err)
 	}
@@ -197,11 +230,25 @@ func TestResolveWorkloadTargetIntegratesWithRegistry(t *testing.T) {
 		t.Fatalf("expected returned record for node-b, got %s", rec.Node.Identity.NodeID)
 	}
 
-	if _, _, err := s.resolveWorkloadTarget("", domain.ResourceRequirements{MinMemoryBytes: 100 << 30}); !errors.Is(err, ErrNoEligibleNode) {
+	if _, _, err := s.resolveWorkloadTarget("", domain.CapabilitySystemExecute, domain.ResourceRequirements{MinMemoryBytes: 100 << 30}); !errors.Is(err, ErrNoEligibleNode) {
 		t.Fatalf("expected ErrNoEligibleNode when no node has enough memory, got %v", err)
 	}
 
-	if _, _, err := s.resolveWorkloadTarget("node-a", domain.ResourceRequirements{MinMemoryBytes: 4 << 30}); !errors.Is(err, ErrNoEligibleNode) {
+	if _, _, err := s.resolveWorkloadTarget("node-a", domain.CapabilitySystemExecute, domain.ResourceRequirements{MinMemoryBytes: 4 << 30}); !errors.Is(err, ErrNoEligibleNode) {
 		t.Fatalf("expected explicit target node-a to be checked against requirements too, got %v", err)
+	}
+
+	// An explicit target must also be checked against the requested
+	// capability, not just resources — node-a only declares
+	// system.execute (via testNode's default), so asking it for
+	// filesystem.read must be rejected rather than silently dispatched.
+	if _, _, err := s.resolveWorkloadTarget("node-a", domain.CapabilityFilesystemRead, domain.ResourceRequirements{}); !errors.Is(err, ErrNoEligibleNode) {
+		t.Fatalf("expected explicit target node-a to be checked against the requested capability too, got %v", err)
+	}
+
+	// Ready nodes exist, but none declare filesystem.read -> ErrNoEligibleNode
+	// (not ErrNoReadyNode, which must stay reserved for "zero ready nodes").
+	if _, _, err := s.resolveWorkloadTarget("", domain.CapabilityFilesystemRead, domain.ResourceRequirements{}); !errors.Is(err, ErrNoEligibleNode) {
+		t.Fatalf("expected ErrNoEligibleNode when ready nodes exist but none declare the capability, got %v", err)
 	}
 }

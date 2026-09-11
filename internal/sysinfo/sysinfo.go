@@ -41,15 +41,21 @@ func Manifest(ctx context.Context) ([]domain.Resource, []domain.Capability, erro
 		{Kind: domain.ResourceStorageBytes, Capacity: float64(usage.Total), Unit: "bytes"},
 	}
 
-	// v0 declares no capabilities: capability-first modeling (baseline §8
-	// rule 2) means a node is described by what it actually exposes, and
-	// nothing here is invocable yet (see command.go's CommandName set for
-	// what v0 really supports). domain.CapabilitySystemExecute and its
-	// siblings are reserved names for a future runtime to declare once it
-	// actually implements them — advertising them now, unenforceable,
-	// would be exactly the kind of claim baseline §9 rule 5 (deterministic
-	// enforcement) rules out.
-	return resources, []domain.Capability{}, nil
+	// v4 declares the two capabilities the agent actually implements
+	// (internal/agent/executor.go's startExecute/startFilesystemRead) —
+	// capability-first modeling (baseline §8 rule 2) means a node is
+	// described by what it actually exposes, and the manager now enforces
+	// this at placement time (internal/manager/placement.go), so declaring
+	// a capability here is a real, checked claim, not an aspiration. One
+	// exception: an agent run with -insecure still declares both (its
+	// hardware/OS capabilities haven't changed) but then refuses every
+	// dispatched workload outright (workloads.go's InsecureWorkloadsDisabled
+	// check) since it can't verify the manager's identity — a deliberate,
+	// tested trade-off (TestInsecureAgentRefusesWorkload), not a bug here.
+	return resources, []domain.Capability{
+		{Name: domain.CapabilitySystemExecute, Version: "1"},
+		{Name: domain.CapabilityFilesystemRead, Version: "1"},
+	}, nil
 }
 
 // Metrics is the live figures collected on each heartbeat.

@@ -28,6 +28,16 @@ type NodeRecord struct {
 	LastMetrics domain.RuntimeState
 }
 
+// HasCapability reports whether rec's last-known manifest declares name.
+func (rec *NodeRecord) HasCapability(name domain.CapabilityName) bool {
+	for _, c := range rec.Capabilities {
+		if c.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 // Registry tracks all nodes the manager currently knows about.
 type Registry struct {
 	mu    sync.RWMutex
