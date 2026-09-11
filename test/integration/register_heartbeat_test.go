@@ -36,6 +36,26 @@ func startManager(t *testing.T, addr string, heartbeatTimeout time.Duration) *ma
 	return srv
 }
 
+// dialWithRetry dials addr, retrying briefly to tolerate the manager's
+// Listen() binding the port asynchronously in its own goroutine (started
+// via startManager) rather than before returning.
+func dialWithRetry(t *testing.T, addr string) domain.Conn {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		dialCtx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		conn, err := ws.New().Dial(dialCtx, addr)
+		cancel()
+		if err == nil {
+			return conn
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Dial %s: %v", addr, err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)

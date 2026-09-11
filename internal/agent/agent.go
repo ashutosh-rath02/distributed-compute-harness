@@ -15,7 +15,13 @@ import (
 	"home-harness/internal/domain"
 	"home-harness/internal/identity"
 	"home-harness/internal/protocol"
+	"home-harness/internal/sysinfo"
 )
+
+// metricsSampleInterval is how long CollectMetrics blocks per heartbeat to
+// sample CPU usage. It is independent of HeartbeatInterval, which governs
+// how often that sample is taken and sent.
+const metricsSampleInterval = 200 * time.Millisecond
 
 // Config holds the agent's tunables.
 type Config struct {
@@ -127,7 +133,7 @@ func (a *Agent) resolveManagerAddr(ctx context.Context) (string, error) {
 }
 
 func (a *Agent) register(ctx context.Context, conn domain.Conn) error {
-	manifest := a.buildManifest()
+	manifest := a.buildManifest(ctx)
 	signature := a.identity.Sign(protocol.RegisterSignedData(a.cfg.PairingToken, a.identity.NodeID))
 	if err := a.send(ctx, conn, protocol.MsgRegister, domain.ManagerNodeID,
 		protocol.RegisterPayload{Manifest: manifest, PairingToken: a.cfg.PairingToken, Signature: signature}); err != nil {
@@ -151,12 +157,21 @@ func (a *Agent) register(ctx context.Context, conn domain.Conn) error {
 	}
 }
 
-func (a *Agent) buildManifest() domain.Manifest {
+func (a *Agent) buildManifest(ctx context.Context) domain.Manifest {
 	hostname, _ := os.Hostname()
 	name := a.cfg.Name
 	if name == "" {
 		name = hostname
 	}
+
+	resources, capabilities, err := sysinfo.Manifest(ctx)
+	if err != nil {
+		// Resource/capability reporting is best-effort: a node that can't
+		// introspect its own hardware should still be able to register and
+		// heartbeat, rather than being unable to join the fabric at all.
+		log.Printf("agent %s: collecting resources/capabilities: %v", a.identity.NodeID, err)
+	}
+
 	return domain.Manifest{
 		SchemaVersion: domain.ManifestSchemaVersion,
 		Node: domain.Node{
@@ -166,7 +181,8 @@ func (a *Agent) buildManifest() domain.Manifest {
 			Platform:     domain.Platform{OS: runtime.GOOS, Architecture: runtime.GOARCH},
 			AgentVersion: a.cfg.AgentVersion,
 		},
-		// Resources/Capabilities are populated starting Milestone 6.
+		Resources:    resources,
+		Capabilities: capabilities,
 	}
 }
 
@@ -178,12 +194,18 @@ func (a *Agent) heartbeatLoop(ctx context.Context, conn domain.Conn, errCh chan<
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			metrics, err := sysinfo.CollectMetrics(ctx, metricsSampleInterval)
+			if err != nil {
+				log.Printf("agent %s: collecting metrics: %v", a.identity.NodeID, err)
+			}
 			payload := protocol.HeartbeatPayload{
 				RuntimeState: domain.RuntimeState{
-					NodeID:        a.identity.NodeID,
-					State:         domain.NodeReady,
-					LastHeartbeat: time.Now().UTC(),
-					AgentVersion:  a.cfg.AgentVersion,
+					NodeID:               a.identity.NodeID,
+					State:                domain.NodeReady,
+					CPUPercent:           metrics.CPUPercent,
+					MemoryAvailableBytes: metrics.MemoryAvailableBytes,
+					LastHeartbeat:        time.Now().UTC(),
+					AgentVersion:         a.cfg.AgentVersion,
 				},
 			}
 			if err := a.send(ctx, conn, protocol.MsgHeartbeat, domain.ManagerNodeID, payload); err != nil {

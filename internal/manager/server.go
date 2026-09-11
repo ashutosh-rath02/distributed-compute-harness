@@ -62,7 +62,7 @@ func (s *Server) Run(ctx context.Context) error {
 			return fmt.Errorf("manager: load persisted nodes: %w", err)
 		}
 		for _, m := range manifests {
-			s.Registry.Seed(m.Node)
+			s.Registry.Seed(m)
 		}
 	}
 
@@ -181,7 +181,7 @@ func (s *Server) handleRegister(ctx context.Context, conn domain.Conn, env *prot
 		return ""
 	}
 
-	_, isNew := s.Registry.Upsert(node, conn)
+	_, isNew := s.Registry.Upsert(payload.Manifest, conn)
 	s.Registry.SetState(claimedID, domain.NodeReady)
 
 	if s.store != nil {
@@ -214,7 +214,7 @@ func (s *Server) handleHeartbeat(nodeID domain.NodeID, env *protocol.Envelope) {
 		log.Printf("manager: bad heartbeat payload from %s: %v", nodeID, err)
 		return
 	}
-	s.Registry.Touch(nodeID)
+	s.Registry.RecordHeartbeat(nodeID, payload.RuntimeState)
 }
 
 func (s *Server) handlePing(ctx context.Context, conn domain.Conn, nodeID domain.NodeID) {

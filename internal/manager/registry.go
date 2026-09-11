@@ -12,15 +12,20 @@ import (
 	"home-harness/internal/domain"
 )
 
-// NodeRecord is the registry's in-memory view of one node: its manifest-
-// derived identity/metadata plus current runtime state. Persistent vs
-// runtime storage is layered in a later milestone (v1.md §13); for the
-// walking skeleton both live here, in memory only.
+// NodeRecord is the registry's in-memory view of one node: its last-known
+// manifest (identity/metadata plus declared resources/capabilities) plus
+// current runtime state.
 type NodeRecord struct {
-	Node     domain.Node
-	State    domain.NodeState
-	LastSeen time.Time
-	Conn     domain.Conn
+	Node         domain.Node
+	Resources    []domain.Resource
+	Capabilities []domain.Capability
+	State        domain.NodeState
+	LastSeen     time.Time
+	Conn         domain.Conn
+	// LastMetrics is the most recently reported live CPU/memory figures
+	// from a HEARTBEAT, distinct from the static Resources declared at
+	// registration (v1.md §13's runtime vs persistent state split).
+	LastMetrics domain.RuntimeState
 }
 
 // Registry tracks all nodes the manager currently knows about.
@@ -34,23 +39,58 @@ func NewRegistry() *Registry {
 	return &Registry{nodes: make(map[domain.NodeID]*NodeRecord)}
 }
 
-// Upsert inserts or replaces the record for a node's identity, returning
-// whether this is a previously unknown node.
-func (r *Registry) Upsert(node domain.Node, conn domain.Conn) (rec *NodeRecord, isNew bool) {
+// Upsert inserts or replaces the record for a node's identity from its
+// manifest, returning whether this is a previously unknown node.
+func (r *Registry) Upsert(manifest domain.Manifest, conn domain.Conn) (rec *NodeRecord, isNew bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	id := node.Identity.NodeID
+	id := manifest.Node.Identity.NodeID
 	existing, ok := r.nodes[id]
 	if !ok {
-		rec := &NodeRecord{Node: node, State: domain.NodeConnected, LastSeen: time.Now(), Conn: conn}
+		rec := &NodeRecord{
+			Node:         manifest.Node,
+			Resources:    manifest.Resources,
+			Capabilities: manifest.Capabilities,
+			State:        domain.NodeConnected,
+			LastSeen:     time.Now(),
+			Conn:         conn,
+		}
 		r.nodes[id] = rec
 		return rec, true
 	}
-	existing.Node = node
+	existing.Node = manifest.Node
+	existing.Resources = manifest.Resources
+	existing.Capabilities = manifest.Capabilities
 	existing.Conn = conn
 	existing.LastSeen = time.Now()
 	return existing, false
+}
+
+// UpdateResources replaces a known node's declared resources/capabilities,
+// e.g. after a CAPABILITY_UPDATE following REQUEST_RESOURCE_REFRESH.
+func (r *Registry) UpdateResources(id domain.NodeID, resources []domain.Resource, capabilities []domain.Capability) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if rec, ok := r.nodes[id]; ok {
+		rec.Resources = resources
+		rec.Capabilities = capabilities
+	}
+}
+
+// TotalResources sums each resource kind across every known node, e.g. for
+// the harness-wide "Total visible resources" view (v1.md §11). The number
+// is informational only in v0 — nothing pools or schedules against it.
+func (r *Registry) TotalResources() map[domain.ResourceKind]float64 {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	totals := make(map[domain.ResourceKind]float64)
+	for _, rec := range r.nodes {
+		for _, res := range rec.Resources {
+			totals[res.Kind] += res.Capacity
+		}
+	}
+	return totals
 }
 
 // Get returns the record for a node ID, if known.
@@ -97,6 +137,17 @@ func (r *Registry) Touch(id domain.NodeID) {
 	}
 }
 
+// RecordHeartbeat updates a node's last-seen timestamp and its most
+// recently reported live metrics in one step.
+func (r *Registry) RecordHeartbeat(id domain.NodeID, metrics domain.RuntimeState) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if rec, ok := r.nodes[id]; ok {
+		rec.LastSeen = time.Now()
+		rec.LastMetrics = metrics
+	}
+}
+
 // List returns a snapshot of all known nodes.
 func (r *Registry) List() []*NodeRecord {
 	r.mu.RLock()
@@ -113,13 +164,19 @@ func (r *Registry) List() []*NodeRecord {
 // manager restores previously-registered nodes into the runtime registry
 // after a restart, before any of them have reconnected (v1.md §13/§21:
 // state survives manager restart where appropriate).
-func (r *Registry) Seed(node domain.Node) {
+func (r *Registry) Seed(manifest domain.Manifest) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, exists := r.nodes[node.Identity.NodeID]; exists {
+	id := manifest.Node.Identity.NodeID
+	if _, exists := r.nodes[id]; exists {
 		return
 	}
-	r.nodes[node.Identity.NodeID] = &NodeRecord{Node: node, State: domain.NodeOffline}
+	r.nodes[id] = &NodeRecord{
+		Node:         manifest.Node,
+		Resources:    manifest.Resources,
+		Capabilities: manifest.Capabilities,
+		State:        domain.NodeOffline,
+	}
 }
 
 // ExpireStale transitions any node whose LastSeen exceeds timeout into

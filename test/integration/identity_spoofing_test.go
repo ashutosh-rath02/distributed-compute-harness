@@ -23,10 +23,7 @@ func rawRegister(t *testing.T, addr string, payload protocol.RegisterPayload, cl
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	conn, err := ws.New().Dial(ctx, addr)
-	if err != nil {
-		t.Fatalf("Dial: %v", err)
-	}
+	conn := dialWithRetry(t, addr)
 	defer conn.Close()
 
 	env, err := protocol.NewEnvelope(protocol.MsgRegister, claimedID, domain.ManagerNodeID, payload)

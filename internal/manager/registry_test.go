@@ -8,8 +8,10 @@ import (
 	"home-harness/internal/domain"
 )
 
-func testNode(id domain.NodeID) domain.Node {
-	return domain.Node{Identity: domain.Identity{NodeID: id}, Name: string(id)}
+func testNode(id domain.NodeID) domain.Manifest {
+	return domain.Manifest{
+		Node: domain.Node{Identity: domain.Identity{NodeID: id}, Name: string(id)},
+	}
 }
 
 // fakeConn is a minimal domain.Conn for identity comparisons in registry
