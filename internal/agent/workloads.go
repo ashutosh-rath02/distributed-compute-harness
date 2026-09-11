@@ -19,6 +19,7 @@ func (a *Agent) handleWorkloadAssign(ctx context.Context, conn domain.Conn, env 
 		return // malformed assignment from the manager: nothing sensible to run
 	}
 	wl := payload.Workload
+	log.Printf("agent %s: WORKLOAD_ASSIGN %s: %s %v", a.identity.NodeID, wl.ID, wl.Command, wl.Args)
 
 	if a.cfg.InsecureWorkloadsDisabled {
 		a.sendWorkloadStatus(ctx, conn, domain.WorkloadStatus{
@@ -50,12 +51,14 @@ func (a *Agent) handleWorkloadCancel(ctx context.Context, conn domain.Conn, env 
 	if err := env.DecodePayload(&payload); err != nil {
 		return
 	}
+	log.Printf("agent %s: WORKLOAD_CANCEL %s", a.identity.NodeID, payload.ID)
 	if err := a.executor.Cancel(payload.ID); err != nil {
 		log.Printf("agent %s: WORKLOAD_CANCEL %s: %v", a.identity.NodeID, payload.ID, err)
 	}
 }
 
 func (a *Agent) sendWorkloadStatus(ctx context.Context, conn domain.Conn, status domain.WorkloadStatus) {
+	log.Printf("agent %s: workload %s -> %s", a.identity.NodeID, status.ID, status.State)
 	if err := a.send(ctx, conn, protocol.MsgWorkloadStatus, domain.ManagerNodeID, protocol.WorkloadStatusPayload{Status: status}); err != nil {
 		log.Printf("agent %s: send WORKLOAD_STATUS for %s: %v", a.identity.NodeID, status.ID, err)
 	}
