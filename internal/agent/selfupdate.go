@@ -125,7 +125,13 @@ func (a *Agent) performSelfUpdateAt(exePath, expectedSHA256 string) {
 }
 
 // downloadFile streams url's body to destPath, so a large file never sits
-// fully in memory before being written.
+// fully in memory before being written. Created with the executable bit
+// set (0o755, not os.Create's default 0o666-minus-umask): confirmed via
+// real hardware (an Android/Termux node) that a downloaded binary lacking
+// +x is silently irrelevant on Windows (no POSIX exec bit) but fails every
+// subsequent exec attempt on Linux with a plain "permission denied" — not
+// an OS security restriction, just a missing chmod this v4 self-update
+// path never needed until a non-Windows node exercised it.
 func downloadFile(client *http.Client, url, destPath string) error {
 	resp, err := client.Get(url)
 	if err != nil {
@@ -135,7 +141,7 @@ func downloadFile(client *http.Client, url, destPath string) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unexpected status %s", resp.Status)
 	}
-	out, err := os.Create(destPath)
+	out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
 	if err != nil {
 		return err
 	}

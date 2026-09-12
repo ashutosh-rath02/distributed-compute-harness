@@ -416,3 +416,70 @@ func TestCappedBufferTruncates(t *testing.T) {
 		t.Fatal("expected truncated to be true")
 	}
 }
+
+// TestResolveCommandPath covers resolveCommandPath (executor.go) — added
+// after a real Android/Termux node crashed its entire agent process on a
+// bare command name ("uname"), because exec.Command's own internal
+// LookPath calls a syscall this device's seccomp policy kills the process
+// over. resolveCommandPath sidesteps that with a plain os.Stat-based PATH
+// search on non-Windows.
+func TestResolveCommandPathLeavesAlreadyPathedNameUnchanged(t *testing.T) {
+	for _, in := range []string{"/usr/bin/uname", "./relative/path", string(os.PathSeparator) + "abs"} {
+		if got := resolveCommandPath(in); got != in {
+			t.Errorf("resolveCommandPath(%q) = %q, want unchanged", in, got)
+		}
+	}
+}
+
+func TestResolveCommandPathLeavesWindowsUnchanged(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("windows-only: resolveCommandPath is a no-op there since exec.Command's own LookPath has no known issue on Windows")
+	}
+	if got := resolveCommandPath("cmd"); got != "cmd" {
+		t.Errorf("resolveCommandPath(%q) = %q, want unchanged on windows", "cmd", got)
+	}
+}
+
+func TestResolveCommandPathResolvesBareNameViaPATH(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("PATH-search behavior is non-Windows only")
+	}
+	dir := t.TempDir()
+	exePath := filepath.Join(dir, "my-test-prog")
+	if err := os.WriteFile(exePath, []byte("#!/bin/sh\necho hi\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	t.Setenv("PATH", dir)
+
+	got := resolveCommandPath("my-test-prog")
+	if got != exePath {
+		t.Errorf("resolveCommandPath(%q) = %q, want %q", "my-test-prog", got, exePath)
+	}
+}
+
+func TestResolveCommandPathFallsBackWhenNotFoundInPATH(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("PATH-search behavior is non-Windows only")
+	}
+	t.Setenv("PATH", t.TempDir()) // empty directory, nothing to find
+	const name = "definitely-not-a-real-command"
+	if got := resolveCommandPath(name); got != name {
+		t.Errorf("resolveCommandPath(%q) = %q, want unchanged when not found", name, got)
+	}
+}
+
+func TestResolveCommandPathSkipsNonExecutableFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("PATH-search behavior is non-Windows only")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "not-executable"), []byte("data"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	t.Setenv("PATH", dir)
+
+	const name = "not-executable"
+	if got := resolveCommandPath(name); got != name {
+		t.Errorf("resolveCommandPath(%q) = %q, want unchanged for a non-executable file", name, got)
+	}
+}

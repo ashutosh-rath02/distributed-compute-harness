@@ -49,7 +49,7 @@ func TestCmdJoinSecureEmbedsFingerprintTokenAndHash(t *testing.T) {
 	c := joinInfoServer(t, `{"fingerprint":"abc123","pairingToken":"secret-token","insecure":false,"agentBinaryAvailable":true,"agentBinarySha256":"deadbeef"}`)
 
 	out := captureStdout(t, func() {
-		if err := c.cmdJoin("192.168.10.11:7420"); err != nil {
+		if err := c.cmdJoin("192.168.10.11:7420", "windows"); err != nil {
 			t.Fatalf("cmdJoin: %v", err)
 		}
 	})
@@ -85,7 +85,7 @@ func TestCmdJoinInsecureUsesHTTPAndInsecureFlag(t *testing.T) {
 	c := joinInfoServer(t, `{"fingerprint":"","pairingToken":"secret-token","insecure":true,"agentBinaryAvailable":true,"agentBinarySha256":"deadbeef"}`)
 
 	out := captureStdout(t, func() {
-		if err := c.cmdJoin("192.168.10.11:7420"); err != nil {
+		if err := c.cmdJoin("192.168.10.11:7420", "windows"); err != nil {
 			t.Fatalf("cmdJoin: %v", err)
 		}
 	})
@@ -107,7 +107,7 @@ func TestCmdJoinInsecureUsesHTTPAndInsecureFlag(t *testing.T) {
 func TestCmdJoinFailsWhenAgentBinaryNotConfigured(t *testing.T) {
 	c := joinInfoServer(t, `{"fingerprint":"abc123","pairingToken":"secret-token","insecure":false,"agentBinaryAvailable":false}`)
 
-	err := c.cmdJoin("192.168.10.11:7420")
+	err := c.cmdJoin("192.168.10.11:7420", "windows")
 	if err == nil {
 		t.Fatal("expected an error when the manager has no agent binary configured")
 	}
@@ -115,7 +115,7 @@ func TestCmdJoinFailsWhenAgentBinaryNotConfigured(t *testing.T) {
 
 func TestCmdJoinRejectsAddressWithoutPort(t *testing.T) {
 	c := &apiClient{base: "http://unused"}
-	if err := c.cmdJoin("192.168.10.11"); err == nil {
+	if err := c.cmdJoin("192.168.10.11", "windows"); err == nil {
 		t.Fatal("expected an error for an address missing a port")
 	}
 }
@@ -125,7 +125,83 @@ func TestCmdJoinRejectsAddressWithoutHost(t *testing.T) {
 	// ":7420" is the manager's own -addr default and startup log text — an
 	// operator copying it literally must be rejected, not sent a broken
 	// "https://:7420/agent-binary" download URL.
-	if err := c.cmdJoin(":7420"); err == nil {
+	if err := c.cmdJoin(":7420", "windows"); err == nil {
 		t.Fatal("expected an error for an address missing a host")
+	}
+}
+
+func TestCmdJoinRejectsUnknownPlatform(t *testing.T) {
+	c := &apiClient{base: "http://unused"}
+	if err := c.cmdJoin("192.168.10.11:7420", "ios"); err == nil {
+		t.Fatal("expected an error for an unsupported platform")
+	}
+}
+
+func TestCmdJoinAndroidEmbedsTermuxSetupAndHash(t *testing.T) {
+	c := joinInfoServer(t, `{"fingerprint":"abc123","pairingToken":"secret-token","insecure":false,"agentBinaryAvailable":true,"agentBinarySha256":"DEADBEEF"}`)
+
+	out := captureStdout(t, func() {
+		if err := c.cmdJoin("192.168.10.11:7420", "android"); err != nil {
+			t.Fatalf("cmdJoin: %v", err)
+		}
+	})
+
+	for _, want := range []string{
+		"f-droid.org/packages/com.termux",
+		"f-droid.org/packages/com.termux.boot",
+		"pkg install -y curl",
+		`curl -k -o agent "https://192.168.10.11:7420/agent-binary"`,
+		"deadbeef", // sha256sum renders lowercase hex, unlike PowerShell's Get-FileHash
+		"~/.termux/boot/start-harness-agent.sh",
+		"termux-wake-lock",
+		"-manager-addr 192.168.10.11:7420",
+		"-pairing-token secret-token",
+		"-manager-fingerprint abc123",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected output to contain %q, got:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "-insecure") {
+		t.Errorf("expected no -insecure flag in secure mode, got:\n%s", out)
+	}
+	// Same lesson as the PowerShell if/else fix, applied to bash: the hash
+	// check must gate the download's use via && chaining, not sit on its
+	// own line, or a failed check wouldn't stop a separate next line from
+	// writing the boot script and launching the unverified binary anyway.
+	if !strings.Contains(out, `] && chmod +x agent`) {
+		t.Errorf("expected the hash check chained with && into the rest of the setup, got:\n%s", out)
+	}
+	// A bare trailing "... & disown" parses as TWO commands, not one: bash
+	// backgrounds everything up to "&" as its own job, then runs "disown"
+	// separately — silently breaking the whole && chain (pkg install,
+	// curl, the hash check) out of the foreground, discarding any failure
+	// output. The launch must be backgrounded *inside* the chain (e.g.
+	// "(cmd &)") with something observable chained after it.
+	if strings.Contains(out, "& disown") {
+		t.Errorf("expected no bare '& disown' (breaks the && chain into a background job), got:\n%s", out)
+	}
+	if !strings.Contains(out, `&& echo "Installed`) {
+		t.Errorf("expected a chained success message after the launch, got:\n%s", out)
+	}
+}
+
+func TestCmdJoinAndroidInsecureUsesHTTPAndInsecureFlag(t *testing.T) {
+	c := joinInfoServer(t, `{"fingerprint":"","pairingToken":"secret-token","insecure":true,"agentBinaryAvailable":true,"agentBinarySha256":"deadbeef"}`)
+
+	out := captureStdout(t, func() {
+		if err := c.cmdJoin("192.168.10.11:7420", "android"); err != nil {
+			t.Fatalf("cmdJoin: %v", err)
+		}
+	})
+
+	if !strings.Contains(out, `curl -o agent "http://192.168.10.11:7420/agent-binary"`) {
+		t.Errorf("expected a plain http curl with no -k flag in insecure mode, got:\n%s", out)
+	}
+	if !strings.Contains(out, "-insecure") {
+		t.Errorf("expected -insecure flag in insecure mode, got:\n%s", out)
+	}
+	if strings.Contains(out, "-manager-fingerprint") {
+		t.Errorf("expected no -manager-fingerprint flag in insecure mode, got:\n%s", out)
 	}
 }

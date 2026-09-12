@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -27,6 +28,31 @@ func TestHashFile(t *testing.T) {
 	want := hex.EncodeToString(sum[:])
 	if got != want {
 		t.Fatalf("hashFile = %q, want %q", got, want)
+	}
+}
+
+func TestDownloadFileSetsExecutableBit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no POSIX executable bit to check on windows")
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/agent-binary", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("content"))
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	destPath := filepath.Join(t.TempDir(), "agent")
+	if err := downloadFile(http.DefaultClient, server.URL+"/agent-binary", destPath); err != nil {
+		t.Fatalf("downloadFile: %v", err)
+	}
+
+	info, err := os.Stat(destPath)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Fatalf("expected downloadFile's output to be executable, got mode %v", info.Mode())
 	}
 }
 
@@ -156,6 +182,21 @@ func TestPerformSelfUpdateAtFullFlow(t *testing.T) {
 	}
 	if len((*calls)[0].args) != 2 || (*calls)[0].args[0] != "-pairing-token" {
 		t.Fatalf("expected relaunch called with the original LaunchArgs, got %v", (*calls)[0].args)
+	}
+	// Confirmed via real hardware (an Android/Termux node): a downloaded
+	// binary lacking the executable bit is silently irrelevant on Windows
+	// (no POSIX exec bit) but fails every subsequent exec attempt on Linux
+	// with a plain "permission denied" — not an OS security restriction,
+	// just a missing chmod. Skipped on Windows, which has no exec bit to
+	// check.
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(exePath)
+		if err != nil {
+			t.Fatalf("Stat exePath after update: %v", err)
+		}
+		if info.Mode()&0o111 == 0 {
+			t.Fatalf("expected the swapped-in binary to be executable, got mode %v", info.Mode())
+		}
 	}
 }
 

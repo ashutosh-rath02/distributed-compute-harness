@@ -69,7 +69,13 @@ func main() {
 	case "update":
 		err = requireArgs(args, 2, "update <id>", func() error { return client.cmdUpdateNode(args[1]) })
 	case "join":
-		err = requireArgs(args, 2, "join <manager-lan-addr>", func() error { return client.cmdJoin(args[1]) })
+		err = requireArgs(args, 2, "join <manager-lan-addr> [android]", func() error {
+			platform := "windows"
+			if len(args) >= 3 {
+				platform = args[2]
+			}
+			return client.cmdJoin(args[1], platform)
+		})
 	default:
 		usage()
 		os.Exit(2)
@@ -120,14 +126,22 @@ Commands:
                         started with -agent-binary); the node reconnects on
                         its own once done — no manual file transfer or
                         restart. "nodes" flags any node this would affect.
-  join <manager-addr>   print a ready-to-run PowerShell block (v5) that
-                        downloads agent.exe from this manager and registers
-                        it — paste it into a terminal on any new LAN
-                        machine to onboard it, with no manual file transfer,
-                        fingerprint lookup, or flag-typing. <manager-addr>
-                        is the manager's own -addr value (e.g.
-                        192.168.10.11:7420); requires the manager to have
-                        been started with -agent-binary.`)
+  join <manager-addr> [android]
+                        print a ready-to-run onboarding block that
+                        downloads the agent from this manager and
+                        registers it — paste it into a terminal on the new
+                        machine, with no manual file transfer, fingerprint
+                        lookup, or flag-typing. Default platform is
+                        "windows" (a PowerShell block); "android" prints a
+                        bash block for Termux instead (install Termux +
+                        Termux:Boot from F-Droid first — printed with the
+                        script). <manager-addr> is the manager's own -addr
+                        value (e.g. 192.168.10.11:7420); requires the
+                        manager to have been started with -agent-binary
+                        pointed at the right build for the target
+                        platform (the manager serves one binary at a
+                        time — restart it with a different -agent-binary
+                        to switch which platform "join" onboards).`)
 }
 
 // cmdRun parses "run"'s own flags separately from the top-level FlagSet,
@@ -533,21 +547,37 @@ type joinInfoView struct {
 	AgentBinarySHA256    string `json:"agentBinarySha256"`
 }
 
-// cmdJoin prints a ready-to-run PowerShell block for onboarding a new LAN
-// machine (v5 part 1) — see GET /join-info (internal/manager/join.go) for
+// cmdJoin prints a ready-to-run onboarding block for the new machine (v5
+// part 1: "windows", the default, a PowerShell block; "android": a bash
+// block for Termux) — see GET /join-info (internal/manager/join.go) for
 // where the embedded fingerprint/token come from, and why they must come
 // from this trusted, loopback-scoped source rather than the LAN discovery
 // beacon (which is unauthenticated multicast and therefore spoofable).
 //
-// The generated script uses curl.exe -k (bundled on Windows 10 1803+)
-// rather than Invoke-WebRequest for its download: the brand-new machine
-// has no pinned fingerprint yet (that's the whole point of this bootstrap
-// step), so this one download necessarily runs with certificate chain
-// validation off — exactly the reasoning v4's /agent-binary endpoint
-// already documents (integrity comes from an explicit hash check, not the
-// transport). The script verifies AgentBinarySHA256 immediately after
-// downloading and refuses to run a binary that doesn't match.
-func (c *apiClient) cmdJoin(addr string) error {
+// Both variants download over an unverified-chain connection (curl -k /
+// curl.exe -k): the brand-new machine has no pinned fingerprint yet
+// (that's the whole point of this bootstrap step), so this one download
+// necessarily runs with certificate chain validation off — exactly the
+// reasoning v4's /agent-binary endpoint already documents (integrity comes
+// from an explicit hash check, not the transport). Both verify
+// AgentBinarySHA256 immediately after downloading and refuse to run a
+// binary that doesn't match — and in both, the check and the launch are
+// one statement (PowerShell if/else, bash && chain), not two sequential
+// lines: pasted into an interactive shell, each top-level line runs
+// independently, so a bare failed check on its own line wouldn't stop a
+// separate next line from launching the unverified binary anyway.
+//
+// "android" targets Termux (a real Linux terminal app, install from
+// F-Droid — the Play Store build is deprecated/frozen) rather than a
+// native Android app: it can run this project's existing Go agent
+// directly (cross-compiled with GOOS=linux GOARCH=arm64), and Termux:Boot
+// (also F-Droid) auto-starts it on every reboot. The manager must
+// currently be serving the android/arm64 build via -agent-binary when
+// this is run (see cmd/harnessctl's `join` usage text) — the manager
+// serves whichever single binary it was started with, same as the
+// Windows flow; it has no notion of "the Windows one" vs "the Android
+// one" simultaneously (see the plan's "manual binary swap" scope note).
+func (c *apiClient) cmdJoin(addr, platform string) error {
 	// net.SplitHostPort(":7420") returns host="", nil error — a legal
 	// listen-address form, but useless here: it's also the manager's own
 	// -addr default and startup log text, so an operator copying that
@@ -556,13 +586,16 @@ func (c *apiClient) cmdJoin(addr string) error {
 	if host, _, err := net.SplitHostPort(addr); err != nil || host == "" {
 		return fmt.Errorf("invalid manager address %q (want host:port, e.g. 192.168.10.11:7420)", addr)
 	}
+	if platform != "windows" && platform != "android" {
+		return fmt.Errorf("unknown platform %q (want %q or %q)", platform, "windows", "android")
+	}
 
 	var info joinInfoView
 	if err := c.get("/join-info", &info); err != nil {
 		return err
 	}
 	if !info.AgentBinaryAvailable {
-		return fmt.Errorf("manager has no agent binary configured — restart it with -agent-binary to enable joining")
+		return fmt.Errorf("manager has no agent binary configured — restart it with -agent-binary (pointed at the right build for %s) to enable joining", platform)
 	}
 
 	scheme := "https"
@@ -573,17 +606,28 @@ func (c *apiClient) cmdJoin(addr string) error {
 		curlFlag = ""
 		authFlag = "-insecure"
 	}
+	hash := strings.ToUpper(info.AgentBinarySHA256)
 
-	// The hash check and launch are one statement (if/else), not two
-	// sequential lines: pasted into an interactive PowerShell session, each
-	// top-level line runs independently, so a separate "if (...) { throw }"
-	// followed by ".\agent.exe" would still launch the unverified binary
-	// after the throw merely printed an error and moved on.
+	if platform == "android" {
+		fmt.Printf(`One-time prerequisites on the phone, before pasting anything below:
+  1. Install Termux from F-Droid (not the Play Store build — it's deprecated/frozen): https://f-droid.org/packages/com.termux/
+  2. Install Termux:Boot from F-Droid too: https://f-droid.org/packages/com.termux.boot/
+  3. Open Termux once, then in Android's battery settings, disable battery
+     optimization for Termux (best-effort against OEM background killers —
+     no software fix eliminates this entirely on every phone).
+
+Then paste this into Termux:
+
+pkg install -y curl && mkdir -p ~/home-harness && cd ~/home-harness && curl %s-o agent "%s://%s/agent-binary" && [ "$(sha256sum agent | awk '{print $1}')" = "%s" ] && chmod +x agent && mkdir -p ~/.termux/boot && printf '#!/data/data/com.termux/files/usr/bin/bash\n/data/data/com.termux/files/usr/bin/termux-wake-lock\ncd ~/home-harness\nwhile true; do ./agent -manager-addr %s -pairing-token %s %s; sleep 5; done\n' > ~/.termux/boot/start-harness-agent.sh && chmod +x ~/.termux/boot/start-harness-agent.sh && (nohup ~/.termux/boot/start-harness-agent.sh >~/home-harness/agent.log 2>&1 &) && echo "Installed — agent running, and will auto-start on reboot via Termux:Boot."
+`, curlFlag, scheme, addr, strings.ToLower(hash), addr, info.PairingToken, authFlag)
+		return nil
+	}
+
 	fmt.Printf(`Paste this into a PowerShell terminal on the new machine:
 
 curl.exe %s"%s://%s/agent-binary" -o agent.exe
 if ((Get-FileHash agent.exe -Algorithm SHA256).Hash -ne "%s") { throw "agent.exe hash mismatch — download corrupted or tampered with, aborting" } else { .\agent.exe -manager-addr %s -pairing-token %s %s }
-`, curlFlag, scheme, addr, strings.ToUpper(info.AgentBinarySHA256), addr, info.PairingToken, authFlag)
+`, curlFlag, scheme, addr, hash, addr, info.PairingToken, authFlag)
 	return nil
 }
 

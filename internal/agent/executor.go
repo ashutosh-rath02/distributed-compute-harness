@@ -8,6 +8,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -96,6 +99,37 @@ func (e *Executor) Start(ctx context.Context, wl domain.Workload, onStatus func(
 	return nil
 }
 
+// resolveCommandPath resolves a bare command name (no path separator) to
+// an absolute path ourselves on non-Windows, rather than letting
+// exec.Command fall back to its own internal os/exec.LookPath. Confirmed
+// via real hardware (an Android/Termux node, v5 phone onboarding): a bare
+// command name like "uname" (exactly the kind of thing an operator
+// naturally types) reproducibly crashed the *entire agent process*, not
+// just the one workload, while the identical command given as an absolute
+// path ran fine. The likely mechanism — not independently confirmed beyond
+// that observation — is that LookPath's internal syscall.Eaccess
+// (faccessat2) is blocked by this device's seccomp policy, killing the
+// caller with SIGSYS rather than returning an ordinary error (see
+// golang/go#57393, golang/go#60125). Resolving the path ourselves via a
+// plain os.Stat-based $PATH search avoids that call regardless of the
+// exact mechanism. Left unchanged on Windows, which has no such issue and
+// is already verified working via exec.Command's own LookPath.
+func resolveCommandPath(name string) string {
+	if runtime.GOOS == "windows" || strings.ContainsRune(name, '/') || strings.ContainsRune(name, os.PathSeparator) {
+		return name
+	}
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		if dir == "" {
+			continue
+		}
+		candidate := filepath.Join(dir, name)
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+			return candidate
+		}
+	}
+	return name // not found in PATH; exec.Command will fail with its usual "not found" error
+}
+
 // startExecute runs wl as a subprocess — the capability behind v1's
 // original workload execution, unchanged, just relocated out of Start so
 // it sits alongside its sibling capability handler.
@@ -108,7 +142,7 @@ func (e *Executor) Start(ctx context.Context, wl domain.Workload, onStatus func(
 // workload that spawns its own children can leak them; v1 does not
 // implement process-group/job-object handling to prevent that.
 func (e *Executor) startExecute(runCtx context.Context, cancel context.CancelFunc, wl domain.Workload, onStatus func(domain.WorkloadStatus)) {
-	cmd := exec.CommandContext(runCtx, wl.Command, wl.Args...)
+	cmd := exec.CommandContext(runCtx, resolveCommandPath(wl.Command), wl.Args...)
 	stdout := &cappedBuffer{limit: domain.OutputCapBytes}
 	stderr := &cappedBuffer{limit: domain.OutputCapBytes}
 	cmd.Stdout = stdout
