@@ -44,6 +44,13 @@ func (s *Server) AgentBinaryHash() string {
 	return s.agentBinaryHash
 }
 
+// AgentBinaryPlatform returns the currently-served agent binary's
+// best-effort detected OS/architecture (both "" if self-update is
+// disabled or the format wasn't recognized) — see binaryplatform.go.
+func (s *Server) AgentBinaryPlatform() (goos, arch string) {
+	return s.agentBinaryOS, s.agentBinaryArch
+}
+
 // AgentBinaryHandler serves cfg.AgentBinaryPath's raw bytes — registered on
 // the transport's own listener (cmd/manager/main.go), the exact
 // address/port agents already dial, so an agent's self-update download

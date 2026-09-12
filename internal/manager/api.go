@@ -51,6 +51,8 @@ func toNodeView(rec *NodeRecord) nodeView {
 //	POST /nodes/{id}/update          push a self-update if the node isn't already current
 //	GET  /agent-binary/hash          the manager's currently-served agent binary hash
 //	GET  /join-info                  what a new node needs to onboard (fingerprint, pairing token, ...)
+//	GET  /join-script                the ready-to-paste onboarding script for ?addr=&platform=
+//	GET  /                           a local web dashboard (node list + "add a device" form)
 //	POST /workloads                 submit a workload: {"target":"...optional...","command":"...","args":[...],"requirements":{...optional...}}
 //	GET  /workloads                 list all known workloads
 //	GET  /workloads/{id}             one workload's request + status
@@ -76,6 +78,8 @@ func (s *Server) NewHTTPHandler() http.Handler {
 	mux.HandleFunc("POST /nodes/{id}/update", s.apiPostUpdate)
 	mux.HandleFunc("GET /agent-binary/hash", s.apiGetAgentBinaryHash)
 	mux.HandleFunc("GET /join-info", s.apiGetJoinInfo)
+	mux.HandleFunc("GET /join-script", s.apiGetJoinScript)
+	mux.HandleFunc("GET /{$}", s.apiGetDashboard)
 	mux.HandleFunc("POST /workloads", s.apiPostWorkload)
 	mux.HandleFunc("GET /workloads", s.apiListWorkloads)
 	mux.HandleFunc("GET /workloads/{id}", s.apiGetWorkload)
@@ -197,11 +201,19 @@ func (s *Server) apiPostUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 // apiGetAgentBinaryHash returns the manager's currently-served agent
-// binary hash (empty string if self-update is disabled) — harnessctl uses
-// this once per `nodes` listing to flag any node whose last-reported
-// BinaryHash differs, without needing a comparison endpoint per node.
+// binary hash (empty string if self-update is disabled) plus its
+// best-effort detected platform — harnessctl and the web dashboard use
+// this once per node listing to flag any node whose last-reported
+// BinaryHash differs *and* whose platform actually matches what's being
+// served (a cross-platform mismatch is expected, not staleness — see
+// binaryplatform.go), without needing a comparison endpoint per node.
 func (s *Server) apiGetAgentBinaryHash(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"sha256": s.AgentBinaryHash()})
+	goos, arch := s.AgentBinaryPlatform()
+	writeJSON(w, http.StatusOK, map[string]string{
+		"sha256":       s.AgentBinaryHash(),
+		"os":           goos,
+		"architecture": arch,
+	})
 }
 
 // apiGetJoinInfo returns what a new node needs to onboard itself — see

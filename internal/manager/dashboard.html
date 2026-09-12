@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Home Compute Harness</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+    margin: 0; padding: 24px; max-width: 960px; margin-inline: auto;
+    background: Canvas; color: CanvasText;
+  }
+  h1 { font-size: 1.4rem; margin-bottom: 4px; }
+  .sub { color: GrayText; margin-top: 0; margin-bottom: 24px; font-size: 0.9rem; }
+  h2 { font-size: 1.1rem; margin-top: 40px; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid color-mix(in srgb, CanvasText 15%, transparent); }
+  th { color: GrayText; font-weight: 600; }
+  .state { padding: 2px 8px; border-radius: 10px; font-size: 0.8rem; display: inline-block; }
+  .state-READY { background: color-mix(in srgb, #2ea043 25%, transparent); }
+  .state-OFFLINE { background: color-mix(in srgb, GrayText 25%, transparent); }
+  .state-DEGRADED { background: color-mix(in srgb, #d29922 25%, transparent); }
+  .outdated { color: #d29922; font-size: 0.8rem; margin-left: 6px; }
+  .empty { color: GrayText; font-style: italic; padding: 16px 0; }
+  .card {
+    border: 1px solid color-mix(in srgb, CanvasText 15%, transparent);
+    border-radius: 8px; padding: 16px; margin-top: 12px;
+  }
+  label { display: block; margin-top: 12px; font-size: 0.85rem; color: GrayText; }
+  input, select {
+    width: 100%; box-sizing: border-box; padding: 8px; margin-top: 4px;
+    border-radius: 6px; border: 1px solid color-mix(in srgb, CanvasText 25%, transparent);
+    background: Field; color: FieldText; font-size: 0.9rem;
+  }
+  button {
+    margin-top: 14px; padding: 8px 16px; border-radius: 6px; border: none;
+    background: #2f81f7; color: white; font-size: 0.9rem; cursor: pointer;
+  }
+  button:hover { background: #1f6feb; }
+  button.secondary { background: transparent; color: inherit; border: 1px solid color-mix(in srgb, CanvasText 25%, transparent); }
+  textarea {
+    width: 100%; box-sizing: border-box; min-height: 140px; margin-top: 12px;
+    font-family: ui-monospace, Consolas, monospace; font-size: 0.8rem; padding: 10px;
+    border-radius: 6px; border: 1px solid color-mix(in srgb, CanvasText 25%, transparent);
+    background: Field; color: FieldText;
+  }
+  .error { color: #f85149; font-size: 0.85rem; margin-top: 10px; }
+  .hint { font-size: 0.8rem; color: GrayText; margin-top: 4px; }
+</style>
+</head>
+<body>
+  <h1>Home Compute Harness</h1>
+  <p class="sub">Loopback-only dashboard — same trust model as the rest of this API. Generated onboarding scripts below include this harness's pairing token in plain text.</p>
+
+  <h2>Nodes</h2>
+  <div id="nodes"></div>
+
+  <h2>Add a device</h2>
+  <div class="card">
+    <label for="platform">Platform</label>
+    <select id="platform">
+      <option value="windows">Windows</option>
+      <option value="android">Android (Termux)</option>
+    </select>
+
+    <label for="addr">Manager address (this machine's LAN address, e.g. 192.168.10.11:7420)</label>
+    <input id="addr" type="text" placeholder="192.168.10.11:7420" autocomplete="off">
+    <p class="hint">Not auto-detected on purpose — a multi-homed machine has no single "right" address to guess.</p>
+
+    <button id="generate">Generate script</button>
+    <div id="genError" class="error"></div>
+    <textarea id="script" readonly placeholder="Generated script appears here..." hidden></textarea>
+    <button id="copy" class="secondary" hidden>Copy to clipboard</button>
+  </div>
+
+<script>
+(function () {
+  "use strict";
+
+  function stateClass(state) {
+    return "state state-" + (state || "UNKNOWN");
+  }
+
+  function fmtBytes(n) {
+    if (!n) return "-";
+    const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let i = 0;
+    let v = n;
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+    return v.toFixed(1) + " " + units[i];
+  }
+
+  let currentBinary = { sha256: "", os: "", architecture: "" };
+
+  async function refreshNodes() {
+    try {
+      const [nodesResp, hashResp] = await Promise.all([
+        fetch("/nodes"),
+        fetch("/agent-binary/hash"),
+      ]);
+      const nodes = await nodesResp.json();
+      currentBinary = await hashResp.json();
+      renderNodes(nodes || []);
+    } catch (e) {
+      document.getElementById("nodes").innerHTML =
+        '<p class="error">Failed to load nodes: ' + escapeHtml(String(e)) + "</p>";
+    }
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    }[c]));
+  }
+
+  function renderNodes(nodes) {
+    const el = document.getElementById("nodes");
+    if (nodes.length === 0) {
+      el.innerHTML = '<p class="empty">No nodes known yet — use "Add a device" below.</p>';
+      return;
+    }
+    const rows = nodes.map((n) => {
+      // Only compare hashes for a node whose own platform matches what's
+      // currently being served — a Linux node's hash can never equal a
+      // served Windows binary's (or vice versa), regardless of whether
+      // that node is actually up to date, so a cross-platform mismatch
+      // must not be shown as "(outdated)".
+      const samePlatform = currentBinary.os && n.platform
+        && n.platform.os === currentBinary.os && n.platform.architecture === currentBinary.architecture;
+      const outdated = samePlatform && n.binaryHash && n.binaryHash !== currentBinary.sha256
+        ? '<span class="outdated">(outdated)</span>' : "";
+      const cpu = n.metrics && n.metrics.cpuPercent != null ? n.metrics.cpuPercent.toFixed(1) + "%" : "-";
+      const mem = n.metrics ? fmtBytes(n.metrics.memoryAvailableBytes) : "-";
+      // linux/arm64 today always means an Android/Termux node (v5 part
+      // 1b) — this project has no other linux/arm64 onboarding path yet —
+      // so label it recognizably rather than as a bare "linux/arm64",
+      // which doesn't read as "this is your phone" at a glance.
+      const platform = !n.platform ? "-"
+        : (n.platform.os === "linux" && n.platform.architecture === "arm64")
+          ? "📱 Android (Termux)"
+          : n.platform.os + "/" + n.platform.architecture;
+      return "<tr>"
+        + "<td>" + escapeHtml(n.name || n.nodeId) + "</td>"
+        + "<td>" + escapeHtml(platform) + "</td>"
+        + '<td><span class="' + stateClass(n.state) + '">' + escapeHtml(n.state) + "</span>" + outdated + "</td>"
+        + "<td>" + cpu + "</td>"
+        + "<td>" + mem + "</td>"
+        + "</tr>";
+    }).join("");
+    el.innerHTML =
+      "<table><thead><tr><th>Name</th><th>Platform</th><th>State</th><th>CPU</th><th>Mem free</th></tr></thead>"
+      + "<tbody>" + rows + "</tbody></table>";
+  }
+
+  refreshNodes();
+
+  // Live updates via the existing SSE event stream — EventSource
+  // reconnects on its own if the connection drops, so no polling loop is
+  // needed alongside it.
+  try {
+    const events = new EventSource("/events");
+    events.onmessage = () => refreshNodes();
+  } catch (e) {
+    // SSE unsupported/unavailable: fall back to a slow poll so the page
+    // isn't permanently stale.
+    setInterval(refreshNodes, 30000);
+  }
+
+  document.getElementById("generate").addEventListener("click", async () => {
+    const platform = document.getElementById("platform").value;
+    const addr = document.getElementById("addr").value.trim();
+    const errEl = document.getElementById("genError");
+    const scriptEl = document.getElementById("script");
+    const copyBtn = document.getElementById("copy");
+    errEl.textContent = "";
+    scriptEl.hidden = true;
+    copyBtn.hidden = true;
+
+    if (!addr) {
+      errEl.textContent = "Enter this machine's LAN address first.";
+      return;
+    }
+    try {
+      const resp = await fetch("/join-script?addr=" + encodeURIComponent(addr) + "&platform=" + encodeURIComponent(platform));
+      const text = await resp.text();
+      if (!resp.ok) {
+        errEl.textContent = text;
+        return;
+      }
+      scriptEl.value = text;
+      scriptEl.hidden = false;
+      copyBtn.hidden = false;
+    } catch (e) {
+      errEl.textContent = "Request failed: " + String(e);
+    }
+  });
+
+  document.getElementById("copy").addEventListener("click", async () => {
+    const scriptEl = document.getElementById("script");
+    try {
+      await navigator.clipboard.writeText(scriptEl.value);
+      const btn = document.getElementById("copy");
+      const original = btn.textContent;
+      btn.textContent = "Copied!";
+      setTimeout(() => { btn.textContent = original; }, 1500);
+    } catch (e) {
+      scriptEl.select();
+    }
+  });
+})();
+</script>
+</body>
+</html>

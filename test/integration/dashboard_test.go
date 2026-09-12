@@ -1,0 +1,131 @@
+package integration
+
+import (
+	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"home-harness/internal/manager"
+	"home-harness/internal/transport/ws"
+)
+
+// startTestManagerWithDashboard is startManagerWithAgentBinary
+// (selfupdate_test.go) plus an httptest server wrapping the real HTTP API
+// mux, used by both the dashboard smoke test and the /join-script tests
+// below — they all just need a manager with a known Config, no real
+// agent connections.
+func startTestManagerWithDashboard(t *testing.T, addr string, cfg manager.Config) (*manager.Server, *httptest.Server) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	transport := ws.New()
+	cfg.Addr = addr
+	srv := manager.NewServer(transport, nil, cfg)
+	if cfg.AgentBinaryPath != "" {
+		transport.Handle("/agent-binary", srv.AgentBinaryHandler())
+	}
+	go func() {
+		if err := srv.Run(ctx); err != nil && err != context.Canceled {
+			t.Logf("manager exited: %v", err)
+		}
+	}()
+
+	apiSrv := httptest.NewServer(srv.NewHTTPHandler())
+	t.Cleanup(apiSrv.Close)
+	return srv, apiSrv
+}
+
+// TestDashboardServesHTML is a light smoke test — this project has no
+// browser-based test tooling, so it just confirms the embedded page is
+// wired up and served with the right content type, not that the JS
+// behaves correctly (verified manually per the v5 part 2 plan).
+func TestDashboardServesHTML(t *testing.T) {
+	_, apiSrv := startTestManagerWithDashboard(t, "127.0.0.1:19310", manager.Config{
+		PairingToken:     pairingToken,
+		HeartbeatTimeout: 2 * time.Second,
+	})
+
+	resp, err := http.Get(apiSrv.URL + "/")
+	if err != nil {
+		t.Fatalf("GET /: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Fatalf("expected text/html content type, got %q", ct)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "<title>Home Compute Harness</title>") {
+		t.Fatal("expected the dashboard's <title> in the served page")
+	}
+}
+
+// TestJoinScriptEndpointReturnsGeneratedScript proves GET /join-script
+// produces the same script cmd/harnessctl's `join` command would, via the
+// real HTTP API — both call the shared internal/joinscript.Build.
+func TestJoinScriptEndpointReturnsGeneratedScript(t *testing.T) {
+	binaryPath, wantHash := writeDummyAgentBinary(t, []byte("content"))
+	_, apiSrv := startTestManagerWithDashboard(t, "127.0.0.1:19311", manager.Config{
+		PairingToken:     pairingToken,
+		HeartbeatTimeout: 2 * time.Second,
+		AgentBinaryPath:  binaryPath,
+		Fingerprint:      "test-fingerprint",
+	})
+
+	resp, err := http.Get(apiSrv.URL + "/join-script?addr=192.168.10.11:7420&platform=android")
+	if err != nil {
+		t.Fatalf("GET /join-script: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	script := string(body)
+
+	for _, want := range []string{
+		"192.168.10.11:7420",
+		"test-fingerprint",
+		pairingToken,
+		strings.ToLower(wantHash),
+		"termux-wake-lock",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("expected generated script to contain %q, got:\n%s", want, script)
+		}
+	}
+}
+
+// TestJoinScriptEndpointRejectsBadInput proves validation errors from
+// joinscript.Build surface as 400s over the real API, not 500s or silent
+// empty responses.
+func TestJoinScriptEndpointRejectsBadInput(t *testing.T) {
+	_, apiSrv := startTestManagerWithDashboard(t, "127.0.0.1:19312", manager.Config{
+		PairingToken:     pairingToken,
+		HeartbeatTimeout: 2 * time.Second,
+	})
+
+	cases := []string{
+		"/join-script?addr=no-port&platform=windows",
+		"/join-script?addr=192.168.10.11:7420&platform=ios",
+		"/join-script?addr=192.168.10.11:7420&platform=windows", // no -agent-binary configured
+	}
+	for _, path := range cases {
+		resp, err := http.Get(apiSrv.URL + path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("GET %s: expected 400, got %d", path, resp.StatusCode)
+		}
+	}
+}

@@ -79,6 +79,14 @@ type Server struct {
 	// startup (see NewServer) — empty if AgentBinaryPath is unset or
 	// unreadable, in which case NeedsUpdate always reports false.
 	agentBinaryHash string
+	// agentBinaryOS/agentBinaryArch are cfg.AgentBinaryPath's own platform,
+	// best-effort detected from its file header (binaryplatform.go) — both
+	// empty if undetectable. Lets node-listing "(outdated)" markers
+	// (cmd/harnessctl, the web dashboard) skip nodes whose platform
+	// doesn't match what's actually being served, rather than always
+	// flagging them (a Linux node's hash can never equal a served Windows
+	// binary's hash, regardless of whether it's actually current).
+	agentBinaryOS, agentBinaryArch string
 }
 
 // pendingCommand tracks who a dispatched command was sent to, so its
@@ -114,6 +122,7 @@ func NewServer(transport domain.Transport, store PersistentStore, cfg Config) *S
 		log.Printf("manager: self-update disabled: could not hash -agent-binary %q: %v", cfg.AgentBinaryPath, err)
 	} else {
 		s.agentBinaryHash = hash
+		s.agentBinaryOS, s.agentBinaryArch = detectBinaryPlatform(cfg.AgentBinaryPath)
 	}
 
 	return s
