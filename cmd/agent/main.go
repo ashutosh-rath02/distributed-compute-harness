@@ -15,7 +15,9 @@ import (
 
 	"home-harness/internal/agent"
 	"home-harness/internal/discovery/udp"
+	"home-harness/internal/domain"
 	"home-harness/internal/mtls"
+	"home-harness/internal/transport/relay"
 	"home-harness/internal/transport/ws"
 )
 
@@ -27,24 +29,44 @@ func main() {
 	heartbeatInterval := flag.Duration("heartbeat-interval", 5*time.Second, "how often to send heartbeats")
 	managerFingerprint := flag.String("manager-fingerprint", "", "expected SHA-256 fingerprint of the manager's TLS certificate, printed on manager startup (required unless -insecure)")
 	insecure := flag.Bool("insecure", false, "disable TLS: connect over plaintext ws:// with no manager authentication (dev/local use only; must match the manager's -insecure)")
+	relayAddr := flag.String("relay-addr", "", "relay server (cmd/relay) address to connect through, for a manager that isn't on this device's LAN; if set, -manager-addr/discovery are not used")
+	relayToken := flag.String("relay-token", "", "the manager's relay session token (required if -relay-addr is set)")
 	flag.Parse()
 
 	if *pairingToken == "" {
 		log.Fatal("agent: -pairing-token is required")
 	}
+	if *relayAddr != "" && *relayToken == "" {
+		log.Fatal("agent: -relay-token is required when -relay-addr is set")
+	}
 
-	transport := ws.New()
-	if !*insecure {
+	var transport domain.Transport
+	switch {
+	case *relayAddr != "" && !*insecure:
+		if *managerFingerprint == "" {
+			log.Fatal("agent: -manager-fingerprint is required unless -insecure is set (get it from the manager's startup log)")
+		}
+		transport = relay.NewTLSClient(*relayToken, mtls.PinnedClientConfig(*managerFingerprint))
+	case *relayAddr != "":
+		log.Println("agent: running with -insecure: plaintext transport, manager identity not verified")
+		transport = relay.NewClient(*relayToken)
+	case !*insecure:
 		if *managerFingerprint == "" {
 			log.Fatal("agent: -manager-fingerprint is required unless -insecure is set (get it from the manager's startup log)")
 		}
 		transport = ws.NewTLSClient(mtls.PinnedClientConfig(*managerFingerprint))
-	} else {
+	default:
 		log.Println("agent: running with -insecure: plaintext transport, manager identity not verified")
+		transport = ws.New()
+	}
+
+	effectiveManagerAddr := *managerAddr
+	if *relayAddr != "" {
+		effectiveManagerAddr = *relayAddr
 	}
 
 	a, err := agent.New(transport, agent.Config{
-		ManagerAddr:               *managerAddr,
+		ManagerAddr:               effectiveManagerAddr,
 		Discoverer:                &udp.Discoverer{},
 		PairingToken:              *pairingToken,
 		IdentityDir:               *identityDir,

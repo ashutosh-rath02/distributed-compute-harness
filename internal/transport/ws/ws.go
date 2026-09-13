@@ -84,6 +84,21 @@ func (t *Transport) Listen(ctx context.Context, addr string) (<-chan domain.Conn
 	if err != nil {
 		return nil, fmt.Errorf("ws: listen on %s: %w", addr, err)
 	}
+	return t.ListenOn(ctx, ln), nil
+}
+
+// ListenOn serves WebSocket upgrades over an already-established
+// net.Listener, instead of one Listen builds itself from an address. This
+// is what lets a transport whose connections don't come from a plain
+// net.Listen — e.g. internal/transport/relay, whose "listener" is really a
+// pool of outbound connections to a relay server — reuse this transport's
+// WS/TLS/mux serving logic unchanged rather than reimplementing it
+// alongside it, which would risk the two silently drifting apart (the
+// /harness path, extraRoutes wiring, and shutdown behavior all need to
+// match exactly). ln is wrapped in TLS here (not by the caller) so that
+// relay-backed callers can't forget it and silently fall back to
+// plaintext.
+func (t *Transport) ListenOn(ctx context.Context, ln net.Listener) <-chan domain.Conn {
 	if t.serverTLS != nil {
 		ln = tls.NewListener(ln, t.serverTLS)
 	}
@@ -115,7 +130,7 @@ func (t *Transport) Listen(ctx context.Context, addr string) (<-chan domain.Conn
 	}()
 	go server.Serve(ln)
 
-	return conns, nil
+	return conns
 }
 
 // conn adapts a nhooyr.io/websocket connection to domain.Conn, framing each

@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"log"
@@ -17,9 +18,12 @@ import (
 	"time"
 
 	"home-harness/internal/discovery/udp"
+	"home-harness/internal/domain"
 	"home-harness/internal/manager"
 	"home-harness/internal/mtls"
 	"home-harness/internal/store/persistent"
+	"home-harness/internal/transport/multi"
+	"home-harness/internal/transport/relay"
 	"home-harness/internal/transport/ws"
 )
 
@@ -34,10 +38,15 @@ func main() {
 	agentBinaryPath := flag.String("agent-binary", "", "path to the agent executable to serve for self-update (POST /nodes/{id}/update); self-update disabled if unset")
 	disableDiscovery := flag.Bool("disable-discovery", false, "disable the LAN multicast discovery beacon")
 	insecure := flag.Bool("insecure", false, "disable TLS: agents connect over plaintext ws:// with no manager authentication (dev/local use only). POST /workloads still returns 202 and dispatches ASSIGN, but an agent run with its own -insecure will refuse to execute it (see cmd/agent's -insecure) rather than run arbitrary code for a manager it can't verify")
+	relayAddr := flag.String("relay-addr", "", "address of a relay server (cmd/relay) to also accept connections through, for agents that aren't on this manager's LAN; disabled if unset")
+	relayToken := flag.String("relay-token", "", "shared secret identifying this manager's session at the relay (required if -relay-addr is set; same care as -pairing-token: long, random, not reused)")
 	flag.Parse()
 
 	if *pairingToken == "" {
 		log.Fatal("manager: -pairing-token is required")
+	}
+	if *relayAddr != "" && *relayToken == "" {
+		log.Fatal("manager: -relay-token is required when -relay-addr is set")
 	}
 
 	store, err := persistent.Open(*dbPath)
@@ -46,10 +55,12 @@ func main() {
 	}
 	defer store.Close()
 
+	var cert tls.Certificate
 	transport := ws.New()
 	var fingerprint string
 	if !*insecure {
-		cert, err := mtls.LoadOrCreateCert(*tlsDir)
+		var err error
+		cert, err = mtls.LoadOrCreateCert(*tlsDir)
 		if err != nil {
 			log.Fatalf("manager: %v", err)
 		}
@@ -60,7 +71,25 @@ func main() {
 		log.Println("manager: running with -insecure: plaintext transport, no manager authentication")
 	}
 
-	srv := manager.NewServer(transport, store, manager.Config{
+	// finalTransport is what the manager actually listens with — just the
+	// LAN transport, unless -relay-addr opts into also accepting
+	// connections relayed from off-LAN agents (v5 remote part 1). Composed
+	// here at the composition root (multi.Transport), not inside
+	// manager.Server, so neither transport package nor Server needs to
+	// know the other listening path exists.
+	var finalTransport domain.Transport = transport
+	if *relayAddr != "" {
+		var relayTransport domain.Transport
+		if !*insecure {
+			relayTransport = relay.NewTLSServer(*relayToken, cert)
+		} else {
+			relayTransport = relay.New(*relayToken)
+		}
+		finalTransport = multi.New().Add(transport, *addr).Add(relayTransport, *relayAddr)
+		log.Printf("manager: also accepting connections via relay at %s", *relayAddr)
+	}
+
+	srv := manager.NewServer(finalTransport, store, manager.Config{
 		Addr:              *addr,
 		PairingToken:      *pairingToken,
 		HeartbeatTimeout:  *heartbeatTimeout,
