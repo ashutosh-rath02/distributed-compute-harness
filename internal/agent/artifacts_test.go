@@ -87,3 +87,24 @@ func TestHTTPTransferUploadSendsHashAndChecksReply(t *testing.T) {
 		t.Fatal("an upload the manager stored differently was reported as delivered")
 	}
 }
+
+// The manager reserves each upload's declared Content-Length against the
+// attempt's budget, so even an empty output must declare one.
+func TestHTTPTransferUploadDeclaresLengthForEmptyFile(t *testing.T) {
+	var gotLength int64 = -2
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotLength = r.ContentLength
+		w.WriteHeader(http.StatusCreated)
+		io.WriteString(w, `{"sha256":"`+shaOf(nil)+`","size":0}`)
+	}))
+	defer srv.Close()
+	src := filepath.Join(t.TempDir(), "empty.txt")
+	os.WriteFile(src, nil, 0o600)
+	xfer := &httpTransfer{client: srv.Client(), base: srv.URL, workload: fileWorkloadID, token: "tok"}
+	if _, err := xfer.Upload(context.Background(), "empty.txt", src); err != nil {
+		t.Fatalf("Upload: %v", err)
+	}
+	if gotLength != 0 {
+		t.Fatalf("server saw Content-Length %d, want 0", gotLength)
+	}
+}

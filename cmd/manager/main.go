@@ -152,10 +152,14 @@ func main() {
 		}
 		artifactStore, err = artifacts.Open(artifacts.Config{Dir: *artifactDir, MaxBytes: maxBytes, TotalBytes: totalBytes})
 		if err != nil {
-			log.Fatalf("manager: %v", err)
+			// Like a bad -agent-binary set: lose the feature, keep the
+			// manager (a launcher would otherwise crash-loop at every boot).
+			log.Printf("manager: WORKLOAD FILES DISABLED: %v", err)
+			artifactStore = nil
+		} else {
+			used, total := artifactStore.Usage()
+			log.Printf("manager: workload file store at %s (%d of %d bytes used)", *artifactDir, used, total)
 		}
-		used, total := artifactStore.Usage()
-		log.Printf("manager: workload file store at %s (%d of %d bytes used)", *artifactDir, used, total)
 	}
 	srv := manager.NewServer(finalTransport, store, manager.Config{
 		Addr:                *addr,

@@ -165,8 +165,8 @@ func New(transport domain.Transport, cfg Config) (*Agent, error) {
 	if cfg.WorkDir == "" {
 		cfg.WorkDir = defaultWorkRoot(id.NodeID)
 	}
-	if within(cfg.WorkDir, cfg.IdentityDir) {
-		return nil, fmt.Errorf("agent: -work-dir %s must not be inside the identity directory %s", cfg.WorkDir, cfg.IdentityDir)
+	if within(cfg.WorkDir, cfg.IdentityDir) || within(cfg.IdentityDir, cfg.WorkDir) {
+		return nil, fmt.Errorf("agent: -work-dir %s and the identity directory %s must not contain each other", cfg.WorkDir, cfg.IdentityDir)
 	}
 	a := &Agent{cfg: cfg, transport: transport, identity: id, startedAt: time.Now(), executor: NewExecutorWithSlots(cfg.WorkloadSlots), binaryHash: binaryHash}
 	a.executor.SetWorkRoot(cfg.WorkDir)

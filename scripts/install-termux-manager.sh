@@ -92,7 +92,8 @@ exec "$install_dir/bin/manager" \
   -operator-token-file "$install_dir/state/operator-token" \
   "${agent_args[@]}" \
   -db "$install_dir/state/manager.db" \
-  -tls-dir "$install_dir/state/tls"
+  -tls-dir "$install_dir/state/tls" \
+  -artifact-dir "$install_dir/state/artifacts"
 LAUNCHER
 chmod 700 "$launcher"
 

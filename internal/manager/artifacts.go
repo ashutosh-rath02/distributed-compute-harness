@@ -44,6 +44,9 @@ type transferGrant struct {
 	key      [32]byte
 	uploads  map[string]domain.ArtifactRef // declared output name -> stored
 	inFlight map[string]bool
+	// reserved is how many bytes this attempt's uploads have claimed of
+	// its budget (the store's per-file limit, for all outputs together).
+	reserved int64
 }
 
 type grantTable struct {
@@ -116,23 +119,37 @@ func (g *grantTable) size() int {
 	return len(g.byWork)
 }
 
-// beginUpload claims name for one upload in this attempt.
-func (g *grantTable) beginUpload(gr *transferGrant, name string) bool {
+var (
+	errAlreadyUploaded = errors.New("this output was already uploaded for this attempt")
+	errOverBudget      = errors.New("this attempt's outputs would exceed its upload budget")
+)
+
+// beginUpload claims name for one upload of size bytes in this attempt,
+// out of a budget shared by all its outputs.
+func (g *grantTable) beginUpload(gr *transferGrant, name string, size, budget int64) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if _, done := gr.uploads[name]; done || gr.inFlight[name] {
-		return false
+		return errAlreadyUploaded
+	}
+	if size < 0 || gr.reserved+size > budget {
+		return errOverBudget
 	}
 	gr.inFlight[name] = true
-	return true
+	gr.reserved += size
+	return nil
 }
 
-func (g *grantTable) finishUpload(gr *transferGrant, name string, ref *domain.ArtifactRef) {
+// finishUpload ends name's upload: ref is what was stored, or nil if it
+// failed (its reservation is returned and it may be retried).
+func (g *grantTable) finishUpload(gr *transferGrant, name string, size int64, ref *domain.ArtifactRef) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	delete(gr.inFlight, name)
 	if ref != nil {
 		gr.uploads[name] = *ref
+	} else {
+		gr.reserved -= size
 	}
 }
 
@@ -377,19 +394,33 @@ func (s *Server) agentPutOutput(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "X-Artifact-SHA256 must be the content's lowercase hex sha256", http.StatusBadRequest)
 		return
 	}
-	if !s.grants.beginUpload(gr, name) {
-		http.Error(w, "this output was already uploaded for this attempt", http.StatusConflict)
+	// The size is declared up front so it can be reserved against the
+	// attempt's budget before a byte is stored.
+	size := r.ContentLength
+	if size < 0 {
+		http.Error(w, "Content-Length is required", http.StatusLengthRequired)
 		return
 	}
 	store := s.cfg.Artifacts
-	info, err := store.Put(http.MaxBytesReader(w, r.Body, store.MaxBytes()+1), sha)
+	switch err := s.grants.beginUpload(gr, name, size, store.MaxBytes()); {
+	case errors.Is(err, errAlreadyUploaded):
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	case err != nil:
+		http.Error(w, err.Error(), http.StatusRequestEntityTooLarge)
+		return
+	}
+	info, err := store.PutLimited(http.MaxBytesReader(w, r.Body, size+1), sha, size)
+	if err == nil && info.Size != size {
+		err = fmt.Errorf("%w: got %d bytes, Content-Length said %d", artifacts.ErrHashMismatch, info.Size, size)
+	}
 	if err != nil {
-		s.grants.finishUpload(gr, name, nil)
+		s.grants.finishUpload(gr, name, size, nil)
 		writeArtifactError(w, err)
 		return
 	}
 	ref := domain.ArtifactRef{Name: name, SHA256: info.SHA256, Size: info.Size}
-	s.grants.finishUpload(gr, name, &ref)
+	s.grants.finishUpload(gr, name, size, &ref)
 	writeJSON(w, http.StatusCreated, info)
 }
 

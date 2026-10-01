@@ -37,17 +37,28 @@ func TestGrantUploadsOncePerOutputAndVerifies(t *testing.T) {
 	g := newGrantTable()
 	tok, _ := g.mint("w", "n")
 	gr, _ := g.lookup(tok)
-	if !g.beginUpload(gr, "a") || g.beginUpload(gr, "a") {
+	const budget = 10
+	if g.beginUpload(gr, "a", 1, budget) != nil || g.beginUpload(gr, "a", 1, budget) == nil {
 		t.Fatal("a second concurrent upload of one output was allowed")
 	}
-	g.finishUpload(gr, "a", nil) // failed: may retry
-	if !g.beginUpload(gr, "a") {
+	g.finishUpload(gr, "a", 1, nil) // failed: may retry, reservation returned
+	if g.beginUpload(gr, "a", 1, budget) != nil {
 		t.Fatal("a failed upload must not use up the output")
 	}
 	ref := domain.ArtifactRef{Name: "a", SHA256: "aa", Size: 1}
-	g.finishUpload(gr, "a", &ref)
-	if g.beginUpload(gr, "a") {
+	g.finishUpload(gr, "a", 1, &ref)
+	if g.beginUpload(gr, "a", 1, budget) == nil {
 		t.Fatal("an output was accepted twice")
+	}
+	// All of one attempt's outputs share the budget (1 of 10 used).
+	if err := g.beginUpload(gr, "big", 10, budget); err == nil {
+		t.Fatal("an upload over the remaining budget was allowed")
+	}
+	if err := g.beginUpload(gr, "fits", 9, budget); err != nil {
+		t.Fatalf("an upload within the budget was refused: %v", err)
+	}
+	if err := g.beginUpload(gr, "more", 1, budget); err == nil {
+		t.Fatal("a concurrent upload past the reserved budget was allowed")
 	}
 
 	w := domain.Workload{ID: "w", Outputs: []string{"a", "b"}}

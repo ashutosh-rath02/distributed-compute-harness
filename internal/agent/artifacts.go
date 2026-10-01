@@ -101,7 +101,11 @@ func (t *httpTransfer) Upload(ctx context.Context, name, src string) (domain.Art
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return domain.ArtifactRef{}, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, t.url("outputs", name), io.LimitReader(f, size))
+	var body io.Reader = io.LimitReader(f, size)
+	if size == 0 {
+		body = http.NoBody // else the client sends "unknown length" and the manager needs one
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, t.url("outputs", name), body)
 	if err != nil {
 		return domain.ArtifactRef{}, err
 	}
