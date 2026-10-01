@@ -118,6 +118,19 @@ func (r *Registry) Get(id domain.NodeID) (*NodeRecord, bool) {
 	return rec, ok
 }
 
+// Remove forgets a node entirely, returning its last record (with any live
+// Conn, so the caller can close it). Used by revocation, where the node
+// must vanish from listings and placement rather than linger as OFFLINE.
+func (r *Registry) Remove(id domain.NodeID) (*NodeRecord, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rec, ok := r.nodes[id]
+	if ok {
+		delete(r.nodes, id)
+	}
+	return rec, ok
+}
+
 // SetState updates a known node's lifecycle state.
 func (r *Registry) SetState(id domain.NodeID, state domain.NodeState) {
 	r.mu.Lock()

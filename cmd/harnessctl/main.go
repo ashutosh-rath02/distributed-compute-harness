@@ -68,6 +68,12 @@ func main() {
 		err = requireArgs(args, 2, "cancel <workload-id>", func() error { return client.cmdCancelWorkload(args[1]) })
 	case "update":
 		err = requireArgs(args, 2, "update <id>", func() error { return client.cmdUpdateNode(args[1]) })
+	case "revoke":
+		err = requireArgs(args, 2, "revoke <id>", func() error { return client.cmdRevokeNode(args[1]) })
+	case "revocations":
+		err = client.cmdRevocations()
+	case "unrevoke":
+		err = requireArgs(args, 2, "unrevoke <id>", func() error { return client.cmdUnrevokeNode(args[1]) })
 	case "join":
 		err = requireArgs(args, 2, "join <manager-lan-addr|remote> [android]", func() error {
 			platform := "windows"
@@ -130,6 +136,18 @@ Commands:
                         started with -agent-binary); the node reconnects on
                         its own once done — no manual file transfer or
                         restart. "nodes" flags any node this would affect.
+  revoke <id>           permanently refuse a node: it is disconnected,
+                        forgotten, and rejected on every future REGISTER —
+                        even with the shared pairing token its launcher
+                        still holds. Its pinned workloads are canceled.
+                        This denies one identity: a device that holds the
+                        shared pairing token can mint a new one, so to cut
+                        such a device off completely also rotate the
+                        manager's -pairing-token.
+  revocations           list revoked node identities
+  unrevoke <id>         lift a revocation; the node must then be admitted
+                        afresh (its shared-token launcher does this on its
+                        own; a one-time-invitation node needs a new one)
   join <manager-addr|remote> [android]
                         print a ready-to-run onboarding block that
                         registers an agent — paste it into a terminal on
@@ -628,6 +646,63 @@ func (c *apiClient) cmdUpdateNode(id string) error {
 		return nil
 	}
 	fmt.Println("Update accepted — the node will reconnect on its own once it's applied.")
+	return nil
+}
+
+func (c *apiClient) cmdRevokeNode(id string) error {
+	resp, err := c.http.Post(c.base+"/nodes/"+id+"/revoke", "application/json", nil)
+	if err != nil {
+		return fmt.Errorf("revoke node: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("manager returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	var revoked domain.RevokedNode
+	if err := json.NewDecoder(resp.Body).Decode(&revoked); err != nil {
+		return err
+	}
+	fmt.Printf("Revoked %s (%s). It has been disconnected and will be refused from now on.\n", revoked.NodeID, revoked.Name)
+	fmt.Println("If that device holds the shared pairing token, also rotate the manager's -pairing-token to stop it enrolling a new identity.")
+	return nil
+}
+
+func (c *apiClient) cmdRevocations() error {
+	var revoked []domain.RevokedNode
+	if err := c.get("/revocations", &revoked); err != nil {
+		return err
+	}
+	if len(revoked) == 0 {
+		fmt.Println("No revoked nodes.")
+		return nil
+	}
+	fmt.Printf("%-24s %-20s %-16s %s\n", "NODE ID", "NAME", "PLATFORM", "REVOKED")
+	for _, r := range revoked {
+		platform := "-"
+		if r.Platform.OS != "" {
+			platform = r.Platform.OS + "/" + r.Platform.Architecture
+		}
+		fmt.Printf("%-24s %-20s %-16s %s\n", r.NodeID, truncate(r.Name, 20), platform, r.RevokedAt.Local().Format(time.RFC3339))
+	}
+	return nil
+}
+
+func (c *apiClient) cmdUnrevokeNode(id string) error {
+	req, err := http.NewRequest(http.MethodDelete, c.base+"/revocations/"+id, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("unrevoke node: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("manager returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	fmt.Printf("Revocation of %s lifted. The node must be admitted again: a shared-token launcher reconnects on its own; a node enrolled by invitation needs a new one.\n", id)
 	return nil
 }
 

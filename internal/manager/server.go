@@ -62,6 +62,11 @@ type PersistentStore interface {
 	ListNodes() ([]domain.Manifest, error)
 	UpsertWorkload(pw domain.PersistedWorkload) error
 	ListWorkloads() ([]domain.PersistedWorkload, error)
+	// RevokeNode must persist the denylist entry and forget the node's
+	// record atomically (see revocation.go).
+	RevokeNode(rev domain.RevokedNode) error
+	ListRevoked() ([]domain.RevokedNode, error)
+	UnrevokeNode(id domain.NodeID) error
 }
 
 // Server is the control-plane process: it accepts connections over a
@@ -80,6 +85,13 @@ type Server struct {
 	// coupling to networking code.
 	Events      *eventbus.Bus
 	enrollments *enrollmentStore
+
+	// admitMu serializes admission (handleRegister's revocation check
+	// through its registry Upsert) against RevokeNode/UnrevokeNode, so a
+	// REGISTER that passed the check can never re-add a node a concurrent
+	// revocation has just removed.
+	admitMu     sync.Mutex
+	revocations *revocationList
 
 	pendingMu sync.Mutex
 	pending   map[string]pendingCommand
@@ -127,6 +139,7 @@ func NewServer(transport domain.Transport, store PersistentStore, cfg Config) *S
 		Events:      eventbus.New(),
 		pending:     make(map[string]pendingCommand),
 		enrollments: newEnrollmentStore(),
+		revocations: newRevocationList(),
 	}
 
 	if cfg.AgentBinaryPath == "" {
@@ -378,11 +391,26 @@ func newRandomID() (string, error) {
 // canceled.
 func (s *Server) Run(ctx context.Context) error {
 	if s.store != nil {
+		// Revocations load first so the seeding below can skip them.
+		// RevokeNode forgets the node's record in the same transaction, so
+		// a revoked-but-still-known node should never exist, but refusing
+		// to resurrect one costs nothing.
+		revoked, err := s.store.ListRevoked()
+		if err != nil {
+			return fmt.Errorf("manager: load revocations: %w", err)
+		}
+		for _, rev := range revoked {
+			s.revocations.put(rev)
+		}
+
 		manifests, err := s.store.ListNodes()
 		if err != nil {
 			return fmt.Errorf("manager: load persisted nodes: %w", err)
 		}
 		for _, m := range manifests {
+			if s.revocations.has(m.Node.Identity.NodeID) {
+				continue
+			}
 			s.Registry.Seed(m)
 		}
 
@@ -461,6 +489,14 @@ func (s *Server) handleConn(ctx context.Context, conn domain.Conn) {
 			continue
 		}
 
+		// RevokeNode closes a revoked node's connection, but a message
+		// already in flight could still arrive first: drop the connection
+		// rather than act on it (e.g. a late WORKLOAD_STATUS overwriting
+		// the revocation's CANCELED/FAILED outcome).
+		if nodeID != "" && s.revocations.has(nodeID) {
+			return
+		}
+
 		// Every message type except REGISTER requires this connection to
 		// already be bound to a verified identity. Trusting env.Source
 		// instead would let a registered connection forge messages on
@@ -518,12 +554,26 @@ func (s *Server) handleRegister(ctx context.Context, conn domain.Conn, env *prot
 		return ""
 	}
 
+	// Held from the revocation check through persisting the admission, so
+	// RevokeNode can't interleave between "allowed" and "registered" (see
+	// admitMu). Registrations are rare enough that one lock is fine.
+	s.admitMu.Lock()
+	// A revoked identity is refused before any credential is considered,
+	// even the shared pairing token: revocation exists precisely for
+	// devices whose launcher still holds a valid one.
+	if s.revocations.has(claimedID) {
+		s.admitMu.Unlock()
+		s.reject(ctx, conn, env.Source, revokedReason)
+		return ""
+	}
+
 	// Admission credentials are required only for a previously unknown
 	// identity. Once admitted, the persistent Ed25519 key is the durable
 	// credential: a reconnect still has to pass the proof-of-possession
 	// check above, but does not need to reuse a one-time enrollment token.
 	_, knownNode := s.Registry.Get(claimedID)
 	if !knownNode && payload.PairingToken != s.cfg.PairingToken && !s.enrollments.consume(payload.PairingToken) {
+		s.admitMu.Unlock()
 		s.reject(ctx, conn, env.Source, "invalid pairing token")
 		return ""
 	}
@@ -536,6 +586,7 @@ func (s *Server) handleRegister(ctx context.Context, conn domain.Conn, env *prot
 			log.Printf("manager: failed to persist node %s: %v", claimedID, err)
 		}
 	}
+	s.admitMu.Unlock()
 
 	if isNew {
 		log.Printf("node.registered: %s (%s)", claimedID, node.Name)

@@ -38,6 +38,9 @@
   }
   button:hover { background: #1f6feb; }
   button.secondary { background: transparent; color: inherit; border: 1px solid color-mix(in srgb, CanvasText 25%, transparent); }
+  button.small { margin-top: 0; padding: 4px 10px; font-size: 0.8rem; }
+  button.danger { background: transparent; color: #f85149; border: 1px solid color-mix(in srgb, #f85149 55%, transparent); }
+  button.danger:hover { background: color-mix(in srgb, #f85149 15%, transparent); }
   textarea {
     width: 100%; box-sizing: border-box; min-height: 140px; margin-top: 12px;
     font-family: ui-monospace, Consolas, monospace; font-size: 0.8rem; padding: 10px;
@@ -89,6 +92,11 @@
 
   <h2>Nodes</h2>
   <div id="nodes"></div>
+  <div id="revokedSection" hidden>
+    <h2>Revoked devices</h2>
+    <p class="hint">Refused on every reconnect, even with the shared pairing token. Revocation denies one identity: a device that knows the shared pairing token can enroll a new one, so also restart the manager with a new <code>-pairing-token</code> to cut it off completely.</p>
+    <div id="revoked"></div>
+  </div>
 
   <h2>Run a visible test</h2>
   <div class="card">
@@ -228,12 +236,63 @@
         + '<td><span class="' + stateClass(n.state) + '">' + escapeHtml(n.state) + "</span>" + outdated + "</td>"
         + "<td>" + cpu + "</td>"
         + "<td>" + mem + "</td>"
+        + '<td><button class="small danger" data-revoke="' + escapeHtml(n.nodeId) + '" data-name="'
+        + escapeHtml(n.name || n.nodeId) + '">Revoke</button></td>'
         + "</tr>";
     }).join("");
     el.innerHTML =
-      "<table><thead><tr><th>Name</th><th>Platform</th><th>State</th><th>CPU</th><th>Mem free</th></tr></thead>"
+      "<table><thead><tr><th>Name</th><th>Platform</th><th>State</th><th>CPU</th><th>Mem free</th><th></th></tr></thead>"
       + "<tbody>" + rows + "</tbody></table>";
   }
+
+  async function refreshRevoked() {
+    try {
+      const resp = await fetch("/revocations");
+      const revoked = (await resp.json()) || [];
+      document.getElementById("revokedSection").hidden = revoked.length === 0;
+      document.getElementById("revoked").innerHTML = !revoked.length ? ""
+        : "<table><thead><tr><th>Name</th><th>Node ID</th><th>Revoked</th><th></th></tr></thead><tbody>"
+          + revoked.map((r) => "<tr><td>" + escapeHtml(r.name || "-") + "</td><td><code>"
+            + escapeHtml(r.nodeId) + "</code></td><td>" + escapeHtml(new Date(r.revokedAt).toLocaleString())
+            + '</td><td><button class="small secondary" data-unrevoke="' + escapeHtml(r.nodeId) + '">Allow re-enrollment</button></td></tr>').join("")
+          + "</tbody></table>";
+    } catch (e) {
+      document.getElementById("revokedSection").hidden = false;
+      document.getElementById("revoked").innerHTML = '<p class="error">Failed to load revoked devices.</p>';
+    }
+  }
+
+  // Event delegation: rows are re-rendered on every SSE event, so the
+  // buttons inside them can't hold their own listeners.
+  document.getElementById("nodes").addEventListener("click", async (event) => {
+    const button = event.target.closest("button[data-revoke]");
+    if (!button) return;
+    const name = button.dataset.name;
+    if (!confirm("Revoke " + name + "?\n\nIt will be disconnected now and refused on every reconnect, even with the shared pairing token. Workloads pinned to it are canceled.")) return;
+    button.disabled = true;
+    try {
+      const resp = await fetch("/nodes/" + encodeURIComponent(button.dataset.revoke) + "/revoke", {method: "POST"});
+      if (!resp.ok) throw new Error((await resp.text()).trim() || resp.statusText);
+    } catch (e) {
+      alert("Revoke failed: " + e.message);
+    }
+    refreshNodes();
+    refreshRevoked();
+  });
+
+  document.getElementById("revoked").addEventListener("click", async (event) => {
+    const button = event.target.closest("button[data-unrevoke]");
+    if (!button) return;
+    button.disabled = true;
+    try {
+      const resp = await fetch("/revocations/" + encodeURIComponent(button.dataset.unrevoke), {method: "DELETE"});
+      if (!resp.ok) throw new Error((await resp.text()).trim() || resp.statusText);
+      alert("Revocation lifted. The device must be admitted again: one onboarded with the shared pairing token reconnects on its own; one onboarded by invitation needs a fresh QR/link.");
+    } catch (e) {
+      alert("Could not lift the revocation: " + e.message);
+    }
+    refreshRevoked();
+  });
 
   function renderTargetOptions(nodes) {
     const select = document.getElementById("taskTarget");
@@ -297,6 +356,7 @@
 
   refreshNodes();
   refreshWorkloads();
+  refreshRevoked();
 
   // Live updates via the existing SSE event stream — EventSource
   // reconnects on its own if the connection drops, so no polling loop is
@@ -304,9 +364,15 @@
   try {
     const events = new EventSource("/events");
     events.onmessage = (message) => {
-      try { addTimelineEvent(JSON.parse(message.data)); } catch (e) { /* keep live refresh working */ }
+      let type = "";
+      try {
+        const event = JSON.parse(message.data);
+        type = event.type;
+        addTimelineEvent(event);
+      } catch (e) { /* keep live refresh working */ }
       refreshNodes();
       refreshWorkloads();
+      if (type === "node.revoked" || type === "node.unrevoked") refreshRevoked();
     };
   } catch (e) {
     // SSE unsupported/unavailable: fall back to a slow poll so the page

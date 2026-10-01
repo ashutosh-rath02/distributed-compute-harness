@@ -17,6 +17,7 @@ import (
 
 var nodesBucket = []byte("nodes")
 var workloadsBucket = []byte("workloads")
+var revokedBucket = []byte("revoked")
 
 // Record is what the persistent store keeps for a node: its last-known
 // manifest plus registration bookkeeping.
@@ -38,11 +39,12 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("persistent: open %q: %w", path, err)
 	}
 	err = db.Update(func(tx *bbolt.Tx) error {
-		if _, err := tx.CreateBucketIfNotExists(nodesBucket); err != nil {
-			return err
+		for _, name := range [][]byte{nodesBucket, workloadsBucket, revokedBucket} {
+			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
+				return err
+			}
 		}
-		_, err := tx.CreateBucketIfNotExists(workloadsBucket)
-		return err
+		return nil
 	})
 	if err != nil {
 		db.Close()
@@ -159,6 +161,59 @@ func (s *Store) DeleteNode(id domain.NodeID) error {
 	})
 	if err != nil {
 		return fmt.Errorf("persistent: delete node %s: %w", id, err)
+	}
+	return nil
+}
+
+// RevokeNode records rev in the revocation denylist and forgets the node's
+// persisted record, in one transaction: a crash can never leave a node
+// both revoked and still seeded as known (or forgotten but not revoked,
+// which would let a shared-token launcher silently re-admit it).
+func (s *Store) RevokeNode(rev domain.RevokedNode) error {
+	data, err := json.Marshal(rev)
+	if err != nil {
+		return fmt.Errorf("persistent: marshal revocation for %s: %w", rev.NodeID, err)
+	}
+	err = s.db.Update(func(tx *bbolt.Tx) error {
+		if err := tx.Bucket(revokedBucket).Put([]byte(rev.NodeID), data); err != nil {
+			return err
+		}
+		return tx.Bucket(nodesBucket).Delete([]byte(rev.NodeID))
+	})
+	if err != nil {
+		return fmt.Errorf("persistent: revoke node %s: %w", rev.NodeID, err)
+	}
+	return nil
+}
+
+// ListRevoked returns every persisted revocation, e.g. to rebuild the
+// manager's denylist after a restart.
+func (s *Store) ListRevoked() ([]domain.RevokedNode, error) {
+	var out []domain.RevokedNode
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		return tx.Bucket(revokedBucket).ForEach(func(_, data []byte) error {
+			var rev domain.RevokedNode
+			if err := json.Unmarshal(data, &rev); err != nil {
+				return err
+			}
+			out = append(out, rev)
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, fmt.Errorf("persistent: list revoked: %w", err)
+	}
+	return out, nil
+}
+
+// UnrevokeNode removes id from the revocation denylist. The node's record
+// was already forgotten by RevokeNode, so it must be admitted afresh.
+func (s *Store) UnrevokeNode(id domain.NodeID) error {
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		return tx.Bucket(revokedBucket).Delete([]byte(id))
+	})
+	if err != nil {
+		return fmt.Errorf("persistent: unrevoke node %s: %w", id, err)
 	}
 	return nil
 }

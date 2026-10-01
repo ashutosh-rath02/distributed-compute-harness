@@ -104,6 +104,37 @@ func (wr *WorkloadRegistry) FailInFlightFor(nodeID domain.NodeID, reason string)
 	return changed
 }
 
+// CancelPinnedTo marks every workload pinned to nodeID that is still in
+// flight, or that its restart policy would bring back, as CANCELED, and
+// returns the changed records. It exists for revoked nodes: a pinned
+// workload may only ever run on its node, so without this the reconciler
+// would defer its restart forever against a node that can never return.
+// CANCELED is terminal and never restarted. Unpinned workloads are left to
+// FailInFlightFor, since re-placing them elsewhere is still legitimate.
+func (wr *WorkloadRegistry) CancelPinnedTo(nodeID domain.NodeID, reason string) []WorkloadRecord {
+	wr.mu.Lock()
+	defer wr.mu.Unlock()
+	var changed []WorkloadRecord
+	now := time.Now().UTC()
+	for _, rec := range wr.workloads {
+		if !rec.Workload.Pinned || rec.Workload.Target != nodeID {
+			continue
+		}
+		state := rec.Status.State
+		inFlight := state == domain.WorkloadPending || state == domain.WorkloadRunning
+		if !inFlight && !rec.Workload.RestartPolicy.WantsRestartAfter(state) {
+			continue
+		}
+		rec.Status.State = domain.WorkloadCanceled
+		rec.Status.Error = reason
+		if inFlight || rec.Status.FinishedAt.IsZero() {
+			rec.Status.FinishedAt = now
+		}
+		changed = append(changed, *rec)
+	}
+	return changed
+}
+
 // RestartCandidates returns copies of every workload whose policy wants a
 // restart from its current state (RestartPolicy.WantsRestartAfter) and
 // whose NextRestartAt has passed. Returns copies and takes no action (like

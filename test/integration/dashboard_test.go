@@ -68,6 +68,11 @@ func TestDashboardServesHTML(t *testing.T) {
 	if !strings.Contains(string(body), "Create QR + link") {
 		t.Fatal("expected QR enrollment control in dashboard")
 	}
+	for _, want := range []string{`data-revoke=`, `"/revocations"`, `"/revoke"`, `Allow re-enrollment`} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("expected node revocation controls in dashboard (missing %q)", want)
+		}
+	}
 }
 
 // TestJoinScriptEndpointReturnsGeneratedScript proves GET /join-script

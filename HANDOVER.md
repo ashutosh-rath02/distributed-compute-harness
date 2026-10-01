@@ -1,6 +1,6 @@
 # Home Compute Harness — Handover Document
 
-**Status as of:** 2026-09-13
+**Status as of:** 2026-10-01 (sections 9, 10 and 11 updated after node revocation and the operator-API guard landed)
 **Prepared for:** handover to another engineering agent (Codex) picking up this project
 **Repo:** `home-harness` (Go module), GitHub `https://github.com/ashutosh-rath02/distributed-compute-harness.git`
 **Companion docs already in this repo — read these too, this document does not replace them:**
@@ -177,6 +177,10 @@ There are now three distinct ways a node joins a manager, in the order they were
 4. **Off-LAN, relay-based** (v5 remote part 1, most recent) — for a device that isn't on the manager's LAN at all (different network, mobile data). See §9.1.
 5. **Phone-first QR/link enrollment** — the loopback dashboard creates a 10-minute, single-use invitation for Windows or Android. LAN invitations point at the phone directly; internet invitations use the relay's browser-trusted HTTPS gateway. The QR/link contains no permanent pairing token or manager relay session. A relay enrollment receives an opaque, authenticated per-device relay credential that remains usable across relay restarts when `-alias-key` is preserved.
 
+### Admission vs. reconnect, and revocation
+
+Admission and reconnection are different credentials. A previously unknown identity needs an admission credential at `REGISTER` (the shared `-pairing-token`, or a consumed one-time invitation token); a known identity reconnects on proof-of-possession of its Ed25519 key alone (`handleRegister`). Because of that, rotating the pairing token no longer evicts anyone, so **revocation** (`internal/manager/revocation.go`) is the way to take an admission back: `POST /nodes/{id}/revoke`, `harnessctl revoke <id>`, or the dashboard's per-node *Revoke* button. A revocation is a persisted denylist entry (bolt `revoked` bucket, written in the same transaction that forgets the node's record) checked in `handleRegister` *before* any token is considered, under `admitMu` so a racing `REGISTER` can't re-add a node mid-revoke. Revoking closes the live connection (the agent cancels its running workload on disconnect), fails in-flight unpinned work (its restart policy may re-place it elsewhere), and cancels workloads pinned to the node (otherwise the reconciler would defer them forever). `DELETE /revocations/{id}` / `harnessctl unrevoke` lifts it; the node then needs a fresh admission (a shared-token launcher does this on its own; an invitation-enrolled node needs a new invitation). Limits, stated wherever revocation is offered: it denies one *identity* (a shared-token holder can mint a new one, so also rotate `-pairing-token`), and an `ha1.` relay alias stays usable at the relay until `-alias-key` is rotated (the manager still rejects it at `REGISTER`). A revoked agent keeps retrying at its normal capped backoff (30s), each attempt logged as `registration rejected: node revoked by operator`.
+
 ### 9.1 The relay path in detail
 
 **Problem it solves:** home routers don't accept unsolicited inbound connections, and port-forwarding is exactly the kind of manual, fragile, per-router chore this project has been actively removing. The user explicitly chose a **self-hosted relay** over a third-party mesh VPN (e.g. Tailscale) specifically to avoid a third-party dependency, even though a mesh VPN would have been less code to build.
@@ -199,23 +203,14 @@ Relay onboarding scripts are available from both the dashboard and `harnessctl j
 
 ## 10. What's next — concrete options for the following increment
 
-In priority order, as things stand:
+Done since the previous version of this list: phone-first one-time enrollment (old Option A), the relay-carried first download for invitation-enrolled remote devices (old Option B, for the invitation path; `harnessctl join remote` remains a manual-binary path), node revocation, and the operator-API browser guard. Remaining options, roughly in the order the architecture brief (`docs/SSE_Architecture_and_Solution_Brief.md` §10–11) ranks them:
 
-### Option A: phone-first, one-time enrollment
-The Termux-hosted manager dashboard can create a short-lived, single-use LAN enrollment invitation as both a QR code and a shareable link. The public token-scoped surface serves only a landing page, setup script, and matching agent binary; permanent pairing and relay secrets remain private. Successful registration consumes the token, while later reconnects authenticate with the node's persistent Ed25519 identity.
+- **Trust administration, part 2:** operator rename/labels, duplicate-physical-host warning (two identities on one machine currently double-count capacity), an audit log of admissions/revocations, credential rotation helpers.
+- **Capacity reservation + queueing:** placement checks live metrics but reserves nothing, so concurrent submissions can oversubscribe a node, and a submission with no eligible node is rejected rather than queued. Both are prerequisites for request-level fan-out/fan-in batch jobs.
+- **Multi-platform binary catalog:** the manager serves one agent binary at a time, so a phone manager can onboard only one platform without a restart.
+- **Safe capability UX / LLM vertical slice / v6 AI intent planner:** typed tasks instead of raw commands in the dashboard; `llm.inventory`/`llm.generate`; and eventually the v6 planner (which must sit on top of the deterministic core — AI proposes, harness enforces).
 
-Internet enrollment is also available when `cmd/relay` is started with `-public-addr`, a browser-trusted TLS certificate/key, a stable `-alias-key`, and `-enrollment-publish-token`, and the manager is given the matching `-relay-public-url` and `-relay-enrollment-token`. The relay's public gateway proxies only live token-scoped enrollment paths back to the manager; its separate publication endpoint requires the dedicated publishing secret.
-
-### Option B: remove the initial remote binary-transfer step
-Self-update works after an agent is installed, but first-time remote onboarding still requires placing the platform-correct agent binary on the device. A future increment could add an explicit public bootstrap/download mechanism without weakening the relay's end-to-end trust model.
-
-### Option C: continue the v1.md roadmap toward v6
-v6 is "AI intent planner" — a genuinely different, much larger scope (natural-language-to-workload translation, policy/safety layers around letting an AI propose plans). Per the baseline architecture doc's own design principle #5 ("AI may propose plans, but security, policy, and execution guarantees are enforced by deterministic harness components"), this should sit *on top of* the current deterministic core, not replace any of it. Likely needs its own dedicated planning/scoping pass before any code — this is a genuinely open design space, not a well-defined next PR.
-
-### Recommendation
-The next design decision is whether to package the phone control plane as a native Android application or continue improving the Termux-hosted console. Either should preserve the one-time admission and persistent-identity trust model introduced here.
-
----
+The native-Android-app vs. Termux-console question is still open and is the user's call.
 
 ## 11. Known limitations and gotchas — read before touching related code
 
@@ -223,7 +218,8 @@ The next design decision is whether to package the phone control plane as a nati
 - **`nhooyr.io/websocket`'s `Conn.Close()` blocks for ~5 seconds** if the peer isn't actively running a receive loop (it waits for a close-handshake ack that never arrives). This is why several transport-layer tests take ~5s each — expected, not a hang. If a test needs something to happen *immediately* after closing a connection, fire the close in a goroutine rather than blocking on it (which is also a more faithful simulation of a real dropped connection anyway).
 - **The manager's TLS certificate must be ECDSA P-256, never Ed25519.** Windows schannel (curl.exe, PowerShell `Invoke-WebRequest`, anything that isn't Go's own `crypto/tls`) cannot complete a handshake against an Ed25519 certificate at all — confirmed via hardware testing, no client-side workaround exists. `internal/mtls` already does this correctly; don't "simplify" it back to Ed25519.
 - **Bare command names crash the entire agent process on Android/Termux**, not just the one workload — Go's `exec.Command` → internal `LookPath` → `syscall.Eaccess` → blocked by Android's seccomp policy → SIGSYS kills the whole process. Fixed via `internal/agent/executor.go`'s `resolveCommandPath` (manually searches `$PATH` via `os.Stat`, sidestepping `Eaccess`, non-Windows only). If a similarly mysterious whole-process death shows up on another constrained platform, check for this exact pattern first.
-- **Initial binary bootstrap is not carried by the relay.** Once installed, a relay-connected agent can self-update through a separate relay-mediated HTTP connection, but ordinary `curl` cannot perform the rendezvous handshake needed for the very first download.
+- **The first download over the relay needs the public enrollment gateway.** Invitation-enrolled remote devices fetch the agent through the relay's browser-trusted HTTPS gateway (`cmd/relay -public-addr`); the older `harnessctl join remote` path still requires placing the binary by hand, since ordinary `curl` cannot perform the rendezvous handshake. Self-update after install works over the relay either way.
+- **Relay connects wait briefly for a listener.** The manager's pool slots expire together at the relay's idle timeout and re-dial in lockstep, so the relay holds an unmatched `connect` for `connectGrace` (500ms) instead of failing instantly; a connect for a session with no manager still fails fast.
 - **Downloaded self-update binaries must be created with `0o755`**, not `os.Create`'s default `0o644` — invisible on Windows (no POSIX exec bit concept) but breaks every Linux/Termux self-update relaunch with "permission denied." Already fixed in `internal/agent/selfupdate.go`'s `downloadFile`.
 - **This dev machine has no cgo/gcc**, so `go test -race` fails with "requires cgo." Use plain `go test -count=2` (or higher) for flake-hunting instead of relying on the race detector here.
 - **The operator-facing HTTP API (`127.0.0.1:7421` default) is intentionally loopback-only.** `POST /nodes/{id}/commands` and `POST /workloads` have no authentication of their own — the trust model is "same-machine access is already fully privileged." Widening `-api-addr` to the LAN would expose unauthenticated arbitrary code execution on every registered node. If LAN-wide dashboard access is ever wanted, it needs a real auth layer first — this has been explicitly scoped out of every increment so far, not an oversight. **Loopback does not keep out a browser on the same machine**, and the manager's phone also browses the web: until `internal/manager/apiguard.go`, any visited page could fire a no-preflight `text/plain` POST at `/workloads` (verified with real headless Chrome: a cross-origin page ran a command on a registered node) or, via DNS rebinding, read `/join-info`'s tokens. Every operator route is now wrapped in `guardOperatorAPI` — Go's `http.CrossOriginProtection` for non-safe methods plus a Host allow-list (IP literals and `localhost` only). Keep new operator routes on `NewHTTPHandler`'s mux so they inherit it, and never perform state changes on GET.

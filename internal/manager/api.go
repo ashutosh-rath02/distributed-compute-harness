@@ -48,6 +48,11 @@ func toNodeView(rec *NodeRecord) nodeView {
 //	GET  /resources/total           resource totals summed across all nodes
 //	GET  /events                    Server-Sent Events stream of harness events
 //	POST /nodes/{id}/commands        dispatch a command: {"name":"...","args":{...},"timeoutMs":...}
+//	POST /nodes/{id}/revoke          permanently refuse a node identity: forget it, close its
+//	                                 connection, and reject its REGISTER even with a valid
+//	                                 pairing token (revocation.go)
+//	GET  /revocations                list revoked node identities
+//	DELETE /revocations/{id}         lift a revocation; the node must then be admitted afresh
 //	POST /nodes/{id}/update          push a self-update if the node isn't already current
 //	GET  /agent-binary/hash          the manager's currently-served agent binary hash
 //	GET  /join-info                  what a new node needs to onboard (fingerprint, pairing token, ...)
@@ -80,6 +85,9 @@ func (s *Server) NewHTTPHandler() http.Handler {
 	mux.HandleFunc("GET /events", s.apiEvents)
 	mux.HandleFunc("POST /nodes/{id}/commands", s.apiPostCommand)
 	mux.HandleFunc("POST /nodes/{id}/update", s.apiPostUpdate)
+	mux.HandleFunc("POST /nodes/{id}/revoke", s.apiRevokeNode)
+	mux.HandleFunc("GET /revocations", s.apiListRevocations)
+	mux.HandleFunc("DELETE /revocations/{id}", s.apiUnrevokeNode)
 	mux.HandleFunc("GET /agent-binary/hash", s.apiGetAgentBinaryHash)
 	mux.HandleFunc("GET /join-info", s.apiGetJoinInfo)
 	mux.HandleFunc("GET /join-script", s.apiGetJoinScript)

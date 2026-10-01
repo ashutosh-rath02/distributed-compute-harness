@@ -15,6 +15,8 @@ const (
 	EventNodeUpdated      EventType = "node.updated"
 	EventNodeOffline      EventType = "node.offline"
 	EventNodeReconnected  EventType = "node.reconnected"
+	EventNodeRevoked      EventType = "node.revoked"
+	EventNodeUnrevoked    EventType = "node.unrevoked"
 	EventCommandSent      EventType = "command.sent"
 	EventCommandCompleted EventType = "command.completed"
 	EventCommandFailed    EventType = "command.failed"

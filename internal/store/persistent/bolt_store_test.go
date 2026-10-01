@@ -3,6 +3,7 @@ package persistent
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
 	"home-harness/internal/domain"
 )
@@ -138,5 +139,47 @@ func TestPersistsAcrossReopen(t *testing.T) {
 	}
 	if rec.Manifest.Node.Name != "Laptop-A" {
 		t.Fatalf("expected name %q, got %q", "Laptop-A", rec.Manifest.Node.Name)
+	}
+}
+
+func TestRevokeNodeForgetsRecordAndSurvivesReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "harness.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	s.UpsertNode(testManifest("node-a", "A"))
+	s.UpsertNode(testManifest("node-b", "B"))
+
+	rev := domain.RevokedNode{NodeID: "node-a", Name: "A", RevokedAt: time.Now().UTC().Truncate(time.Second)}
+	if err := s.RevokeNode(rev); err != nil {
+		t.Fatalf("RevokeNode: %v", err)
+	}
+	if _, found, _ := s.GetNode("node-a"); found {
+		t.Fatal("expected a revoked node's record to be forgotten in the same transaction")
+	}
+	s.Close()
+
+	s, err = Open(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer s.Close()
+	revoked, err := s.ListRevoked()
+	if err != nil {
+		t.Fatalf("ListRevoked: %v", err)
+	}
+	if len(revoked) != 1 || revoked[0].NodeID != "node-a" || revoked[0].Name != "A" || !revoked[0].RevokedAt.Equal(rev.RevokedAt) {
+		t.Fatalf("expected node-a's revocation to survive reopen, got %+v", revoked)
+	}
+	if nodes, _ := s.ListNodes(); len(nodes) != 1 || nodes[0].Node.Identity.NodeID != "node-b" {
+		t.Fatalf("expected only node-b to remain known, got %+v", nodes)
+	}
+
+	if err := s.UnrevokeNode("node-a"); err != nil {
+		t.Fatalf("UnrevokeNode: %v", err)
+	}
+	if revoked, _ := s.ListRevoked(); len(revoked) != 0 {
+		t.Fatalf("expected no revocations after UnrevokeNode, got %+v", revoked)
 	}
 }
