@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"log"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"home-harness/internal/agent"
 	"home-harness/internal/discovery/udp"
 	"home-harness/internal/domain"
+	"home-harness/internal/instancelock"
 	"home-harness/internal/mtls"
 	"home-harness/internal/transport/relay"
 	"home-harness/internal/transport/ws"
@@ -98,6 +100,27 @@ func main() {
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+
+	// One live process per identity: a launcher restart can overlap a
+	// self-update's relaunch (or someone starts a second copy by hand). A
+	// second process waits here as a standby and takes over only once the
+	// running one exits — never two agents with one identity.
+	lock, err := instancelock.TryAcquire(*identityDir)
+	if errors.Is(err, instancelock.ErrHeld) {
+		log.Printf("agent: another agent with this identity is already running; waiting as a standby")
+	}
+	for errors.Is(err, instancelock.ErrHeld) {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
+		lock, err = instancelock.TryAcquire(*identityDir)
+	}
+	if err != nil {
+		log.Fatalf("agent: instance lock: %v", err)
+	}
+	defer lock.Release()
 	defer stop()
 
 	log.Printf("agent %s starting (identity dir: %s)", a.NodeID(), *identityDir)

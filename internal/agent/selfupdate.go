@@ -225,6 +225,13 @@ func applySelfUpdate(exePath, downloadPath string) error {
 // substitute a no-op/observable stub instead of actually exec'ing and
 // exiting the test process.
 var relaunch = func(exePath string, args []string, logPath string) {
+	// Under a launcher that restarts the agent (every generated install
+	// sets this), just exit: the launcher starts the swapped-in binary.
+	// Relaunching ourselves too would leave two processes for one identity.
+	if os.Getenv("HOME_HARNESS_SUPERVISED") == "1" {
+		log.Printf("agent: self-update: exiting so the launcher starts the new binary")
+		os.Exit(0)
+	}
 	cmd := exec.Command(exePath, args...)
 	if logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
 		cmd.Stdout = logFile

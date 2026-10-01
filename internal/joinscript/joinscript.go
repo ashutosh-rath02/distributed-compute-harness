@@ -124,7 +124,7 @@ func BuildMode(mode Mode, addr, platform string, info Info) (string, error) {
 
 Then paste this into Termux:
 
-pkg install -y curl && mkdir -p ~/home-harness && cd ~/home-harness && curl %s-o agent "%s://%s" && [ "$(sha256sum agent | awk '{print $1}')" = "%s" ] && chmod +x agent && mkdir -p ~/.termux/boot && printf '#!/data/data/com.termux/files/usr/bin/bash\n/data/data/com.termux/files/usr/bin/termux-wake-lock\ncd ~/home-harness\nwhile true; do ./agent -pairing-token %s %s; sleep 5; done\n' > ~/.termux/boot/start-harness-agent.sh && chmod +x ~/.termux/boot/start-harness-agent.sh && (nohup ~/.termux/boot/start-harness-agent.sh >~/home-harness/agent.log 2>&1 &) && echo "Installed — agent running with LAN discovery, and will auto-start on reboot via Termux:Boot."
+pkg install -y curl && mkdir -p ~/home-harness && cd ~/home-harness && curl %s-o agent "%s://%s" && [ "$(sha256sum agent | awk '{print $1}')" = "%s" ] && chmod +x agent && mkdir -p ~/.termux/boot && printf '#!/data/data/com.termux/files/usr/bin/bash\n/data/data/com.termux/files/usr/bin/termux-wake-lock\nexport HOME_HARNESS_SUPERVISED=1\ncd ~/home-harness\nwhile true; do ./agent -pairing-token %s %s; sleep 5; done\n' > ~/.termux/boot/start-harness-agent.sh && chmod +x ~/.termux/boot/start-harness-agent.sh && (nohup ~/.termux/boot/start-harness-agent.sh >~/home-harness/agent.log 2>&1 &) && echo "Installed — agent running with LAN discovery, and will auto-start on reboot via Termux:Boot."
 `, curlFlag, scheme, addr+binaryPath, strings.ToLower(hash), info.PairingToken, authFlag), nil
 	}
 
@@ -156,6 +156,9 @@ Move-Item $download $agent -Force
 $launcher = Join-Path $root "start-agent.ps1"
 @'
 $agent = Join-Path $env:LOCALAPPDATA "HomeHarness\agent.exe"
+# Tells the agent this loop restarts it, so a self-update just exits and
+# lets the loop start the new binary instead of running a second copy.
+$env:HOME_HARNESS_SUPERVISED = "1"
 while ($true) {
   & $agent %s
   Start-Sleep -Seconds 5
@@ -235,7 +238,7 @@ func buildRemote(platform string, info Info) (string, error) {
 
 Then paste this into Termux:
 
-pkg install -y curl && mkdir -p ~/home-harness && cd ~/home-harness && curl -fLo agent "%s" && [ "$(sha256sum agent | awk '{print $1}')" = "%s" ] && chmod +x agent && mkdir -p ~/.termux/boot && printf '#!/data/data/com.termux/files/usr/bin/bash\n/data/data/com.termux/files/usr/bin/termux-wake-lock\ncd ~/home-harness\nwhile true; do ./agent %s; sleep 5; done\n' > ~/.termux/boot/start-harness-agent.sh && chmod +x ~/.termux/boot/start-harness-agent.sh && (nohup ~/.termux/boot/start-harness-agent.sh >~/home-harness/agent.log 2>&1 &) && echo "Installed — agent connected through the relay."
+pkg install -y curl && mkdir -p ~/home-harness && cd ~/home-harness && curl -fLo agent "%s" && [ "$(sha256sum agent | awk '{print $1}')" = "%s" ] && chmod +x agent && mkdir -p ~/.termux/boot && printf '#!/data/data/com.termux/files/usr/bin/bash\n/data/data/com.termux/files/usr/bin/termux-wake-lock\nexport HOME_HARNESS_SUPERVISED=1\ncd ~/home-harness\nwhile true; do ./agent %s; sleep 5; done\n' > ~/.termux/boot/start-harness-agent.sh && chmod +x ~/.termux/boot/start-harness-agent.sh && (nohup ~/.termux/boot/start-harness-agent.sh >~/home-harness/agent.log 2>&1 &) && echo "Installed — agent connected through the relay."
 `, info.BootstrapURL, strings.ToLower(hash), flags), nil
 		}
 		return "Paste this into PowerShell. It installs the agent for the current user and reconnects through the relay automatically at every logon:\n\n" +
@@ -257,7 +260,7 @@ with -relay-public-url configured to have the binary fetched for you.
 
 Then paste this into Termux:
 
-mkdir -p ~/home-harness && cd ~/home-harness && [ "$(sha256sum agent | awk '{print $1}')" = "%s" ] && chmod +x agent && mkdir -p ~/.termux/boot && printf '#!/data/data/com.termux/files/usr/bin/bash\n/data/data/com.termux/files/usr/bin/termux-wake-lock\ncd ~/home-harness\nwhile true; do ./agent %s; sleep 5; done\n' > ~/.termux/boot/start-harness-agent.sh && chmod +x ~/.termux/boot/start-harness-agent.sh && (nohup ~/.termux/boot/start-harness-agent.sh >~/home-harness/agent.log 2>&1 &) && echo "Installed — agent running through the relay, and will auto-start on reboot via Termux:Boot."
+mkdir -p ~/home-harness && cd ~/home-harness && [ "$(sha256sum agent | awk '{print $1}')" = "%s" ] && chmod +x agent && mkdir -p ~/.termux/boot && printf '#!/data/data/com.termux/files/usr/bin/bash\n/data/data/com.termux/files/usr/bin/termux-wake-lock\nexport HOME_HARNESS_SUPERVISED=1\ncd ~/home-harness\nwhile true; do ./agent %s; sleep 5; done\n' > ~/.termux/boot/start-harness-agent.sh && chmod +x ~/.termux/boot/start-harness-agent.sh && (nohup ~/.termux/boot/start-harness-agent.sh >~/home-harness/agent.log 2>&1 &) && echo "Installed — agent running through the relay, and will auto-start on reboot via Termux:Boot."
 `, strings.ToLower(hash), flags), nil
 	}
 

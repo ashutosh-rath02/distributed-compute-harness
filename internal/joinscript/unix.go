@@ -108,7 +108,7 @@ UNIT
   systemctl --user daemon-reload
   systemctl --user enable home-harness-agent.service >/dev/null
   systemctl --user restart home-harness-agent.service
-  echo "To keep it running when you're logged out: sudo loginctl enable-linger $USER"
+  echo "To keep it running when you're logged out: sudo loginctl enable-linger ${USER:-$(id -un)}"
 else
   pkill -f "home-harness/run-agent.sh" 2>/dev/null || true
   if command -v crontab >/dev/null 2>&1; then
@@ -141,14 +141,24 @@ if command -v sha256sum >/dev/null 2>&1; then got=$(sha256sum "$dir/agent.new" |
 if [ "$got" != "$want" ]; then rm -f "$dir/agent.new"; echo "Agent hash mismatch: wrong, corrupted, or tampered download; aborting." >&2; exit 1; fi
 chmod 755 "$dir/agent.new"
 mv -f "$dir/agent.new" "$dir/agent"
-cat > "$dir/run-agent.sh" <<'LAUNCHER'
-#!/bin/bash
+# launchd and cron start jobs with a minimal PATH (/usr/bin:/bin:...), so
+# workloads needing Homebrew, /usr/local/bin, or the ollama CLI would be
+# "not found" under the launcher. Freeze the installing shell's PATH in.
+quoted_path=$(printf '%%s' "$PATH" | sed "s/'/'\\\\''/g")
+{
+  echo '#!/bin/bash'
+  echo "export PATH='$quoted_path'"
+  # Tells the agent a supervisor restarts it, so after a self-update it
+  # just exits and lets this loop start the new binary (no second copy).
+  echo 'export HOME_HARNESS_SUPERVISED=1'
+  cat <<'LAUNCHER'
 dir="$(cd "$(dirname "$0")" && pwd)"
 while true; do
   "$dir/agent" %[5]s >> "$dir/agent.log" 2>&1
   sleep 5
 done
 LAUNCHER
+} > "$dir/run-agent.sh"
 chmod 755 "$dir/run-agent.sh"
 %[6]s
 echo "%[7]s"
