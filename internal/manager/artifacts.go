@@ -284,6 +284,7 @@ func (s *Server) liveArtifacts() map[string]bool {
 			live[in.SHA256] = true
 		}
 	}
+	s.jobLiveArtifacts(live)
 	return live
 }
 

@@ -21,9 +21,10 @@ type ArtifactRef struct {
 // command without its files.
 const FeatureArtifacts = "artifacts.v1"
 
-// Per-workload limits on declared files.
+// Per-workload limits on declared files. Inputs go high enough for a
+// job's reduce task to take every part (job.go).
 const (
-	MaxWorkloadInputs  = 16
+	MaxWorkloadInputs  = 256
 	MaxWorkloadOutputs = 16
 )
 

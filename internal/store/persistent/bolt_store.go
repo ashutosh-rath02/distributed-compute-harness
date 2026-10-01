@@ -20,6 +20,7 @@ var nodesBucket = []byte("nodes")
 var workloadsBucket = []byte("workloads")
 var revokedBucket = []byte("revoked")
 var nodeMetaBucket = []byte("node-meta")
+var jobsBucket = []byte("jobs")
 
 // auditBuckets maps each audit log to its own bucket, so each is capped
 // independently (see AppendAudit).
@@ -49,7 +50,7 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("persistent: open %q: %w", path, err)
 	}
 	err = db.Update(func(tx *bbolt.Tx) error {
-		for _, name := range [][]byte{nodesBucket, workloadsBucket, revokedBucket, nodeMetaBucket, auditBuckets[domain.AuditSecurity], auditBuckets[domain.AuditAdmissions], auditBuckets[domain.AuditNoise]} {
+		for _, name := range [][]byte{nodesBucket, workloadsBucket, revokedBucket, nodeMetaBucket, jobsBucket, auditBuckets[domain.AuditSecurity], auditBuckets[domain.AuditAdmissions], auditBuckets[domain.AuditNoise]} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -338,4 +339,32 @@ func auditKey(seq uint64) []byte {
 	k := make([]byte, 8)
 	binary.BigEndian.PutUint64(k, seq)
 	return k
+}
+
+// UpsertJob stores a batch job's request and outcome (its attempts are
+// ordinary workload records).
+func (s *Store) UpsertJob(job domain.Job) error {
+	data, err := json.Marshal(job)
+	if err != nil {
+		return fmt.Errorf("persistent: marshal job: %w", err)
+	}
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		return tx.Bucket(jobsBucket).Put([]byte(job.ID), data)
+	})
+}
+
+// ListJobs returns every stored job.
+func (s *Store) ListJobs() ([]domain.Job, error) {
+	var out []domain.Job
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		return tx.Bucket(jobsBucket).ForEach(func(_, data []byte) error {
+			var job domain.Job
+			if err := json.Unmarshal(data, &job); err != nil {
+				return fmt.Errorf("persistent: decode job: %w", err)
+			}
+			out = append(out, job)
+			return nil
+		})
+	})
+	return out, err
 }

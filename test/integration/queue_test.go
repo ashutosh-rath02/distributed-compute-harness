@@ -351,6 +351,11 @@ func TestQueuedWorkloadSurvivesManagerRestart(t *testing.T) {
 	default:
 		t.Fatalf("expected the queued workload to survive the restart still queued (or already dispatched), got %s", got)
 	}
+	// A manager shutting down is not the node failing: work that was in
+	// flight comes back UNKNOWN, never recorded as a failure.
+	if got := workloadState(srv2, busy.ID); got != domain.WorkloadUnknown {
+		t.Fatalf("expected the interrupted workload UNKNOWN after a manager restart, got %s", got)
+	}
 	// The agent reconnects; the restart ended the busy one (the agent
 	// cancels its work on disconnect), so the queued one runs.
 	waitFor(t, 30*time.Second, func() bool { return workloadState(srv2, waiting.ID) == domain.WorkloadCompleted })

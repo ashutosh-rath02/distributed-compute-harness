@@ -55,9 +55,11 @@ func (s *Server) reconcileWorkloads(ctx context.Context) {
 			s.collectArtifacts()
 		case <-ticker.C:
 			s.reconcileOnce(ctx)
+			s.advanceJobs(ctx)
 			s.dispatchQueued(ctx) // also catches requeue backoffs expiring
 			s.sweepGrants()
 		case <-s.dispatchKick:
+			s.advanceJobs(ctx)
 			s.dispatchQueued(ctx)
 		}
 	}
@@ -96,7 +98,9 @@ func (s *Server) restartWorkload(ctx context.Context, rec WorkloadRecord) {
 		restartTarget = rec.Workload.Target
 	}
 	s.placeMu.Lock()
-	targetRec, resolvedTarget, err := s.resolveWorkloadTarget(restartTarget, rec.Workload.EffectiveCapability(), rec.Workload.Requirements, requiredFeatures(rec.Workload)...)
+	p := placementFor(rec.Workload)
+	p.target = restartTarget
+	targetRec, resolvedTarget, err := s.resolve(p, nil)
 	if err != nil {
 		s.placeMu.Unlock()
 		// No eligible node right now (e.g. right after a manager restart,

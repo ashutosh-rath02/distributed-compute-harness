@@ -48,6 +48,10 @@
     background: Field; color: FieldText;
   }
   #fileArgs { min-height: 60px; margin-top: 4px; }
+  label.inline { display: flex; gap: 8px; align-items: flex-start; }
+  label.inline input { width: auto; margin-top: 2px; }
+  details.job summary { cursor: pointer; }
+  details.job { margin-bottom: 10px; }
   button.download { margin-top: 6px; padding: 4px 10px; font-size: 0.8rem; }
   .error { color: #f85149; font-size: 0.85rem; margin-top: 10px; }
   .chip { display: inline-block; font-size: 0.72rem; padding: 1px 7px; margin: 2px 4px 0 0; border-radius: 9px; background: color-mix(in srgb, #2f81f7 18%, transparent); }
@@ -148,11 +152,17 @@
     <input id="fileInputs" type="file" multiple>
     <label for="fileOutputs">Output files the task must create, comma-separated</label>
     <input id="fileOutputs" placeholder="result.txt, out/report.csv" autocomplete="off">
+    <label class="inline"><input id="fileBatch" type="checkbox"> Run once per input file, spread across devices (a batch job: {in} in the arguments is that task's file; failed tasks retry elsewhere)</label>
+    <label for="fileShared">Files every task gets (batch only, e.g. the script)</label>
+    <input id="fileShared" type="file" multiple>
     <button id="runFiles">Upload and run</button>
     <p class="hint">The program runs inside its own folder holding the inputs, so run scripts through their interpreter. Outputs come back here to download.</p>
     <div id="fileError" class="error"></div>
     <div id="fileProgress" class="task-state"></div>
   </div>
+
+  <h2>Jobs</h2>
+  <div id="jobs"></div>
 
   <h2>Recent workloads</h2>
   <div id="workloads"></div>
@@ -493,8 +503,10 @@
   }
 
   // Download buttons for a workload's delivered output files.
-  function outputButtons(w) {
-    return (w.outputFiles || []).map((o) =>
+  function outputButtons(w) { return fileButtons(w.outputFiles); }
+
+  function fileButtons(refs) {
+    return (refs || []).map((o) =>
       '<button class="download" data-sha="' + escapeHtml(o.sha256) + '" data-name="' + escapeHtml(o.name) + '">Download '
         + escapeHtml(o.name) + " (" + escapeHtml(fmtBytes(o.size)) + ")</button>").join(" ");
   }
@@ -584,6 +596,67 @@
     if (event.target.open) refreshAudit();
   });
 
+  // Jobs: the five most recent, each expandable to its tasks. Refreshes
+  // are coalesced (a big job emits many events).
+  let jobsTimer = null;
+  function scheduleJobs() {
+    if (jobsTimer) return;
+    jobsTimer = setTimeout(() => { jobsTimer = null; refreshJobs(); }, 1000);
+  }
+
+  const openJobs = new Set();
+  async function refreshJobs() {
+    const el = document.getElementById("jobs");
+    try {
+      const list = await (await api("/jobs")).json();
+      const recent = (list || []).slice(-5).reverse();
+      if (!recent.length) {
+        el.innerHTML = '<p class="empty">No jobs yet. Tick "Run once per input file" above to start one.</p>';
+        return;
+      }
+      const details = await Promise.all(recent.map(async (j) => {
+        try { return await (await api("/jobs/" + encodeURIComponent(j.id))).json(); } catch (e) { return j; }
+      }));
+      el.innerHTML = details.map((j) => {
+        const c = j.counts || {};
+        const rows = (j.tasks || []).concat(j.reduce ? [j.reduce] : []).map((t) =>
+          "<tr><td>" + escapeHtml(t.key) + "</td><td>" + escapeHtml(t.name || "") + '</td><td><span class="' + stateClass(t.state) + '">'
+          + escapeHtml(t.state) + "</span></td><td>" + escapeHtml(String(t.attempts || 0)) + "</td><td>" + escapeHtml(t.node || "-")
+          + '</td><td><div class="output">' + escapeHtml(t.error || t.waiting || "") + "</div>" + fileButtons(t.outputs) + "</td></tr>").join("");
+        return '<details class="card job" data-job="' + escapeHtml(j.id) + '"' + (openJobs.has(j.id) ? " open" : "") + "><summary>"
+          + escapeHtml(j.name || j.id) + ' <span class="' + stateClass(j.state) + '">' + escapeHtml(j.state) + "</span> "
+          + escapeHtml((c.completed || 0) + "/" + (c.total || 0) + " done" + (c.failed ? ", " + c.failed + " failed" : "")
+            + (c.active ? ", " + c.active + " running" : "") + (c.waiting ? ", " + c.waiting + " waiting" : ""))
+          + "</summary>"
+          + (j.error ? '<p class="hint">' + escapeHtml(j.error) + "</p>" : "")
+          + ((j.outputs || []).length ? "<p>Result: " + fileButtons(j.outputs) + "</p>" : "")
+          + (j.state === "RUNNING" ? '<button class="danger small cancel-job" data-job="' + escapeHtml(j.id) + '">Cancel job</button>' : "")
+          + "<table><thead><tr><th>Task</th><th>Name</th><th>State</th><th>Attempts</th><th>Device</th><th>Result</th></tr></thead><tbody>"
+          + rows + "</tbody></table></details>";
+      }).join("");
+    } catch (e) {
+      el.innerHTML = '<p class="error">Failed to load jobs.</p>';
+    }
+  }
+
+  document.addEventListener("toggle", (event) => {
+    const d = event.target;
+    if (!d.classList || !d.classList.contains("job")) return;
+    if (d.open) openJobs.add(d.dataset.job); else openJobs.delete(d.dataset.job);
+  }, true);
+
+  document.addEventListener("click", async (event) => {
+    const button = event.target.closest && event.target.closest("button.cancel-job");
+    if (!button || !confirm("Cancel this job and stop its running tasks?")) return;
+    try {
+      const resp = await api("/jobs/" + encodeURIComponent(button.dataset.job) + "/cancel", {method: "POST"});
+      if (!resp.ok) throw new Error((await resp.text()).trim() || resp.statusText);
+    } catch (e) {
+      alert("Cancel failed: " + e);
+    }
+    refreshJobs();
+  });
+
   function handleEvent(data) {
     let type = "";
     try {
@@ -593,6 +666,7 @@
     } catch (e) { /* keep live refresh working */ }
     refreshNodes();
     refreshWorkloads();
+    if (type.startsWith("job.") || type.startsWith("workload.")) scheduleJobs();
     if (type === "node.revoked" || type === "node.unrevoked") refreshRevoked();
     if (document.getElementById("auditSection").open) refreshAudit();
   }
@@ -641,6 +715,7 @@
     await refreshNodes();
     if (signedOut) return;
     refreshWorkloads();
+    refreshJobs();
     refreshRevoked();
     streamEvents();
   })();
@@ -699,8 +774,33 @@
     const args = document.getElementById("fileArgs").value.split("\n").map((s) => s.trim()).filter((s) => s);
     const outputs = document.getElementById("fileOutputs").value.split(",").map((s) => s.trim()).filter((s) => s);
     const files = Array.from(document.getElementById("fileInputs").files || []);
+    const batch = document.getElementById("fileBatch").checked;
     button.disabled = true;
     try {
+      if (batch) {
+        if (!files.length) throw new Error("Pick the input files: one task runs per file.");
+        const upload = async (f) => {
+          progress.textContent = "Uploading " + f.name + "...";
+          const resp = await api("/artifacts", {method: "POST", headers: {"Content-Type": "application/octet-stream"}, body: f});
+          const text = await resp.text();
+          if (!resp.ok) throw new Error(f.name + ": " + (text.trim() || resp.statusText));
+          return {name: safeFileName(f.name), sha256: JSON.parse(text).sha256};
+        };
+        const shared = [];
+        for (const f of Array.from(document.getElementById("fileShared").files || [])) shared.push(await upload(f));
+        const tasks = [];
+        for (const f of files) {
+          const input = await upload(f);
+          tasks.push({name: input.name, target: document.getElementById("fileTarget").value, command,
+            args: args.map((a) => a.split("{in}").join(input.name)), inputs: shared.concat([input]), outputs});
+        }
+        const resp = await api("/jobs", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({tasks})});
+        const text = await resp.text();
+        if (!resp.ok) throw new Error(text.trim() || resp.statusText);
+        progress.textContent = "Job started: " + tasks.length + " tasks (" + JSON.parse(text).id + "). Follow it under Jobs.";
+        refreshJobs();
+        return;
+      }
       const inputs = [];
       for (const f of files) {
         progress.textContent = "Uploading " + f.name + "...";

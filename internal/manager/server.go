@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"sync"
 	"time"
 
@@ -81,6 +82,9 @@ type PersistentStore interface {
 	ListNodeMeta() (map[domain.NodeID]domain.NodeMeta, error)
 	AppendAudit(e domain.AuditEntry, keep int) (domain.AuditEntry, error)
 	ListAudit(log domain.AuditLog, limit int) ([]domain.AuditEntry, error)
+	// Batch jobs (jobs.go).
+	UpsertJob(job domain.Job) error
+	ListJobs() ([]domain.Job, error)
 }
 
 // Server is the control-plane process: it accepts connections over a
@@ -123,6 +127,8 @@ type Server struct {
 
 	// grants authorizes agents' workload file transfers (artifacts.go).
 	grants *grantTable
+	// jobs holds batch jobs (jobs.go).
+	jobs *jobTable
 
 	// agents is the loaded agent-build catalog (agentcatalog.go), built
 	// once at startup from cfg.AgentBinaries — never nil.
@@ -164,6 +170,7 @@ func NewServer(transport domain.Transport, store PersistentStore, cfg Config) *S
 		dispatchKick: make(chan struct{}, 1),
 		requeues:     make(map[domain.WorkloadID]int),
 		grants:       newGrantTable(),
+		jobs:         newJobTable(),
 	}
 
 	if cfg.OperatorToken == "" {
@@ -300,6 +307,11 @@ type WorkloadSpec struct {
 	RestartPolicy domain.RestartPolicy
 	Inputs        []domain.ArtifactRef
 	Outputs       []string
+	// Set only for a batch job's attempts (jobs.go).
+	Job        domain.JobID
+	Task       string
+	Attempt    int
+	AvoidNodes []domain.NodeID
 }
 
 // ErrInvalidWorkload is a submission that can never be valid as given
@@ -316,16 +328,20 @@ func (s *Server) Submit(ctx context.Context, spec WorkloadSpec) (domain.Workload
 		return domain.Workload{}, err
 	}
 	target, command, args, capability, params, req, restartPolicy := spec.Target, spec.Command, spec.Args, spec.Capability, spec.Params, spec.Requirements, spec.RestartPolicy
+	if spec.Attempt < 0 || (spec.Job == "") != (spec.Task == "") {
+		return domain.Workload{}, fmt.Errorf("%w: job, task and attempt go together", ErrInvalidWorkload)
+	}
 	pinned := target != ""
 	id, err := newRandomID()
 	if err != nil {
 		return domain.Workload{}, err
 	}
 	newWorkload := func(target domain.NodeID) domain.Workload {
-		return domain.Workload{ID: domain.WorkloadID(id), Target: target, Pinned: pinned, Command: command, Args: args, Capability: capability, Params: params, Requirements: req, RestartPolicy: restartPolicy, Inputs: spec.Inputs, Outputs: spec.Outputs}
+		return domain.Workload{ID: domain.WorkloadID(id), Target: target, Pinned: pinned, Command: command, Args: args, Capability: capability, Params: params, Requirements: req, RestartPolicy: restartPolicy, Inputs: spec.Inputs, Outputs: spec.Outputs,
+			Job: spec.Job, Task: spec.Task, Attempt: spec.Attempt, AvoidNodes: spec.AvoidNodes}
 	}
 	s.placeMu.Lock()
-	rec, resolved, err := s.resolveWorkloadTarget(target, capability, req, requiredFeatures(newWorkload(""))...)
+	rec, resolved, err := s.resolve(placementFor(newWorkload(target)), nil)
 	if errors.Is(err, errNoRoom) {
 		// Some ready node could run it, just not right now: queue it.
 		w := newWorkload(target)
@@ -365,21 +381,57 @@ func (s *Server) Submit(ctx context.Context, spec WorkloadSpec) (domain.Workload
 // this keeps v1's eligible set unchanged, only its ordering becomes
 // deterministic instead of arbitrary map order.
 func (s *Server) resolveWorkloadTarget(target domain.NodeID, capability domain.CapabilityName, req domain.ResourceRequirements, features ...string) (*NodeRecord, domain.NodeID, error) {
-	if target != "" {
-		rec, ok := s.Registry.Get(target)
+	return s.resolve(placement{target: target, capability: capability, req: req, features: features}, nil)
+}
+
+// placement is one "where can this run" question.
+type placement struct {
+	target     domain.NodeID // pinned node, or "" for any
+	capability domain.CapabilityName
+	req        domain.ResourceRequirements
+	features   []string        // agent features required (requiredFeatures)
+	avoid      []domain.NodeID // prefer other nodes (a job task's failed attempts)
+}
+
+func placementFor(w domain.Workload) placement {
+	p := placement{capability: w.EffectiveCapability(), req: w.Requirements, features: requiredFeatures(w), avoid: w.AvoidNodes}
+	if w.Pinned {
+		p.target = w.Target
+	}
+	return p
+}
+
+// unconstrained reports whether any node with the capability and a free
+// slot would do — so if one such workload finds no room, none will.
+func (p placement) unconstrained() bool {
+	return p.target == "" && p.req.IsEmpty() && len(p.features) == 0 && len(p.avoid) == 0
+}
+
+// resolve answers p. usage, if non-nil, is the reservations to place
+// against (a dispatch pass's snapshot, kept current as it assigns);
+// otherwise each node's is derived fresh.
+func (s *Server) resolve(p placement, usage map[domain.NodeID]nodeUsage) (*NodeRecord, domain.NodeID, error) {
+	usageOf := func(id domain.NodeID) nodeUsage {
+		if usage != nil {
+			return usage[id]
+		}
+		return s.Workloads.usageOn(id)
+	}
+	if p.target != "" {
+		rec, ok := s.Registry.Get(p.target)
 		if !ok || rec.Conn == nil || rec.State != domain.NodeReady {
 			return nil, "", ErrNodeNotConnected
 		}
-		if ok, reason := couldEverFit(rec, capability, req, features...); !ok {
-			return nil, "", fmt.Errorf("%w (%s: %s)", ErrNoEligibleNode, target, reason)
+		if ok, reason := couldEverFit(rec, p.capability, p.req, p.features...); !ok {
+			return nil, "", fmt.Errorf("%w (%s: %s)", ErrNoEligibleNode, p.target, reason)
 		}
-		if ok, reason := nodeFits(rec, capability, req); !ok {
-			return nil, "", fmt.Errorf("%w (%s: %s)", errNoRoom, target, reason)
+		if ok, reason := nodeFits(rec, p.capability, p.req); !ok {
+			return nil, "", fmt.Errorf("%w (%s: %s)", errNoRoom, p.target, reason)
 		}
-		if ok, reason := hasRoom(rec, s.Workloads.usageOn(target), req); !ok {
-			return nil, "", fmt.Errorf("%w (%s: %s)", errNoRoom, target, reason)
+		if ok, reason := hasRoom(rec, usageOf(p.target), p.req); !ok {
+			return nil, "", fmt.Errorf("%w (%s: %s)", errNoRoom, p.target, reason)
 		}
-		return rec, target, nil
+		return rec, p.target, nil
 	}
 
 	var candidates []*NodeRecord
@@ -392,33 +444,45 @@ func (s *Server) resolveWorkloadTarget(target domain.NodeID, capability domain.C
 		return nil, "", ErrNoReadyNode
 	}
 	// First: could any ready node run it at all, once idle? If not,
-	// reject. Then: which of those can take it right now (live state and
-	// free slots)? None → queue.
-	var never, notNow []string
-	var withRoom []*NodeRecord
-	usage := make(map[domain.NodeID]nodeUsage)
+	// reject. Nodes to avoid are dropped if any other could. Then: which
+	// can take it right now (live state and free slots)? None → queue.
+	var never []string
+	var eligible, preferred []*NodeRecord
 	for _, rec := range candidates {
 		id := rec.Node.Identity.NodeID
-		if ok, reason := couldEverFit(rec, capability, req, features...); !ok {
+		if ok, reason := couldEverFit(rec, p.capability, p.req, p.features...); !ok {
 			never = append(never, fmt.Sprintf("%s: %s", id, reason))
 			continue
 		}
-		if ok, reason := nodeFits(rec, capability, req); !ok {
+		eligible = append(eligible, rec)
+		if !slices.Contains(p.avoid, id) {
+			preferred = append(preferred, rec)
+		}
+	}
+	if len(eligible) == 0 {
+		return nil, "", fmt.Errorf("%w (%v)", ErrNoEligibleNode, never)
+	}
+	if len(preferred) > 0 {
+		eligible = preferred
+	}
+	var notNow []string
+	var withRoom []*NodeRecord
+	room := make(map[domain.NodeID]nodeUsage)
+	for _, rec := range eligible {
+		id := rec.Node.Identity.NodeID
+		if ok, reason := nodeFits(rec, p.capability, p.req); !ok {
 			notNow = append(notNow, fmt.Sprintf("%s: %s", id, reason))
 			continue
 		}
-		u := s.Workloads.usageOn(id)
-		if ok, reason := hasRoom(rec, u, req); !ok {
+		u := usageOf(id)
+		if ok, reason := hasRoom(rec, u, p.req); !ok {
 			notNow = append(notNow, fmt.Sprintf("%s: %s", id, reason))
 			continue
 		}
 		withRoom = append(withRoom, rec)
-		usage[id] = u
+		room[id] = u
 	}
-	if len(never) == len(candidates) {
-		return nil, "", fmt.Errorf("%w (%v)", ErrNoEligibleNode, never)
-	}
-	best, err := selectNodeWithUsage(withRoom, usage, capability, req)
+	best, err := selectNodeWithUsage(withRoom, room, p.capability, p.req)
 	if err != nil {
 		return nil, "", fmt.Errorf("%w (%v)", errNoRoom, notNow)
 	}
@@ -550,6 +614,13 @@ func (s *Server) Run(ctx context.Context) error {
 		for _, pw := range workloads {
 			s.Workloads.Seed(pw)
 		}
+		jobs, err := s.store.ListJobs()
+		if err != nil {
+			return fmt.Errorf("manager: load persisted jobs: %w", err)
+		}
+		for _, j := range jobs {
+			s.jobs.put(j)
+		}
 	}
 
 	conns, err := s.transport.Listen(ctx, s.cfg.Addr)
@@ -599,7 +670,13 @@ func (s *Server) handleConn(ctx context.Context, conn domain.Conn) {
 			log.Printf("node.offline: %s (connection closed)", nodeID)
 			s.publish(domain.EventNodeOffline, nodeID, map[string]any{"reason": "connection closed"})
 			s.failPendingCommandsFor(nodeID, "node went offline: connection closed")
-			s.failWorkloadsFor(ctx, nodeID, "node went offline: connection closed")
+			// The manager shutting down is not the node going away: its
+			// in-flight work stays PENDING/RUNNING on disk and is seeded
+			// UNKNOWN next start, rather than recorded as a failure the
+			// work never had (which would cost a job task an attempt).
+			if ctx.Err() == nil {
+				s.failWorkloadsFor(ctx, nodeID, "node went offline: connection closed")
+			}
 		}
 		conn.Close()
 	}()

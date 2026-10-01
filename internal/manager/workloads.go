@@ -106,6 +106,7 @@ func (wr *WorkloadRegistry) FailInFlightFor(nodeID domain.NodeID, reason string)
 		rec.Status.State = domain.WorkloadFailed
 		rec.Status.Error = reason
 		rec.Status.FinishedAt = time.Now().UTC()
+		rec.Status.NodeLost = true
 		changed = append(changed, *rec)
 	}
 	return changed

@@ -100,6 +100,10 @@ func (s *Server) toNodeView(rec *NodeRecord, relations map[domain.NodeID]hostRel
 //	GET  /artifacts                  list stored files and store usage
 //	GET  /artifacts/{sha}[?name=]    download a stored file (always as an attachment)
 //	DELETE /artifacts/{sha}          delete a stored file no live workload needs
+//	POST /jobs                       submit a batch job: {"tasks":[...],"reduce":{...},"maxAttempts":3} (jobs.go)
+//	GET  /jobs                       list jobs with progress counts
+//	GET  /jobs/{id}                  one job: every task's state, attempts, node, outputs
+//	POST /jobs/{id}/cancel           cancel a job and its in-flight attempts
 //
 // It is a thin adapter over Registry/SendCommand/Events — the manager's
 // core logic has no HTTP dependency of its own.
@@ -142,6 +146,10 @@ func (s *Server) NewHTTPHandler() http.Handler {
 	mux.HandleFunc("GET /artifacts", s.apiListArtifacts)
 	mux.HandleFunc("GET /artifacts/{sha}", s.apiGetArtifact)
 	mux.HandleFunc("DELETE /artifacts/{sha}", s.apiDeleteArtifact)
+	mux.HandleFunc("POST /jobs", s.apiPostJob)
+	mux.HandleFunc("GET /jobs", s.apiListJobs)
+	mux.HandleFunc("GET /jobs/{id}", s.apiGetJob)
+	mux.HandleFunc("POST /jobs/{id}/cancel", s.apiCancelJob)
 	// Host check and CSRF protection first (apiguard.go), then operator
 	// authentication (operatorauth.go) — browser defenses and the
 	// credential check are independent layers.

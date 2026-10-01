@@ -78,6 +78,14 @@ type Workload struct {
 	// (artifact.go). Only system.execute workloads may declare them.
 	Inputs  []ArtifactRef `json:"inputs,omitempty"`
 	Outputs []string      `json:"outputs,omitempty"`
+	// Job, Task and Attempt place a batch job's attempt (job.go): Task is
+	// the task key ("0007", or ReduceTask) and Attempt counts from 1.
+	// AvoidNodes are nodes earlier attempts of this task failed on;
+	// placement prefers others when any could run it.
+	Job        JobID    `json:"job,omitempty"`
+	Task       string   `json:"task,omitempty"`
+	Attempt    int      `json:"attempt,omitempty"`
+	AvoidNodes []NodeID `json:"avoidNodes,omitempty"`
 }
 
 // EffectiveCapability returns w.Capability, or CapabilitySystemExecute if
@@ -127,6 +135,10 @@ type WorkloadStatus struct {
 	// Outputs are the declared output files the agent uploaded, as the
 	// manager verified them against what it actually received.
 	Outputs []ArtifactRef `json:"outputs,omitempty"`
+	// NodeLost marks a FAILED status the manager wrote because the node
+	// went away (disconnect, heartbeat timeout, revocation), not because
+	// the work itself failed — a job retries it without counting it.
+	NodeLost bool `json:"nodeLost,omitempty"`
 }
 
 // PersistedWorkload is what survives a manager restart for one workload:

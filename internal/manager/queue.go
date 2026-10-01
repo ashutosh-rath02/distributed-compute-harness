@@ -65,11 +65,32 @@ func (wr *WorkloadRegistry) usageOn(node domain.NodeID) nodeUsage {
 		if rec.Status.State != domain.WorkloadPending && rec.Status.State != domain.WorkloadRunning {
 			continue
 		}
-		u.running++
-		u.cores += rec.Workload.Requirements.MinCPUCores
-		u.memory += rec.Workload.Requirements.MinMemoryBytes
+		u.add(rec.Workload.Requirements)
 	}
 	return u
+}
+
+// usageByNode is usageOn for every node at once, in one scan — a dispatch
+// pass's snapshot.
+func (wr *WorkloadRegistry) usageByNode() map[domain.NodeID]nodeUsage {
+	wr.mu.RLock()
+	defer wr.mu.RUnlock()
+	out := make(map[domain.NodeID]nodeUsage)
+	for _, rec := range wr.workloads {
+		if rec.Status.State != domain.WorkloadPending && rec.Status.State != domain.WorkloadRunning {
+			continue
+		}
+		u := out[rec.Workload.Target]
+		u.add(rec.Workload.Requirements)
+		out[rec.Workload.Target] = u
+	}
+	return out
+}
+
+func (u *nodeUsage) add(req domain.ResourceRequirements) {
+	u.running++
+	u.cores += req.MinCPUCores
+	u.memory += req.MinMemoryBytes
 }
 
 // hasRoom reports whether rec can take one more workload with req on top
@@ -231,37 +252,59 @@ func (s *Server) kickDispatch() {
 // dispatchQueued places every queued workload that now has room, oldest
 // first. Later, smaller workloads may run ahead of an older one that
 // still doesn't fit anywhere — there is no head-of-line blocking.
+//
+// One pass holds placeMu while it decides (so no concurrent placement can
+// take the same slot) and places against one usage snapshot it keeps
+// current as it assigns — one registry scan per pass, not per workload
+// per node, which matters once a job queues hundreds of tasks on a
+// phone-hosted manager. Once an unconstrained workload of a capability
+// finds no room, the pass skips the rest of that capability's
+// unconstrained ones. Disk writes and sends happen after the lock is
+// released, so a long pass never stalls submissions on fsyncs.
 func (s *Server) dispatchQueued(ctx context.Context) {
-	for _, rec := range s.Workloads.queued(time.Now()) {
-		s.placeMu.Lock()
-		target, err := s.placeTarget(rec.Workload)
+	queued := s.Workloads.queued(time.Now())
+	if len(queued) == 0 {
+		return
+	}
+	type dispatch struct {
+		conn domain.Conn
+		rec  WorkloadRecord
+	}
+	var out []dispatch
+	s.placeMu.Lock()
+	usage := s.Workloads.usageByNode()
+	full := map[domain.CapabilityName]bool{}
+	for _, rec := range queued {
+		p := placementFor(rec.Workload)
+		if p.unconstrained() && full[p.capability] {
+			continue
+		}
+		target, id, err := s.resolve(p, usage)
 		if err != nil {
-			s.placeMu.Unlock()
+			if p.unconstrained() {
+				full[p.capability] = true
+			}
 			continue // still no room (or its node is away): stays queued
 		}
-		assigned, ok := s.Workloads.assignQueued(rec.Workload.ID, target.Node.Identity.NodeID)
-		s.placeMu.Unlock()
+		assigned, ok := s.Workloads.assignQueued(rec.Workload.ID, id)
 		if !ok {
 			continue // canceled meanwhile
 		}
-		s.persistWorkloadRecord(assigned)
-		s.assign(ctx, target.Conn, assigned.Workload)
-		log.Printf("workload.assigned: %s to %s (from the queue)", assigned.Workload.ID, assigned.Workload.Target)
-		s.publish(domain.EventWorkloadAssigned, assigned.Workload.Target, map[string]any{
-			"workloadId": string(assigned.Workload.ID), "command": assigned.Workload.Command, "capability": string(assigned.Workload.EffectiveCapability()), "fromQueue": true,
+		u := usage[id]
+		u.add(assigned.Workload.Requirements)
+		usage[id] = u
+		out = append(out, dispatch{target.Conn, assigned})
+	}
+	s.placeMu.Unlock()
+
+	for _, d := range out {
+		s.persistWorkloadRecord(d.rec)
+		s.assign(ctx, d.conn, d.rec.Workload)
+		log.Printf("workload.assigned: %s to %s (from the queue)", d.rec.Workload.ID, d.rec.Workload.Target)
+		s.publish(domain.EventWorkloadAssigned, d.rec.Workload.Target, map[string]any{
+			"workloadId": string(d.rec.Workload.ID), "command": d.rec.Workload.Command, "capability": string(d.rec.Workload.EffectiveCapability()), "fromQueue": true,
 		})
 	}
-}
-
-// placeTarget resolves where a (queued) workload can run right now: its
-// pinned node, or the best eligible node with room.
-func (s *Server) placeTarget(w domain.Workload) (*NodeRecord, error) {
-	pin := domain.NodeID("")
-	if w.Pinned {
-		pin = w.Target
-	}
-	rec, _, err := s.resolveWorkloadTarget(pin, w.EffectiveCapability(), w.Requirements, requiredFeatures(w)...)
-	return rec, err
 }
 
 // handleBusyRefusal re-queues a workload an agent refused only because its

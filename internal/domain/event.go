@@ -27,6 +27,8 @@ const (
 	EventWorkloadFailed    EventType = "workload.failed"
 	EventWorkloadCanceled  EventType = "workload.canceled"
 	EventWorkloadQueued    EventType = "workload.queued"
+	EventJobSubmitted      EventType = "job.submitted"
+	EventJobFinished       EventType = "job.finished"
 )
 
 // Event is a single state change emitted by the harness.

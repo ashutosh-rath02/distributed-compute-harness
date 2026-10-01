@@ -53,6 +53,16 @@ func main() {
 		err = client.cmdArtifacts()
 	case "outputs":
 		err = cmdOutputs(client, args[1:])
+	case "map":
+		err = cmdMap(client, args[1:])
+	case "jobs":
+		err = client.cmdJobs()
+	case "job":
+		err = requireArgs(args, 2, "job <job-id>", func() error { return client.cmdJob(args[1]) })
+	case "job-outputs":
+		err = cmdJobOutputs(client, args[1:])
+	case "job-cancel":
+		err = requireArgs(args, 2, "job-cancel <job-id>", func() error { return client.cmdJobCancel(args[1]) })
 	case "node":
 		err = requireArgs(args, 2, "node <id>", func() error { return client.cmdNode(args[1]) })
 	case "resources":
@@ -168,6 +178,22 @@ Commands:
   artifact rm <sha256>  delete a stored file (refused while a queued or
                         running workload needs it)
   artifacts             list stored files and how much space they use
+  map [-each FILE|GLOB ... | -count N] [-shared FILE ...] [-out NAME ...]
+      [-attempts N] [-reduce "cmd args" [-reduce-out NAME ...]] <cmd> [args...]
+                        run one task per file (or N copies) spread over the
+                        fleet as a job: each task gets its file under its
+                        base name ({in} in the args; {i} is its number),
+                        failed tasks are retried elsewhere, and -reduce runs
+                        once every task succeeded, with their outputs at
+                        parts/<task>/<name>. Example:
+                          harnessctl map -each "photos/*.jpg" -shared resize.py
+                            -out small.jpg python resize.py {in} small.jpg
+  jobs                  list jobs and their progress
+  job <job-id>          show every task's state, attempts, node, and outputs
+  job-outputs <job-id> [dir]
+                        download the job's result (and each task's outputs
+                        under parts/<task>/)
+  job-cancel <job-id>   cancel a job and stop its running tasks
   workloads             list all known workloads
   workload <id>         show one workload's request, state, and captured output
   cancel <workload-id>  request cancellation of a running workload
