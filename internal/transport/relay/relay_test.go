@@ -2,7 +2,9 @@ package relay
 
 import (
 	"context"
+	"io"
 	"net"
+	"net/http"
 	"testing"
 	"time"
 
@@ -139,6 +141,59 @@ func TestTLSDialRejectsMismatchedFingerprint(t *testing.T) {
 	defer dialCancel()
 	if _, err := client.Dial(dialCtx, relayAddr); err == nil {
 		t.Fatal("expected Dial to fail with a mismatched fingerprint")
+	}
+}
+
+func TestHTTPThroughRelay(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		tls  bool
+	}{
+		{name: "plaintext"},
+		{name: "tls", tls: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			relayAddr := startTestRelay(t)
+			var server, client *Transport
+			if tc.tls {
+				cert, err := mtls.LoadOrCreateCert(t.TempDir())
+				if err != nil {
+					t.Fatalf("LoadOrCreateCert: %v", err)
+				}
+				server = NewTLSServer("session-http-"+tc.name, cert)
+				client = NewTLSClient("session-http-"+tc.name, mtls.PinnedClientConfig(mtls.Fingerprint(cert)))
+			} else {
+				server = New("session-http-" + tc.name)
+				client = NewClient("session-http-" + tc.name)
+			}
+			server.Handle("/agent-binary", func(w http.ResponseWriter, r *http.Request) {
+				w.Write([]byte("binary-content"))
+			})
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if _, err := server.Listen(ctx, relayAddr); err != nil {
+				t.Fatalf("Listen: %v", err)
+			}
+
+			var resp *http.Response
+			var err error
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				resp, err = client.HTTPClient(relayAddr).Get("http://manager/agent-binary")
+				if err == nil {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("GET through relay: %v", err)
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			defer resp.Body.Close()
+			body, _ := io.ReadAll(resp.Body)
+			if string(body) != "binary-content" {
+				t.Fatalf("unexpected body %q", body)
+			}
+		})
 	}
 }
 

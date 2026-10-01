@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -40,6 +41,8 @@ func main() {
 	insecure := flag.Bool("insecure", false, "disable TLS: agents connect over plaintext ws:// with no manager authentication (dev/local use only). POST /workloads still returns 202 and dispatches ASSIGN, but an agent run with its own -insecure will refuse to execute it (see cmd/agent's -insecure) rather than run arbitrary code for a manager it can't verify")
 	relayAddr := flag.String("relay-addr", "", "address of a relay server (cmd/relay) to also accept connections through, for agents that aren't on this manager's LAN; disabled if unset")
 	relayToken := flag.String("relay-token", "", "shared secret identifying this manager's session at the relay (required if -relay-addr is set; same care as -pairing-token: long, random, not reused)")
+	relayPublicURL := flag.String("relay-public-url", "", "browser-trusted HTTPS base URL exposed by the relay for internet enrollment links (e.g. https://relay.example.com:8443)")
+	relayEnrollmentToken := flag.String("relay-enrollment-token", "", "secret authorizing this manager to publish internet enrollment links (required with -relay-public-url)")
 	flag.Parse()
 
 	if *pairingToken == "" {
@@ -47,6 +50,18 @@ func main() {
 	}
 	if *relayAddr != "" && *relayToken == "" {
 		log.Fatal("manager: -relay-token is required when -relay-addr is set")
+	}
+	if *relayPublicURL != "" && *relayAddr == "" {
+		log.Fatal("manager: -relay-addr is required when -relay-public-url is set")
+	}
+	if *relayPublicURL != "" && *relayEnrollmentToken == "" {
+		log.Fatal("manager: -relay-enrollment-token is required when -relay-public-url is set")
+	}
+	if *relayPublicURL != "" {
+		u, err := url.Parse(*relayPublicURL)
+		if err != nil || u.Scheme != "https" || u.Host == "" || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+			log.Fatal("manager: -relay-public-url must be a browser-trusted HTTPS origin, e.g. https://relay.example.com:8443")
+		}
 	}
 
 	store, err := persistent.Open(*dbPath)
@@ -78,8 +93,8 @@ func main() {
 	// manager.Server, so neither transport package nor Server needs to
 	// know the other listening path exists.
 	var finalTransport domain.Transport = transport
+	var relayTransport *relay.Transport
 	if *relayAddr != "" {
-		var relayTransport domain.Transport
 		if !*insecure {
 			relayTransport = relay.NewTLSServer(*relayToken, cert)
 		} else {
@@ -89,18 +104,31 @@ func main() {
 		log.Printf("manager: also accepting connections via relay at %s", *relayAddr)
 	}
 
+	var enrollmentPublisher manager.EnrollmentPublisher
+	if *relayPublicURL != "" {
+		enrollmentPublisher = &manager.HTTPEnrollmentPublisher{URL: *relayPublicURL, RelaySession: *relayToken, PublishToken: *relayEnrollmentToken}
+	}
 	srv := manager.NewServer(finalTransport, store, manager.Config{
-		Addr:              *addr,
-		PairingToken:      *pairingToken,
-		HeartbeatTimeout:  *heartbeatTimeout,
-		ReconcileInterval: *reconcileInterval,
-		AgentBinaryPath:   *agentBinaryPath,
-		Fingerprint:       fingerprint,
+		Addr:                *addr,
+		PairingToken:        *pairingToken,
+		HeartbeatTimeout:    *heartbeatTimeout,
+		ReconcileInterval:   *reconcileInterval,
+		AgentBinaryPath:     *agentBinaryPath,
+		Fingerprint:         fingerprint,
+		RelayAddr:           *relayAddr,
+		RelayToken:          *relayToken,
+		RelayPublicURL:      *relayPublicURL,
+		EnrollmentPublisher: enrollmentPublisher,
 	})
 	// Registered before Run (which calls transport.Listen) — puts the
 	// download on the exact address/port agents already dial, no new port
 	// or firewall rule needed for self-update (internal/agent/selfupdate.go).
 	transport.Handle("/agent-binary", srv.AgentBinaryHandler())
+	transport.Handle("/enroll/", srv.EnrollmentHandler())
+	if relayTransport != nil {
+		relayTransport.Handle("/agent-binary", srv.AgentBinaryHandler())
+		relayTransport.Handle("/enroll/", srv.EnrollmentHandler())
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

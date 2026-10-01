@@ -10,6 +10,7 @@ package joinscript
 import (
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 )
 
@@ -23,7 +24,19 @@ type Info struct {
 	Insecure             bool
 	AgentBinaryAvailable bool
 	AgentBinarySHA256    string
+	RelayAvailable       bool
+	RelayAddr            string
+	RelayToken           string
+	AgentBinaryPath      string
+	BootstrapURL         string
 }
+
+type Mode string
+
+const (
+	ModeLAN    Mode = "lan"
+	ModeRemote Mode = "remote"
+)
 
 // Build returns the onboarding script for platform ("windows" or
 // "android") targeting the manager at addr (host:port, e.g.
@@ -33,13 +46,27 @@ type Info struct {
 // same cases the CLI has always rejected: a malformed address, an unknown
 // platform, or a manager with no agent binary configured.
 func Build(addr, platform string, info Info) (string, error) {
+	return BuildMode(ModeLAN, addr, platform, info)
+}
+
+// BuildMode builds either the existing LAN bootstrap or a relay-connected
+// bootstrap. Remote mode downloads from BootstrapURL when a public relay
+// enrollment supplied one; the legacy/manual path verifies and launches a
+// binary the operator placed locally.
+func BuildMode(mode Mode, addr, platform string, info Info) (string, error) {
+	if mode != ModeLAN && mode != ModeRemote {
+		return "", fmt.Errorf("unknown connection mode %q (want %q or %q)", mode, ModeLAN, ModeRemote)
+	}
+	if mode == ModeRemote {
+		return buildRemote(platform, info)
+	}
 	// net.SplitHostPort(":7420") returns host="", nil error — a legal
 	// listen-address form, but useless here: it's also the manager's own
 	// -addr default and startup log text, so an operator copying that
 	// literally would otherwise sail past this check and generate a
 	// download URL pointing at nothing ("https://:7420/agent-binary").
-	if host, _, err := net.SplitHostPort(addr); err != nil || host == "" {
-		return "", fmt.Errorf("invalid manager address %q (want host:port, e.g. 192.168.10.11:7420)", addr)
+	if err := ValidateAddress(addr); err != nil {
+		return "", fmt.Errorf("invalid manager address %q (want host:port, e.g. 192.168.10.11:7420): %w", addr, err)
 	}
 	if platform != "windows" && platform != "android" {
 		return "", fmt.Errorf("unknown platform %q (want %q or %q)", platform, "windows", "android")
@@ -57,6 +84,10 @@ func Build(addr, platform string, info Info) (string, error) {
 		authFlag = "-insecure"
 	}
 	hash := strings.ToUpper(info.AgentBinarySHA256)
+	binaryPath := info.AgentBinaryPath
+	if binaryPath == "" {
+		binaryPath = "/agent-binary"
+	}
 
 	if platform == "android" {
 		return fmt.Sprintf(`One-time prerequisites on the phone, before pasting anything below:
@@ -68,13 +99,144 @@ func Build(addr, platform string, info Info) (string, error) {
 
 Then paste this into Termux:
 
-pkg install -y curl && mkdir -p ~/home-harness && cd ~/home-harness && curl %s-o agent "%s://%s/agent-binary" && [ "$(sha256sum agent | awk '{print $1}')" = "%s" ] && chmod +x agent && mkdir -p ~/.termux/boot && printf '#!/data/data/com.termux/files/usr/bin/bash\n/data/data/com.termux/files/usr/bin/termux-wake-lock\ncd ~/home-harness\nwhile true; do ./agent -manager-addr %s -pairing-token %s %s; sleep 5; done\n' > ~/.termux/boot/start-harness-agent.sh && chmod +x ~/.termux/boot/start-harness-agent.sh && (nohup ~/.termux/boot/start-harness-agent.sh >~/home-harness/agent.log 2>&1 &) && echo "Installed — agent running, and will auto-start on reboot via Termux:Boot."
-`, curlFlag, scheme, addr, strings.ToLower(hash), addr, info.PairingToken, authFlag), nil
+pkg install -y curl && mkdir -p ~/home-harness && cd ~/home-harness && curl %s-o agent "%s://%s" && [ "$(sha256sum agent | awk '{print $1}')" = "%s" ] && chmod +x agent && mkdir -p ~/.termux/boot && printf '#!/data/data/com.termux/files/usr/bin/bash\n/data/data/com.termux/files/usr/bin/termux-wake-lock\ncd ~/home-harness\nwhile true; do ./agent -pairing-token %s %s; sleep 5; done\n' > ~/.termux/boot/start-harness-agent.sh && chmod +x ~/.termux/boot/start-harness-agent.sh && (nohup ~/.termux/boot/start-harness-agent.sh >~/home-harness/agent.log 2>&1 &) && echo "Installed — agent running with LAN discovery, and will auto-start on reboot via Termux:Boot."
+`, curlFlag, scheme, addr+binaryPath, strings.ToLower(hash), info.PairingToken, authFlag), nil
 	}
 
-	return fmt.Sprintf(`Paste this into a PowerShell terminal on the new machine:
+	return "Paste this into PowerShell. It installs the agent for the current user and reconnects automatically at every logon using LAN discovery:\n\n" +
+		windowsInstall(
+			fmt.Sprintf(`curl.exe %s"%s://%s" -o $download`, curlFlag, scheme, addr+binaryPath),
+			hash,
+			fmt.Sprintf("-pairing-token %s %s", info.PairingToken, authFlag),
+			"Installed. The agent now discovers the phone on the LAN and reconnects automatically after logon.",
+		), nil
+}
 
-curl.exe %s"%s://%s/agent-binary" -o agent.exe
-if ((Get-FileHash agent.exe -Algorithm SHA256).Hash -ne "%s") { throw "agent.exe hash mismatch — download corrupted or tampered with, aborting" } else { .\agent.exe -manager-addr %s -pairing-token %s %s }
-`, curlFlag, scheme, addr, hash, addr, info.PairingToken, authFlag), nil
+// windowsInstall is the one PowerShell installation block every Windows
+// onboarding path shares: fetch places the candidate binary at $download,
+// which must match hash before it replaces the installed agent; then a
+// per-user HKCU Run launcher keeps the agent (run with agentFlags) alive
+// across crashes and logons. Sharing it keeps LAN and relay onboarding
+// from drifting apart on persistence — a remote node that silently stops
+// at window close is exactly the kind of regression that would otherwise
+// only show up on real hardware.
+func windowsInstall(fetch, hash, agentFlags, done string) string {
+	return fmt.Sprintf(`$root = Join-Path $env:LOCALAPPDATA "HomeHarness"
+New-Item -ItemType Directory -Force $root | Out-Null
+$download = Join-Path $root "agent.new.exe"
+$agent = Join-Path $root "agent.exe"
+%s
+if ((Get-FileHash $download -Algorithm SHA256).Hash -ne "%s") { Remove-Item $download -Force; throw "agent.exe hash mismatch — wrong, corrupted, or tampered binary; aborting" }
+Move-Item $download $agent -Force
+$launcher = Join-Path $root "start-agent.ps1"
+@'
+$agent = Join-Path $env:LOCALAPPDATA "HomeHarness\agent.exe"
+while ($true) {
+  & $agent %s
+  Start-Sleep -Seconds 5
+}
+'@ | Set-Content -Encoding UTF8 $launcher
+$run = 'powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $launcher + '"'
+New-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "HomeComputeHarnessAgent" -Value $run -PropertyType String -Force | Out-Null
+Start-Process powershell.exe -ArgumentList @("-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-File", $launcher) -WindowStyle Hidden
+Write-Host "%s"
+`, fetch, hash, agentFlags, done)
+}
+
+// ValidateAddress accepts an IP address or conservative DNS hostname plus
+// a numeric TCP port. Besides producing usable URLs, this keeps an
+// operator-entered address from becoming shell syntax in generated scripts.
+func ValidateAddress(addr string) error {
+	host, portText, err := net.SplitHostPort(addr)
+	if err != nil || host == "" {
+		return fmt.Errorf("missing host or port")
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port < 1 || port > 65535 {
+		return fmt.Errorf("invalid port")
+	}
+	if net.ParseIP(host) != nil {
+		return nil
+	}
+	if len(host) > 253 {
+		return fmt.Errorf("hostname is too long")
+	}
+	for _, label := range strings.Split(host, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return fmt.Errorf("invalid hostname")
+		}
+		for _, ch := range label {
+			if (ch < 'a' || ch > 'z') && (ch < 'A' || ch > 'Z') && (ch < '0' || ch > '9') && ch != '-' {
+				return fmt.Errorf("invalid hostname")
+			}
+		}
+	}
+	return nil
+}
+
+func buildRemote(platform string, info Info) (string, error) {
+	if platform != "windows" && platform != "android" {
+		return "", fmt.Errorf("unknown platform %q (want %q or %q)", platform, "windows", "android")
+	}
+	if !info.RelayAvailable || info.RelayAddr == "" || info.RelayToken == "" {
+		return "", fmt.Errorf("manager has no relay configured — restart it with -relay-addr and -relay-token to enable remote joining")
+	}
+	if err := ValidateAddress(info.RelayAddr); err != nil {
+		return "", fmt.Errorf("invalid relay address %q (want host:port, e.g. relay.example.com:8420)", info.RelayAddr)
+	}
+	if !info.AgentBinaryAvailable {
+		return "", fmt.Errorf("manager has no agent binary configured — restart it with -agent-binary (pointed at the right build for %s) to enable joining", platform)
+	}
+
+	authFlag := fmt.Sprintf("-manager-fingerprint %s", info.Fingerprint)
+	if info.Insecure {
+		authFlag = "-insecure"
+	}
+	hash := strings.ToUpper(info.AgentBinarySHA256)
+	flags := fmt.Sprintf("-pairing-token %s %s -relay-addr %s -relay-token %s", info.PairingToken, authFlag, info.RelayAddr, info.RelayToken)
+	if info.BootstrapURL != "" {
+		if platform == "android" {
+			return fmt.Sprintf(`One-time prerequisites on the phone:
+  1. Install Termux and Termux:Boot from F-Droid, then open Termux once.
+  2. Disable Android battery optimization for Termux where available.
+
+Then paste this into Termux:
+
+pkg install -y curl && mkdir -p ~/home-harness && cd ~/home-harness && curl -fLo agent "%s" && [ "$(sha256sum agent | awk '{print $1}')" = "%s" ] && chmod +x agent && mkdir -p ~/.termux/boot && printf '#!/data/data/com.termux/files/usr/bin/bash\n/data/data/com.termux/files/usr/bin/termux-wake-lock\ncd ~/home-harness\nwhile true; do ./agent %s; sleep 5; done\n' > ~/.termux/boot/start-harness-agent.sh && chmod +x ~/.termux/boot/start-harness-agent.sh && (nohup ~/.termux/boot/start-harness-agent.sh >~/home-harness/agent.log 2>&1 &) && echo "Installed — agent connected through the relay."
+`, info.BootstrapURL, strings.ToLower(hash), flags), nil
+		}
+		return "Paste this into PowerShell. It installs the agent for the current user and reconnects through the relay automatically at every logon:\n\n" +
+			windowsInstall(
+				fmt.Sprintf(`curl.exe -fL "%s" -o $download`, info.BootstrapURL),
+				hash, flags,
+				"Installed. The agent now connects through the relay and reconnects automatically after logon.",
+			), nil
+	}
+
+	if platform == "android" {
+		return fmt.Sprintf(`One-time prerequisites on the phone:
+  1. Install Termux and Termux:Boot from F-Droid, then open Termux once.
+  2. Disable Android battery optimization for Termux where available.
+  3. Place the Android/Termux agent binary at ~/home-harness/agent.
+
+This manual path has no download step; use a QR/link invitation from a manager
+with -relay-public-url configured to have the binary fetched for you.
+
+Then paste this into Termux:
+
+mkdir -p ~/home-harness && cd ~/home-harness && [ "$(sha256sum agent | awk '{print $1}')" = "%s" ] && chmod +x agent && mkdir -p ~/.termux/boot && printf '#!/data/data/com.termux/files/usr/bin/bash\n/data/data/com.termux/files/usr/bin/termux-wake-lock\ncd ~/home-harness\nwhile true; do ./agent %s; sleep 5; done\n' > ~/.termux/boot/start-harness-agent.sh && chmod +x ~/.termux/boot/start-harness-agent.sh && (nohup ~/.termux/boot/start-harness-agent.sh >~/home-harness/agent.log 2>&1 &) && echo "Installed — agent running through the relay, and will auto-start on reboot via Termux:Boot."
+`, strings.ToLower(hash), flags), nil
+	}
+
+	return `Before running this, place the Windows agent binary as agent.exe in the current directory.
+This manual path has no download step; use a QR/link invitation from a manager
+with -relay-public-url configured to have the binary fetched for you.
+
+Then paste this into PowerShell. It installs the agent for the current user and reconnects through the relay automatically at every logon:
+
+` + windowsInstall(
+		`Copy-Item -LiteralPath (Join-Path (Get-Location) "agent.exe") $download -Force`,
+		hash, flags,
+		"Installed. The agent now connects through the relay and reconnects automatically after logon.",
+	), nil
 }

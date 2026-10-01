@@ -52,9 +52,8 @@ func (s *Server) AgentBinaryPlatform() (goos, arch string) {
 }
 
 // AgentBinaryHandler serves cfg.AgentBinaryPath's raw bytes — registered on
-// the transport's own listener (cmd/manager/main.go), the exact
-// address/port agents already dial, so an agent's self-update download
-// (internal/agent/selfupdate.go) needs no new address or firewall rule.
+// both direct and relay-backed transport listeners (cmd/manager/main.go),
+// so an agent's self-update download needs no new public inbound port.
 // Unauthenticated deliberately: the real security boundary is the already
 // mTLS-authenticated connection the SELF_UPDATE command (naming the exact
 // expected hash) arrives over, not this transport — anyone who could reach

@@ -69,12 +69,16 @@ func main() {
 	case "update":
 		err = requireArgs(args, 2, "update <id>", func() error { return client.cmdUpdateNode(args[1]) })
 	case "join":
-		err = requireArgs(args, 2, "join <manager-lan-addr> [android]", func() error {
+		err = requireArgs(args, 2, "join <manager-lan-addr|remote> [android]", func() error {
 			platform := "windows"
 			if len(args) >= 3 {
 				platform = args[2]
 			}
-			return client.cmdJoin(args[1], platform)
+			mode, addr := joinscript.ModeLAN, args[1]
+			if args[1] == "remote" {
+				mode, addr = joinscript.ModeRemote, ""
+			}
+			return client.cmdJoin(mode, addr, platform)
 		})
 	default:
 		usage()
@@ -126,12 +130,12 @@ Commands:
                         started with -agent-binary); the node reconnects on
                         its own once done — no manual file transfer or
                         restart. "nodes" flags any node this would affect.
-  join <manager-addr> [android]
+  join <manager-addr|remote> [android]
                         print a ready-to-run onboarding block that
-                        downloads the agent from this manager and
-                        registers it — paste it into a terminal on the new
-                        machine, with no manual file transfer, fingerprint
-                        lookup, or flag-typing. Default platform is
+                        registers an agent — paste it into a terminal on
+                        the new machine with no fingerprint lookup or
+                        flag-typing. LAN mode also downloads the binary
+                        directly from the manager. Default platform is
                         "windows" (a PowerShell block); "android" prints a
                         bash block for Termux instead (install Termux +
                         Termux:Boot from F-Droid first — printed with the
@@ -141,7 +145,12 @@ Commands:
                         pointed at the right build for the target
                         platform (the manager serves one binary at a
                         time — restart it with a different -agent-binary
-                        to switch which platform "join" onboards).`)
+                        to switch which platform "join" onboards).
+                        Use "remote" instead of an address to generate a
+                        relay-connected script from the manager's configured
+                        -relay-addr/-relay-token. Because the relay does not
+                        serve downloads, place agent.exe/agent on the remote
+                        device before running that script.`)
 }
 
 // cmdRun parses "run"'s own flags separately from the top-level FlagSet,
@@ -553,6 +562,9 @@ type joinInfoView struct {
 	Insecure             bool   `json:"insecure"`
 	AgentBinaryAvailable bool   `json:"agentBinaryAvailable"`
 	AgentBinarySHA256    string `json:"agentBinarySha256"`
+	RelayAvailable       bool   `json:"relayAvailable"`
+	RelayAddr            string `json:"relayAddr"`
+	RelayToken           string `json:"relayToken"`
 }
 
 // cmdJoin prints a ready-to-run onboarding block for the new machine (v5
@@ -565,17 +577,20 @@ type joinInfoView struct {
 // manager's own web dashboard (v5 part 2, GET /join-script) calls the
 // same function in-process, so the CLI and the dashboard can never drift
 // apart on script format.
-func (c *apiClient) cmdJoin(addr, platform string) error {
+func (c *apiClient) cmdJoin(mode joinscript.Mode, addr, platform string) error {
 	var info joinInfoView
 	if err := c.get("/join-info", &info); err != nil {
 		return err
 	}
-	script, err := joinscript.Build(addr, platform, joinscript.Info{
+	script, err := joinscript.BuildMode(mode, addr, platform, joinscript.Info{
 		Fingerprint:          info.Fingerprint,
 		PairingToken:         info.PairingToken,
 		Insecure:             info.Insecure,
 		AgentBinaryAvailable: info.AgentBinaryAvailable,
 		AgentBinarySHA256:    info.AgentBinarySHA256,
+		RelayAvailable:       info.RelayAvailable,
+		RelayAddr:            info.RelayAddr,
+		RelayToken:           info.RelayToken,
 	})
 	if err != nil {
 		return err

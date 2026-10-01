@@ -31,18 +31,25 @@ func (s *Server) apiGetDashboard(w http.ResponseWriter, r *http.Request) {
 // and the dashboard can never drift apart on script format.
 func (s *Server) apiGetJoinScript(w http.ResponseWriter, r *http.Request) {
 	addr := r.URL.Query().Get("addr")
+	mode := joinscript.Mode(r.URL.Query().Get("mode"))
+	if mode == "" {
+		mode = joinscript.ModeLAN
+	}
 	platform := r.URL.Query().Get("platform")
 	if platform == "" {
 		platform = "windows"
 	}
 
 	info := s.JoinInfo()
-	script, err := joinscript.Build(addr, platform, joinscript.Info{
+	script, err := joinscript.BuildMode(mode, addr, platform, joinscript.Info{
 		Fingerprint:          info.Fingerprint,
 		PairingToken:         info.PairingToken,
 		Insecure:             info.Insecure,
 		AgentBinaryAvailable: info.AgentBinaryAvailable,
 		AgentBinarySHA256:    info.AgentBinarySHA256,
+		RelayAvailable:       info.RelayAvailable,
+		RelayAddr:            info.RelayAddr,
+		RelayToken:           info.RelayToken,
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)

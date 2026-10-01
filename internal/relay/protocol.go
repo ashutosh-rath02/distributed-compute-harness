@@ -18,18 +18,10 @@
 // token with the same care as the existing manager pairing token: long,
 // random, and not reused across deployments.
 //
-// Known limitation: self-update (internal/agent/selfupdate.go) does not
-// work for a relay-connected node. It downloads the new binary with a
-// plain HTTP GET to the manager's address, and in relay mode that address
-// is the relay's — which only speaks this package's rendezvous protocol,
-// not HTTP. The download fails and is logged (no crash, no corruption:
-// performSelfUpdate leaves the running binary untouched on any failure
-// before the swap), but SELF_UPDATE then permanently does nothing for that
-// node — there is no way for the manager to distinguish a relay-arrived
-// connection from a LAN one (RemoteAddr reports the agent's real address
-// either way, via hintedConn) to reject the attempt up front instead.
-// Fixing this means routing the download itself through the relay, which
-// is separate follow-up work, not part of v5 remote part 1.
+// Auxiliary HTTP traffic such as self-update downloads opens its own
+// short-lived pairing through the same session. Secure mode still runs TLS
+// end to end over that splice; the relay does not become an HTTP server or
+// gain visibility into the downloaded bytes.
 package relay
 
 import (

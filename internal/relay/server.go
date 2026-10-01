@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"crypto/cipher"
 	"io"
 	"net"
 	"sync"
@@ -28,16 +29,37 @@ type pendingEntry struct {
 type Server struct {
 	idleTimeout time.Duration
 
-	mu      sync.Mutex
-	pending map[string][]*pendingEntry
+	mu          sync.Mutex
+	pending     map[string][]*pendingEntry
+	aliasCipher cipher.AEAD
 }
 
 // NewServer returns a relay server. idleTimeout <= 0 uses DefaultIdleTimeout.
 func NewServer(idleTimeout time.Duration) *Server {
+	return NewServerWithAliasKey(idleTimeout, "")
+}
+
+// NewServerWithAliasKey enables restart-stable, opaque per-device session
+// aliases used by public enrollment. The key must remain stable across
+// relay restarts or previously enrolled devices cannot resolve their alias.
+func NewServerWithAliasKey(idleTimeout time.Duration, aliasKey string) *Server {
 	if idleTimeout <= 0 {
 		idleTimeout = DefaultIdleTimeout
 	}
-	return &Server{idleTimeout: idleTimeout, pending: make(map[string][]*pendingEntry)}
+	aead, err := newAliasCipher(aliasKey)
+	if err != nil {
+		panic(err) // AES-GCM construction with a SHA-256 key cannot fail
+	}
+	return &Server{idleTimeout: idleTimeout, pending: make(map[string][]*pendingEntry), aliasCipher: aead}
+}
+
+func (s *Server) issueAlias(session string) (string, error) { return sealAlias(s.aliasCipher, session) }
+
+func (s *Server) resolveSession(session string) string {
+	if resolved, ok := openAlias(s.aliasCipher, session); ok {
+		return resolved
+	}
+	return session
 }
 
 // Serve accepts connections on ln until ctx is canceled or Accept fails.
@@ -140,6 +162,7 @@ func (s *Server) handleListen(session string, conn net.Conn) {
 }
 
 func (s *Server) handleConnect(session string, conn net.Conn) {
+	session = s.resolveSession(session)
 	e := s.claim(session)
 	if e == nil {
 		writeJSONLine(conn, pairedResponse{Error: "no listener waiting for this session"})

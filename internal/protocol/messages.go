@@ -7,8 +7,10 @@ import (
 )
 
 // RegisterPayload is sent by an agent to request admission to the fabric.
-// PairingToken is the minimum viable "identity credential" from v1.md
-// §4.2 — network presence alone never grants execution authority
+// PairingToken is the first-admission credential from v1.md §4.2. It may
+// be the operator's shared token or a short-lived one-time enrollment token;
+// after admission the persistent signing key authenticates reconnects.
+// Network presence alone never grants execution authority
 // (baseline §5). Signature proves possession of the private key behind
 // Manifest.Node.Identity.PublicKey: it is an Ed25519 signature, made with
 // that key, over RegisterSignedData(PairingToken, NodeID). Without it, a

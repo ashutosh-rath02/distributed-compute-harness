@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"time"
 
 	"nhooyr.io/websocket"
 
@@ -68,6 +69,42 @@ func (t *Transport) Listen(ctx context.Context, addr string) (<-chan domain.Conn
 	}
 	lis := newListener(addr, t.session)
 	return t.ws.ListenOn(ctx, lis), nil
+}
+
+// Handle registers an HTTP route on the manager side's WebSocket server.
+// It mirrors ws.Transport.Handle so auxiliary endpoints such as
+// /agent-binary are available through both direct and relay listeners.
+func (t *Transport) Handle(pattern string, handler http.HandlerFunc) {
+	if t.ws != nil {
+		t.ws.Handle(pattern, handler)
+	}
+}
+
+// HTTPClient returns a client whose TCP connections are established via
+// this relay transport's rendezvous session. TLS, when configured on the
+// client transport, remains end-to-end between agent and manager.
+func (t *Transport) HTTPClient(relayAddr string) *http.Client {
+	return &http.Client{
+		Timeout: 2 * time.Minute,
+		Transport: &http.Transport{
+			DisableKeepAlives: true,
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				raw, err := relayproto.DialConnect(ctx, relayAddr, t.session)
+				if err != nil {
+					return nil, err
+				}
+				if t.clientTLS == nil {
+					return raw, nil
+				}
+				tlsConn := tls.Client(raw, t.clientTLS)
+				if err := tlsConn.HandshakeContext(ctx); err != nil {
+					raw.Close()
+					return nil, fmt.Errorf("relay: tls handshake: %w", err)
+				}
+				return tlsConn, nil
+			},
+		},
+	}
 }
 
 // Dial registers as the relay-connecting side of t.session at addr (the

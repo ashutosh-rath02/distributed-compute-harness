@@ -22,6 +22,9 @@ type JoinInfo struct {
 	// authenticates the bytes, the same reasoning v4's /agent-binary
 	// endpoint already documents. Empty iff AgentBinaryAvailable is false.
 	AgentBinarySHA256 string `json:"agentBinarySha256"`
+	RelayAvailable    bool   `json:"relayAvailable"`
+	RelayAddr         string `json:"relayAddr,omitempty"`
+	RelayToken        string `json:"relayToken,omitempty"`
 }
 
 // JoinInfo reports what an operator needs to onboard a new node. Insecure
@@ -35,5 +38,8 @@ func (s *Server) JoinInfo() JoinInfo {
 		Insecure:             s.cfg.Fingerprint == "",
 		AgentBinaryAvailable: s.agentBinaryHash != "",
 		AgentBinarySHA256:    s.agentBinaryHash,
+		RelayAvailable:       s.cfg.RelayAddr != "" && s.cfg.RelayToken != "",
+		RelayAddr:            s.cfg.RelayAddr,
+		RelayToken:           s.cfg.RelayToken,
 	}
 }

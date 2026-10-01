@@ -42,6 +42,14 @@ type Config struct {
 	// loopback API instead — see cmd/harnessctl's `join` command. Empty
 	// when running -insecure.
 	Fingerprint string
+	// RelayAddr/RelayToken are surfaced only through the loopback operator
+	// API so onboarding scripts can configure an off-LAN agent without the
+	// operator retyping the manager's relay settings.
+	RelayAddr           string
+	RelayToken          string
+	RelayPublicURL      string
+	EnrollmentTTL       time.Duration
+	EnrollmentPublisher EnrollmentPublisher
 }
 
 // PersistentStore is the subset of persistent storage the manager needs:
@@ -70,7 +78,8 @@ type Server struct {
 	// Events publishes lifecycle/command events (v1.md §12) — a future
 	// scheduler, the HTTP API's SSE stream, or a CLI can subscribe without
 	// coupling to networking code.
-	Events *eventbus.Bus
+	Events      *eventbus.Bus
+	enrollments *enrollmentStore
 
 	pendingMu sync.Mutex
 	pending   map[string]pendingCommand
@@ -106,14 +115,18 @@ func NewServer(transport domain.Transport, store PersistentStore, cfg Config) *S
 	if cfg.ReconcileInterval <= 0 {
 		cfg.ReconcileInterval = defaultReconcileInterval
 	}
+	if cfg.EnrollmentTTL <= 0 {
+		cfg.EnrollmentTTL = defaultEnrollmentTTL
+	}
 	s := &Server{
-		cfg:       cfg,
-		transport: transport,
-		store:     store,
-		Registry:  NewRegistry(),
-		Workloads: NewWorkloadRegistry(),
-		Events:    eventbus.New(),
-		pending:   make(map[string]pendingCommand),
+		cfg:         cfg,
+		transport:   transport,
+		store:       store,
+		Registry:    NewRegistry(),
+		Workloads:   NewWorkloadRegistry(),
+		Events:      eventbus.New(),
+		pending:     make(map[string]pendingCommand),
+		enrollments: newEnrollmentStore(),
 	}
 
 	if cfg.AgentBinaryPath == "" {
@@ -505,7 +518,12 @@ func (s *Server) handleRegister(ctx context.Context, conn domain.Conn, env *prot
 		return ""
 	}
 
-	if payload.PairingToken != s.cfg.PairingToken {
+	// Admission credentials are required only for a previously unknown
+	// identity. Once admitted, the persistent Ed25519 key is the durable
+	// credential: a reconnect still has to pass the proof-of-possession
+	// check above, but does not need to reuse a one-time enrollment token.
+	_, knownNode := s.Registry.Get(claimedID)
+	if !knownNode && payload.PairingToken != s.cfg.PairingToken && !s.enrollments.consume(payload.PairingToken) {
 		s.reject(ctx, conn, env.Source, "invalid pairing token")
 		return ""
 	}

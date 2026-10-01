@@ -89,15 +89,20 @@ func (a *Agent) performSelfUpdate(expectedSHA256 string) {
 // against a throwaway temp file standing in for the running binary,
 // without ever touching the actual test binary on disk.
 func (a *Agent) performSelfUpdateAt(exePath, expectedSHA256 string) {
-	addr := a.getCurrentManagerAddr()
-	if addr == "" {
-		log.Printf("agent %s: self-update: no known manager address, aborting", a.identity.NodeID)
-		return
+	client := a.cfg.SelfUpdateHTTPClient
+	url := a.cfg.SelfUpdateURL
+	if client == nil || url == "" {
+		addr := a.getCurrentManagerAddr()
+		if addr == "" {
+			log.Printf("agent %s: self-update: no known manager address, aborting", a.identity.NodeID)
+			return
+		}
+		client = a.selfUpdateHTTPClient()
+		url = fmt.Sprintf("%s://%s/agent-binary", a.selfUpdateScheme(), addr)
 	}
 	downloadPath := exePath + selfUpdateDownloadSuffix
 
-	url := fmt.Sprintf("%s://%s/agent-binary", a.selfUpdateScheme(), addr)
-	if err := downloadFile(a.selfUpdateHTTPClient(), url, downloadPath); err != nil {
+	if err := downloadFile(client, url, downloadPath); err != nil {
 		log.Printf("agent %s: self-update: download failed: %v", a.identity.NodeID, err)
 		os.Remove(downloadPath)
 		return

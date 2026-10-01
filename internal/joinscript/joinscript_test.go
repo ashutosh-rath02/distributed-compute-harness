@@ -18,9 +18,11 @@ func TestBuildWindowsSecureEmbedsFingerprintTokenAndHash(t *testing.T) {
 		"curl.exe -k ",
 		`https://192.168.10.11:7420/agent-binary`,
 		"DEADBEEF", // Get-FileHash renders uppercase hex
-		"-manager-addr 192.168.10.11:7420",
 		"-pairing-token secret-token",
 		"-manager-fingerprint abc123",
+		`HKCU:\Software\Microsoft\Windows\CurrentVersion\Run`,
+		"HomeComputeHarnessAgent",
+		"start-agent.ps1",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected output to contain %q, got:\n%s", want, out)
@@ -36,9 +38,10 @@ func TestBuildWindowsSecureEmbedsFingerprintTokenAndHash(t *testing.T) {
 	// printed an error. Assert the launch is textually inside the else
 	// branch (same line as "} else {"), not just present somewhere in the
 	// output.
-	if !strings.Contains(out, `} else { .\agent.exe`) {
-		t.Errorf("expected the agent.exe launch inside the hash check's else branch, got:\n%s", out)
+	if strings.Contains(out, "-manager-addr") {
+		t.Errorf("LAN installation must rediscover the manager instead of pinning its current IP, got:\n%s", out)
 	}
+	assertWindowsPersistentInstall(t, out)
 }
 
 func TestBuildWindowsInsecureUsesHTTPAndInsecureFlag(t *testing.T) {
@@ -111,7 +114,6 @@ func TestBuildAndroidEmbedsTermuxSetupAndHash(t *testing.T) {
 		"deadbeef", // sha256sum renders lowercase hex, unlike PowerShell's Get-FileHash
 		"~/.termux/boot/start-harness-agent.sh",
 		"termux-wake-lock",
-		"-manager-addr 192.168.10.11:7420",
 		"-pairing-token secret-token",
 		"-manager-fingerprint abc123",
 	} {
@@ -121,6 +123,9 @@ func TestBuildAndroidEmbedsTermuxSetupAndHash(t *testing.T) {
 	}
 	if strings.Contains(out, "-insecure") {
 		t.Errorf("expected no -insecure flag in secure mode, got:\n%s", out)
+	}
+	if strings.Contains(out, "-manager-addr") {
+		t.Errorf("LAN Termux installation must rediscover the manager instead of pinning its current IP, got:\n%s", out)
 	}
 	// Same lesson as the PowerShell if/else fix, applied to bash: the hash
 	// check must gate the download's use via && chaining, not sit on its
@@ -160,5 +165,117 @@ func TestBuildAndroidInsecureUsesHTTPAndInsecureFlag(t *testing.T) {
 	}
 	if strings.Contains(out, "-manager-fingerprint") {
 		t.Errorf("expected no -manager-fingerprint flag in insecure mode, got:\n%s", out)
+	}
+}
+
+func TestBuildRemoteWindowsUsesRelayAndNoDownload(t *testing.T) {
+	out, err := BuildMode(ModeRemote, "", "windows", Info{
+		Fingerprint: "abc123", PairingToken: "pair-secret",
+		AgentBinaryAvailable: true, AgentBinarySHA256: "deadbeef",
+		RelayAvailable: true, RelayAddr: "relay.example.com:8420", RelayToken: "relay-secret",
+	})
+	if err != nil {
+		t.Fatalf("BuildMode: %v", err)
+	}
+	for _, want := range []string{
+		"DEADBEEF", "-pairing-token pair-secret", "-manager-fingerprint abc123",
+		"-relay-addr relay.example.com:8420", "-relay-token relay-secret",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected output to contain %q, got:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "curl") || strings.Contains(out, "-manager-addr") {
+		t.Errorf("remote script must not download from or directly dial the manager, got:\n%s", out)
+	}
+	assertWindowsPersistentInstall(t, out)
+}
+
+// The Windows relay paths once ran the agent in the foreground with no
+// launcher, so a remote node died with its console window and never came
+// back — unlike LAN Windows and both Android paths. Every Windows variant
+// must install the same verified, per-user, logon-persistent launcher.
+func assertWindowsPersistentInstall(t *testing.T, out string) {
+	t.Helper()
+	for _, want := range []string{
+		`HKCU:\Software\Microsoft\Windows\CurrentVersion\Run`,
+		"HomeComputeHarnessAgent",
+		"start-agent.ps1",
+		"Move-Item $download $agent",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected persistent install to contain %q, got:\n%s", want, out)
+		}
+	}
+	if strings.Index(out, "hash mismatch") > strings.Index(out, "Move-Item $download $agent") {
+		t.Errorf("expected hash verification to precede installation, got:\n%s", out)
+	}
+	if strings.Contains(out, `.\agent.exe`) {
+		t.Errorf("expected the installed launcher, not a foreground run of a local agent.exe, got:\n%s", out)
+	}
+}
+
+func TestBuildRemoteWindowsBootstrapDownloadsAndInstallsLauncher(t *testing.T) {
+	out, err := BuildMode(ModeRemote, "", "windows", Info{
+		Fingerprint: "abc123", PairingToken: "one-time-token",
+		AgentBinaryAvailable: true, AgentBinarySHA256: "deadbeef",
+		RelayAvailable: true, RelayAddr: "relay.example.com:8420", RelayToken: "ha1.device-credential",
+		BootstrapURL: "https://relay.example.com:8443/enroll/one-time-token/agent-binary",
+	})
+	if err != nil {
+		t.Fatalf("BuildMode: %v", err)
+	}
+	for _, want := range []string{
+		`curl.exe -fL "https://relay.example.com:8443/enroll/one-time-token/agent-binary" -o $download`,
+		"DEADBEEF",
+		"& $agent -pairing-token one-time-token -manager-fingerprint abc123 -relay-addr relay.example.com:8420 -relay-token ha1.device-credential",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected output to contain %q, got:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "-manager-addr") {
+		t.Errorf("remote script must not directly dial the manager, got:\n%s", out)
+	}
+	assertWindowsPersistentInstall(t, out)
+}
+
+func TestBuildRemoteAndroidUsesRelayAndBootScript(t *testing.T) {
+	out, err := BuildMode(ModeRemote, "", "android", Info{
+		Fingerprint: "abc123", PairingToken: "pair-secret",
+		AgentBinaryAvailable: true, AgentBinarySHA256: "DEADBEEF",
+		RelayAvailable: true, RelayAddr: "relay.example.com:8420", RelayToken: "relay-secret",
+	})
+	if err != nil {
+		t.Fatalf("BuildMode: %v", err)
+	}
+	for _, want := range []string{"deadbeef", "termux-wake-lock", "-relay-addr relay.example.com:8420", "-relay-token relay-secret"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected output to contain %q, got:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "curl") || strings.Contains(out, "-manager-addr") {
+		t.Errorf("remote script must not download from or directly dial the manager, got:\n%s", out)
+	}
+}
+
+func TestBuildRemoteRequiresRelayAndBinary(t *testing.T) {
+	if _, err := BuildMode(ModeRemote, "", "windows", Info{AgentBinaryAvailable: true}); err == nil {
+		t.Fatal("expected remote mode to require configured relay settings")
+	}
+	if _, err := BuildMode(ModeRemote, "", "windows", Info{
+		RelayAvailable: true, RelayAddr: "relay.example.com:8420", RelayToken: "secret",
+	}); err == nil {
+		t.Fatal("expected remote mode to require a configured agent binary")
+	}
+}
+
+func TestBuildRemoteRejectsUnusableRelayAddress(t *testing.T) {
+	_, err := BuildMode(ModeRemote, "", "windows", Info{
+		AgentBinaryAvailable: true, AgentBinarySHA256: "deadbeef",
+		RelayAvailable: true, RelayAddr: ":8420", RelayToken: "secret",
+	})
+	if err == nil {
+		t.Fatal("expected remote mode to reject a relay address without a host")
 	}
 }

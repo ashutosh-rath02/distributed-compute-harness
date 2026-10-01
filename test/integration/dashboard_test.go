@@ -65,6 +65,9 @@ func TestDashboardServesHTML(t *testing.T) {
 	if !strings.Contains(string(body), "<title>Home Compute Harness</title>") {
 		t.Fatal("expected the dashboard's <title> in the served page")
 	}
+	if !strings.Contains(string(body), "Create QR + link") {
+		t.Fatal("expected QR enrollment control in dashboard")
+	}
 }
 
 // TestJoinScriptEndpointReturnsGeneratedScript proves GET /join-script
@@ -127,5 +130,33 @@ func TestJoinScriptEndpointRejectsBadInput(t *testing.T) {
 		if resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("GET %s: expected 400, got %d", path, resp.StatusCode)
 		}
+	}
+}
+
+func TestJoinScriptEndpointReturnsRemoteRelayScript(t *testing.T) {
+	binaryPath, _ := writeDummyAgentBinary(t, []byte("content"))
+	_, apiSrv := startTestManagerWithDashboard(t, "127.0.0.1:19313", manager.Config{
+		PairingToken: pairingToken, HeartbeatTimeout: 2 * time.Second,
+		AgentBinaryPath: binaryPath, Fingerprint: "test-fingerprint",
+		RelayAddr: "relay.example.com:8420", RelayToken: "relay-secret",
+	})
+
+	resp, err := http.Get(apiSrv.URL + "/join-script?mode=remote&platform=windows")
+	if err != nil {
+		t.Fatalf("GET remote /join-script: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+	script := string(body)
+	for _, want := range []string{"relay.example.com:8420", "relay-secret", "test-fingerprint", pairingToken} {
+		if !strings.Contains(script, want) {
+			t.Errorf("expected remote script to contain %q, got:\n%s", want, script)
+		}
+	}
+	if strings.Contains(script, "curl") || strings.Contains(script, "-manager-addr") {
+		t.Errorf("remote script should not attempt an unsupported direct download/dial, got:\n%s", script)
 	}
 }

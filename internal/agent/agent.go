@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"runtime"
 	"sync"
@@ -76,6 +77,12 @@ type Config struct {
 	// already calls to build the main WS transport — not a new trust
 	// mechanism, just reused for a second connection.
 	ManagerFingerprint string
+	// SelfUpdateHTTPClient/SelfUpdateURL optionally override the direct
+	// manager download path. The relay composition root supplies these so
+	// self-update can open a separate relay-mediated HTTP connection while
+	// the agent core remains independent of any concrete transport.
+	SelfUpdateHTTPClient *http.Client
+	SelfUpdateURL        string
 }
 
 const defaultAgentVersion = "0.1.0"

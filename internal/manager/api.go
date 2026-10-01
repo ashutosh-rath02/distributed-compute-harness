@@ -52,6 +52,8 @@ func toNodeView(rec *NodeRecord) nodeView {
 //	GET  /agent-binary/hash          the manager's currently-served agent binary hash
 //	GET  /join-info                  what a new node needs to onboard (fingerprint, pairing token, ...)
 //	GET  /join-script                the ready-to-paste onboarding script for ?addr=&platform=
+//	POST /enrollments                create a short-lived LAN or public-relay QR/link invitation
+//	GET  /enrollments/{token}/qr     render an invitation URL as a self-contained SVG QR code
 //	GET  /                           a local web dashboard (node list + "add a device" form)
 //	POST /workloads                 submit a workload: {"target":"...optional...","command":"...","args":[...],"requirements":{...optional...}}
 //	GET  /workloads                 list all known workloads
@@ -79,6 +81,8 @@ func (s *Server) NewHTTPHandler() http.Handler {
 	mux.HandleFunc("GET /agent-binary/hash", s.apiGetAgentBinaryHash)
 	mux.HandleFunc("GET /join-info", s.apiGetJoinInfo)
 	mux.HandleFunc("GET /join-script", s.apiGetJoinScript)
+	mux.HandleFunc("POST /enrollments", s.apiCreateEnrollment)
+	mux.HandleFunc("GET /enrollments/{token}/qr", s.apiGetEnrollmentQR)
 	mux.HandleFunc("GET /{$}", s.apiGetDashboard)
 	mux.HandleFunc("POST /workloads", s.apiPostWorkload)
 	mux.HandleFunc("GET /workloads", s.apiListWorkloads)

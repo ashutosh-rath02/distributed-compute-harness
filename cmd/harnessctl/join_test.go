@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"home-harness/internal/joinscript"
 )
 
 // captureStdout runs fn with os.Stdout redirected to a pipe and returns
@@ -54,7 +56,7 @@ func TestCmdJoinPrintsBuildsOutputOnSuccess(t *testing.T) {
 	c := joinInfoServer(t, `{"fingerprint":"abc123","pairingToken":"secret-token","insecure":false,"agentBinaryAvailable":true,"agentBinarySha256":"deadbeef"}`)
 
 	out := captureStdout(t, func() {
-		if err := c.cmdJoin("192.168.10.11:7420", "windows"); err != nil {
+		if err := c.cmdJoin(joinscript.ModeLAN, "192.168.10.11:7420", "windows"); err != nil {
 			t.Fatalf("cmdJoin: %v", err)
 		}
 	})
@@ -70,13 +72,27 @@ func TestCmdJoinPrintsBuildsOutputOnSuccess(t *testing.T) {
 func TestCmdJoinSurfacesBuildValidationErrors(t *testing.T) {
 	c := joinInfoServer(t, `{"fingerprint":"abc123","pairingToken":"secret-token","insecure":false,"agentBinaryAvailable":false}`)
 
-	if err := c.cmdJoin("192.168.10.11:7420", "windows"); err == nil {
+	if err := c.cmdJoin(joinscript.ModeLAN, "192.168.10.11:7420", "windows"); err == nil {
 		t.Fatal("expected cmdJoin to surface joinscript.Build's agent-binary-unavailable error")
 	}
-	if err := c.cmdJoin("no-port-here", "windows"); err == nil {
+	if err := c.cmdJoin(joinscript.ModeLAN, "no-port-here", "windows"); err == nil {
 		t.Fatal("expected cmdJoin to surface joinscript.Build's bad-address error")
 	}
-	if err := c.cmdJoin("192.168.10.11:7420", "ios"); err == nil {
+	if err := c.cmdJoin(joinscript.ModeLAN, "192.168.10.11:7420", "ios"); err == nil {
 		t.Fatal("expected cmdJoin to surface joinscript.Build's unknown-platform error")
+	}
+}
+
+func TestCmdJoinRemoteUsesRelayInfo(t *testing.T) {
+	c := joinInfoServer(t, `{"fingerprint":"abc123","pairingToken":"pair-secret","agentBinaryAvailable":true,"agentBinarySha256":"deadbeef","relayAvailable":true,"relayAddr":"relay.example.com:8420","relayToken":"relay-secret"}`)
+	out := captureStdout(t, func() {
+		if err := c.cmdJoin(joinscript.ModeRemote, "", "windows"); err != nil {
+			t.Fatalf("cmdJoin remote: %v", err)
+		}
+	})
+	for _, want := range []string{"relay.example.com:8420", "relay-secret", "pair-secret", "abc123"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected remote output to contain %q, got:\n%s", want, out)
+		}
 	}
 }

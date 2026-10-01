@@ -18,6 +18,9 @@ type joinInfoView struct {
 	Insecure             bool   `json:"insecure"`
 	AgentBinaryAvailable bool   `json:"agentBinaryAvailable"`
 	AgentBinarySHA256    string `json:"agentBinarySha256"`
+	RelayAvailable       bool   `json:"relayAvailable"`
+	RelayAddr            string `json:"relayAddr"`
+	RelayToken           string `json:"relayToken"`
 }
 
 // TestJoinInfoEndpointReturnsConfiguredValues proves GET /join-info (the
@@ -37,6 +40,8 @@ func TestJoinInfoEndpointReturnsConfiguredValues(t *testing.T) {
 		HeartbeatTimeout: 2 * time.Second,
 		AgentBinaryPath:  binaryPath,
 		Fingerprint:      "test-fingerprint",
+		RelayAddr:        "relay.example.com:8420",
+		RelayToken:       "relay-secret",
 	})
 	transport.Handle("/agent-binary", srv.AgentBinaryHandler())
 	go func() {
@@ -65,6 +70,9 @@ func TestJoinInfoEndpointReturnsConfiguredValues(t *testing.T) {
 	}
 	if info.AgentBinarySHA256 != wantHash {
 		t.Errorf("AgentBinarySHA256 = %q, want %q", info.AgentBinarySHA256, wantHash)
+	}
+	if !info.RelayAvailable || info.RelayAddr != "relay.example.com:8420" || info.RelayToken != "relay-secret" {
+		t.Errorf("unexpected relay join info: available=%v addr=%q token=%q", info.RelayAvailable, info.RelayAddr, info.RelayToken)
 	}
 }
 
@@ -99,6 +107,9 @@ func TestJoinInfoInsecureWithoutAgentBinary(t *testing.T) {
 	}
 	if info.AgentBinaryAvailable {
 		t.Error("expected AgentBinaryAvailable false when -agent-binary is unset")
+	}
+	if info.RelayAvailable || info.RelayAddr != "" || info.RelayToken != "" {
+		t.Errorf("expected relay details to be absent when relay is disabled, got %+v", info)
 	}
 }
 

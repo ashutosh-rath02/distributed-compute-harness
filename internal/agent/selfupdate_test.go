@@ -1,8 +1,10 @@
 package agent
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +13,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	relayproto "home-harness/internal/relay"
+	relaytransport "home-harness/internal/transport/relay"
 )
 
 func TestHashFile(t *testing.T) {
@@ -236,6 +242,57 @@ func TestPerformSelfUpdateAtHashMismatchLeavesBinaryUntouched(t *testing.T) {
 	}
 	if _, err := os.Stat(exePath + selfUpdateDownloadSuffix); !os.IsNotExist(err) {
 		t.Fatalf("expected the .download file to be cleaned up, stat err: %v", err)
+	}
+}
+
+func TestPerformSelfUpdateAtThroughRelay(t *testing.T) {
+	relayListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("relay listen: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go relayproto.NewServer(5*time.Second).Serve(ctx, relayListener)
+
+	newContent := []byte("new agent binary delivered through relay")
+	sum := sha256.Sum256(newContent)
+	wantHash := hex.EncodeToString(sum[:])
+	serverTransport := relaytransport.New("self-update-test")
+	serverTransport.Handle("/agent-binary", func(w http.ResponseWriter, r *http.Request) { w.Write(newContent) })
+	if _, err := serverTransport.Listen(ctx, relayListener.Addr().String()); err != nil {
+		t.Fatalf("manager relay listen: %v", err)
+	}
+	client := relaytransport.NewClient("self-update-test").HTTPClient(relayListener.Addr().String())
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		resp, probeErr := client.Get("http://manager/agent-binary")
+		if probeErr == nil {
+			resp.Body.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("relay download probe: %v", probeErr)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	a := newTestAgent(t)
+	a.cfg.SelfUpdateHTTPClient = client
+	a.cfg.SelfUpdateURL = "http://manager/agent-binary"
+	calls := withStubRelaunch(t)
+	exePath := filepath.Join(t.TempDir(), "agent.exe")
+	if err := os.WriteFile(exePath, []byte("old content"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	a.performSelfUpdateAt(exePath, wantHash)
+
+	got, err := os.ReadFile(exePath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(got) != string(newContent) || len(*calls) != 1 {
+		t.Fatalf("relay update did not swap and relaunch: content=%q calls=%d", got, len(*calls))
 	}
 }
 
