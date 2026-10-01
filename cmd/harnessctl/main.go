@@ -41,6 +41,12 @@ func main() {
 		err = client.cmdNodes()
 	case "login-url":
 		err = client.cmdLoginURL()
+	case "rename":
+		err = requireArgs(args, 3, "rename <id> <alias|->", func() error { return client.cmdRename(args[1], args[2]) })
+	case "label":
+		err = requireArgs(args, 3, "label <id> key=value|key= ...", func() error { return client.cmdLabel(args[1], args[2:]) })
+	case "audit":
+		err = cmdAudit(client, args[1:])
 	case "node":
 		err = requireArgs(args, 2, "node <id>", func() error { return client.cmdNode(args[1]) })
 	case "resources":
@@ -115,6 +121,13 @@ Commands:
   events                tail the harness event stream
   login-url             print the dashboard sign-in link (it carries the
                         operator token: keep it private)
+  rename <id> <alias|-> set the name the dashboard and "nodes" show for a
+                        node ("-" clears it); the agent can't overwrite it
+  label <id> key=value ...
+                        set labels on a node; "key=" removes one
+  audit [-noise] [-n N] show the audit log, newest first: admissions (and
+                        how), revocations, invitations, updates, sign-ins,
+                        workloads; -noise shows rejections and reconnects
   run [-min-mem SIZE] [-min-cores N] [-max-cpu PCT] [-restart POLICY] <id|-> <cmd> [args...]
                         submit a workload (id or "-" for auto-pick using v2's
                         resource-aware placement), print its ID. cmd/args are
@@ -374,6 +387,19 @@ type nodeView struct {
 	// (internal/manager/selfupdate.go): current, available,
 	// reinstall-required, or unknown.
 	UpdateStatus string `json:"updateStatus"`
+
+	Alias        string            `json:"alias"`
+	Labels       map[string]string `json:"labels"`
+	SameHostAs   []domain.NodeID   `json:"sameHostAs"`
+	HostConflict bool              `json:"hostConflict"`
+}
+
+// displayName is the operator's alias when set, else the agent's name.
+func (n nodeView) displayName() string {
+	if n.Alias != "" {
+		return n.Alias
+	}
+	return n.Name
 }
 
 func (c *apiClient) cmdNodes() error {
@@ -399,8 +425,16 @@ func (c *apiClient) cmdNodes() error {
 		case "reinstall-required":
 			agent += " (reinstall needed)"
 		}
+		// Same-machine hints are agent-asserted (see the manager's
+		// fleet.go): shown for the operator to judge, never acted on.
+		switch {
+		case n.HostConflict:
+			agent += " HOST-CONFLICT"
+		case len(n.SameHostAs) > 0:
+			agent += " SAME-HOST"
+		}
 		fmt.Printf("%-24s %-20s %-12s %-8.1f %-14s %s\n",
-			n.NodeID, truncate(n.Name, 20), n.State, n.Metrics.CPUPercent, lastSeen, agent)
+			n.NodeID, truncate(n.displayName(), 20), n.State, n.Metrics.CPUPercent, lastSeen, agent)
 	}
 	return nil
 }
@@ -770,6 +804,110 @@ func (c *apiClient) cmdUnrevokeNode(id string) error {
 		return fmt.Errorf("manager returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
 	fmt.Printf("Revocation of %s lifted. The node must be admitted again: a shared-token launcher reconnects on its own; a node enrolled by invitation needs a new one.\n", id)
+	return nil
+}
+
+// putMeta replaces a node's operator metadata.
+func (c *apiClient) putMeta(id string, meta map[string]any) error {
+	body, _ := json.Marshal(meta)
+	req, err := http.NewRequest(http.MethodPut, c.base+"/nodes/"+id+"/meta", strings.NewReader(string(body)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("set node metadata: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("manager returned %s: %s", resp.Status, strings.TrimSpace(string(b)))
+	}
+	return nil
+}
+
+// currentMeta fetches a node's alias and labels, since PUT replaces both.
+func (c *apiClient) currentMeta(id string) (string, map[string]string, error) {
+	var n nodeView
+	if err := c.get("/nodes/"+id, &n); err != nil {
+		return "", nil, err
+	}
+	if n.Labels == nil {
+		n.Labels = map[string]string{}
+	}
+	return n.Alias, n.Labels, nil
+}
+
+func (c *apiClient) cmdRename(id, alias string) error {
+	_, labels, err := c.currentMeta(id)
+	if err != nil {
+		return err
+	}
+	if alias == "-" {
+		alias = ""
+	}
+	if err := c.putMeta(id, map[string]any{"alias": alias, "labels": labels}); err != nil {
+		return err
+	}
+	fmt.Println("Renamed.")
+	return nil
+}
+
+func (c *apiClient) cmdLabel(id string, pairs []string) error {
+	alias, labels, err := c.currentMeta(id)
+	if err != nil {
+		return err
+	}
+	for _, pair := range pairs {
+		key, value, ok := strings.Cut(pair, "=")
+		if !ok || key == "" {
+			return fmt.Errorf("invalid label %q (want key=value, or key= to remove)", pair)
+		}
+		if value == "" {
+			delete(labels, key)
+		} else {
+			labels[key] = value
+		}
+	}
+	if err := c.putMeta(id, map[string]any{"alias": alias, "labels": labels}); err != nil {
+		return err
+	}
+	fmt.Println("Labels updated.")
+	return nil
+}
+
+func cmdAudit(c *apiClient, args []string) error {
+	fs := flag.NewFlagSet("audit", flag.ContinueOnError)
+	noise := fs.Bool("noise", false, "show rejected registrations and reconnects instead of operator actions and admissions")
+	n := fs.Int("n", 30, "how many entries")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	path := fmt.Sprintf("/audit?limit=%d", *n) // operator actions + admissions
+	if *noise {
+		path += "&log=noise"
+	}
+	var entries []domain.AuditEntry
+	if err := c.get(path, &entries); err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		fmt.Println("No audit entries yet.")
+		return nil
+	}
+	fmt.Printf("%-20s %-26s %-18s %-26s %s\n", "TIME", "KIND", "ACTOR", "NODE", "DETAIL")
+	for _, e := range entries {
+		detail, _ := json.Marshal(e.Detail)
+		if e.Detail == nil {
+			detail = []byte("-")
+		}
+		node := string(e.NodeID)
+		if node == "" {
+			node = "-"
+		}
+		fmt.Printf("%-20s %-26s %-18s %-26s %s\n", e.Time.Local().Format("2006-01-02 15:04:05"), e.Kind, e.Actor, node, truncate(string(detail), 120))
+	}
 	return nil
 }
 

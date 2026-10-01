@@ -6,6 +6,7 @@
 package persistent
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -18,6 +19,15 @@ import (
 var nodesBucket = []byte("nodes")
 var workloadsBucket = []byte("workloads")
 var revokedBucket = []byte("revoked")
+var nodeMetaBucket = []byte("node-meta")
+
+// auditBuckets maps each audit log to its own bucket, so each is capped
+// independently (see AppendAudit).
+var auditBuckets = map[domain.AuditLog][]byte{
+	domain.AuditSecurity:   []byte("audit"),
+	domain.AuditAdmissions: []byte("audit-admissions"),
+	domain.AuditNoise:      []byte("audit-noise"),
+}
 
 // Record is what the persistent store keeps for a node: its last-known
 // manifest plus registration bookkeeping.
@@ -39,7 +49,7 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("persistent: open %q: %w", path, err)
 	}
 	err = db.Update(func(tx *bbolt.Tx) error {
-		for _, name := range [][]byte{nodesBucket, workloadsBucket, revokedBucket} {
+		for _, name := range [][]byte{nodesBucket, workloadsBucket, revokedBucket, nodeMetaBucket, auditBuckets[domain.AuditSecurity], auditBuckets[domain.AuditAdmissions], auditBuckets[domain.AuditNoise]} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -178,6 +188,11 @@ func (s *Store) RevokeNode(rev domain.RevokedNode) error {
 		if err := tx.Bucket(revokedBucket).Put([]byte(rev.NodeID), data); err != nil {
 			return err
 		}
+		// Operator metadata belongs to the identity being revoked; a later
+		// re-admission starts clean.
+		if err := tx.Bucket(nodeMetaBucket).Delete([]byte(rev.NodeID)); err != nil {
+			return err
+		}
 		return tx.Bucket(nodesBucket).Delete([]byte(rev.NodeID))
 	})
 	if err != nil {
@@ -216,4 +231,111 @@ func (s *Store) UnrevokeNode(id domain.NodeID) error {
 		return fmt.Errorf("persistent: unrevoke node %s: %w", id, err)
 	}
 	return nil
+}
+
+// PutNodeMeta stores the operator's metadata for id; empty metadata
+// deletes the record.
+func (s *Store) PutNodeMeta(id domain.NodeID, meta domain.NodeMeta) error {
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket(nodeMetaBucket)
+		if meta.Empty() {
+			return b.Delete([]byte(id))
+		}
+		data, err := json.Marshal(meta)
+		if err != nil {
+			return err
+		}
+		return b.Put([]byte(id), data)
+	})
+	if err != nil {
+		return fmt.Errorf("persistent: put node meta %s: %w", id, err)
+	}
+	return nil
+}
+
+// ListNodeMeta returns every node's operator metadata.
+func (s *Store) ListNodeMeta() (map[domain.NodeID]domain.NodeMeta, error) {
+	out := make(map[domain.NodeID]domain.NodeMeta)
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		return tx.Bucket(nodeMetaBucket).ForEach(func(k, data []byte) error {
+			var meta domain.NodeMeta
+			if err := json.Unmarshal(data, &meta); err != nil {
+				return err
+			}
+			out[domain.NodeID(k)] = meta
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, fmt.Errorf("persistent: list node meta: %w", err)
+	}
+	return out, nil
+}
+
+// AppendAudit appends e to its log, assigning its sequence number, and
+// trims the log to its newest keep entries in the same transaction.
+func (s *Store) AppendAudit(e domain.AuditEntry, keep int) (domain.AuditEntry, error) {
+	name, ok := auditBuckets[e.Log]
+	if !ok {
+		return e, fmt.Errorf("persistent: unknown audit log %q", e.Log)
+	}
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket(name)
+		seq, err := b.NextSequence()
+		if err != nil {
+			return err
+		}
+		e.Seq = seq
+		data, err := json.Marshal(e)
+		if err != nil {
+			return err
+		}
+		if err := b.Put(auditKey(seq), data); err != nil {
+			return err
+		}
+		if keep > 0 && seq > uint64(keep) {
+			cutoff := seq - uint64(keep)
+			c := b.Cursor()
+			for k, _ := c.First(); k != nil && binary.BigEndian.Uint64(k) <= cutoff; k, _ = c.Next() {
+				if err := c.Delete(); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return e, fmt.Errorf("persistent: append audit: %w", err)
+	}
+	return e, nil
+}
+
+// ListAudit returns up to limit entries from log, newest first.
+func (s *Store) ListAudit(log domain.AuditLog, limit int) ([]domain.AuditEntry, error) {
+	name, ok := auditBuckets[log]
+	if !ok {
+		return nil, fmt.Errorf("persistent: unknown audit log %q", log)
+	}
+	var out []domain.AuditEntry
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		c := tx.Bucket(name).Cursor()
+		for k, data := c.Last(); k != nil && (limit <= 0 || len(out) < limit); k, data = c.Prev() {
+			var e domain.AuditEntry
+			if err := json.Unmarshal(data, &e); err != nil {
+				return err
+			}
+			out = append(out, e)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("persistent: list audit: %w", err)
+	}
+	return out, nil
+}
+
+func auditKey(seq uint64) []byte {
+	k := make([]byte, 8)
+	binary.BigEndian.PutUint64(k, seq)
+	return k
 }

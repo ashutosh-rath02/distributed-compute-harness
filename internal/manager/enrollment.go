@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"home-harness/internal/domain"
 	"home-harness/internal/joinscript"
 )
 
@@ -180,6 +181,9 @@ func (s *Server) apiCreateEnrollment(w http.ResponseWriter, r *http.Request) {
 		s.enrollments.entries[e.Token] = e
 		s.enrollments.mu.Unlock()
 	}
+	s.audit(domain.AuditSecurity, "enrollment.created", "", actorFrom(r.Context()), map[string]any{
+		"platform": req.Platform, "mode": string(req.Mode), "token": tokenPrefix(e.Token), "expiresAt": e.ExpiresAt,
+	})
 	writeJSON(w, http.StatusCreated, enrollmentView{Token: e.Token, URL: e.PublicURL, ExpiresAt: e.ExpiresAt, QRPath: "/enrollments/" + e.Token + "/qr"})
 }
 

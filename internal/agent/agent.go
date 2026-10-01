@@ -85,6 +85,10 @@ type Config struct {
 	// SELF_UPDATE command (see selfUpdatePath).
 	SelfUpdateHTTPClient *http.Client
 	SelfUpdateBaseURL    string
+	// HostFingerprint overrides host fingerprint detection: empty detects
+	// it (sysinfo.HostFingerprint), "-" reports none, and anything else is
+	// reported as given — so tests on one machine can simulate several.
+	HostFingerprint string
 }
 
 const defaultAgentVersion = "0.1.0"
@@ -103,6 +107,9 @@ type Agent struct {
 	// reported as-is, an empty BinaryHash just means the manager can never
 	// consider this node up to date, never a crash.
 	binaryHash string
+
+	// hostFingerprint/hostFingerprintSource are computed once in New.
+	hostFingerprint, hostFingerprintSource string
 
 	// addrMu guards currentManagerAddr, set by connectAndServe and read by
 	// a SELF_UPDATE command handler running on a different goroutine (the
@@ -145,7 +152,15 @@ func New(transport domain.Transport, cfg Config) (*Agent, error) {
 		}
 	}
 
-	return &Agent{cfg: cfg, transport: transport, identity: id, startedAt: time.Now(), executor: NewExecutor(), binaryHash: binaryHash}, nil
+	a := &Agent{cfg: cfg, transport: transport, identity: id, startedAt: time.Now(), executor: NewExecutor(), binaryHash: binaryHash}
+	switch cfg.HostFingerprint {
+	case "":
+		a.hostFingerprint, a.hostFingerprintSource = sysinfo.HostFingerprint(context.Background())
+	case "-":
+	default:
+		a.hostFingerprint, a.hostFingerprintSource = cfg.HostFingerprint, "configured"
+	}
+	return a, nil
 }
 
 // NodeID returns this agent's persistent node identity.
@@ -298,6 +313,9 @@ func (a *Agent) buildManifest(ctx context.Context) domain.Manifest {
 			Platform:     domain.Platform{OS: runtime.GOOS, Architecture: runtime.GOARCH},
 			AgentVersion: a.cfg.AgentVersion,
 			BinaryHash:   a.binaryHash,
+
+			HostFingerprint:       a.hostFingerprint,
+			HostFingerprintSource: a.hostFingerprintSource,
 		},
 		Resources:    resources,
 		Capabilities: capabilities,

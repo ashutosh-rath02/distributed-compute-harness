@@ -116,8 +116,13 @@ func (r *Registry) UpdateResources(id domain.NodeID, resources []domain.Resource
 func (r *Registry) TotalResources() map[domain.ResourceKind]float64 {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	totals := make(map[domain.ResourceKind]float64)
+	records := make([]*NodeRecord, 0, len(r.nodes))
 	for _, rec := range r.nodes {
+		records = append(records, rec)
+	}
+	// Identities corroborated as one machine (fleet.go) count once.
+	totals := make(map[domain.ResourceKind]float64)
+	for _, rec := range dedupedForTotals(records) {
 		for _, res := range rec.Resources {
 			totals[res.Kind] += res.Capacity
 		}

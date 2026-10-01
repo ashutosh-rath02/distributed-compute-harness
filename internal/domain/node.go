@@ -56,4 +56,11 @@ type Node struct {
 	// (see internal/manager's NeedsUpdate): a content hash needs no human
 	// to remember to bump a version number.
 	BinaryHash string `json:"binaryHash,omitempty"`
+	// HostFingerprint is a salted hash of the machine's own ID (see
+	// internal/sysinfo.HostFingerprint), letting the manager notice two
+	// identities on one machine. Agent-asserted, so only ever a hint.
+	// HostFingerprintSource is "machine" (persistent) or "boot" (changes
+	// every reboot, e.g. under Termux). Both empty for older agents.
+	HostFingerprint       string `json:"hostFingerprint,omitempty"`
+	HostFingerprintSource string `json:"hostFingerprintSource,omitempty"`
 }

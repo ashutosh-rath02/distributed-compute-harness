@@ -70,6 +70,11 @@ type PersistentStore interface {
 	RevokeNode(rev domain.RevokedNode) error
 	ListRevoked() ([]domain.RevokedNode, error)
 	UnrevokeNode(id domain.NodeID) error
+	// Operator metadata and the audit log (fleet.go, audit.go).
+	PutNodeMeta(id domain.NodeID, meta domain.NodeMeta) error
+	ListNodeMeta() (map[domain.NodeID]domain.NodeMeta, error)
+	AppendAudit(e domain.AuditEntry, keep int) (domain.AuditEntry, error)
+	ListAudit(log domain.AuditLog, limit int) ([]domain.AuditEntry, error)
 }
 
 // Server is the control-plane process: it accepts connections over a
@@ -95,6 +100,9 @@ type Server struct {
 	// revocation has just removed.
 	admitMu     sync.Mutex
 	revocations *revocationList
+
+	meta     *nodeMetaStore
+	auditLog *auditRecorder
 
 	pendingMu sync.Mutex
 	pending   map[string]pendingCommand
@@ -134,6 +142,8 @@ func NewServer(transport domain.Transport, store PersistentStore, cfg Config) *S
 		pending:     make(map[string]pendingCommand),
 		enrollments: newEnrollmentStore(),
 		revocations: newRevocationList(),
+		meta:        newNodeMetaStore(),
+		auditLog:    newAuditRecorder(),
 	}
 
 	if cfg.OperatorToken == "" {
@@ -414,6 +424,16 @@ func (s *Server) Run(ctx context.Context) error {
 			s.Registry.Seed(m)
 		}
 
+		metas, err := s.store.ListNodeMeta()
+		if err != nil {
+			return fmt.Errorf("manager: load node metadata: %w", err)
+		}
+		for id, meta := range metas {
+			if !s.revocations.has(id) {
+				s.meta.set(id, meta)
+			}
+		}
+
 		workloads, err := s.store.ListWorkloads()
 		if err != nil {
 			return fmt.Errorf("manager: load persisted workloads: %w", err)
@@ -452,6 +472,7 @@ func (s *Server) monitorHeartbeats(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			s.flushSuppressed()
 			for _, id := range s.Registry.ExpireStale(s.cfg.HeartbeatTimeout) {
 				log.Printf("node.offline: %s", id)
 				s.publish(domain.EventNodeOffline, id, map[string]any{"reason": "heartbeat timeout"})
@@ -542,6 +563,9 @@ func (s *Server) handleRegister(ctx context.Context, conn domain.Conn, env *prot
 	// string with no cryptographic meaning.
 	if identity.DeriveNodeID(node.Identity.PublicKey) != claimedID {
 		s.reject(ctx, conn, env.Source, "identity mismatch: NodeID does not match public key")
+		// Unverified: the claimed ID is recorded as a claim, never as the
+		// entry's NodeID (anyone can claim any ID).
+		s.auditRejection("node.rejected", "", conn.RemoteAddr(), "identity mismatch", map[string]any{"claimedNodeId": clip(string(claimedID))})
 		return ""
 	}
 
@@ -551,8 +575,12 @@ func (s *Server) handleRegister(ctx context.Context, conn domain.Conn, env *prot
 	signed := protocol.RegisterSignedData(payload.PairingToken, claimedID)
 	if !identity.Verify(node.Identity, signed, payload.Signature) {
 		s.reject(ctx, conn, env.Source, "invalid signature: proof of key possession failed")
+		s.auditRejection("node.rejected", "", conn.RemoteAddr(), "invalid signature", map[string]any{"claimedNodeId": clip(string(claimedID))})
 		return ""
 	}
+	// From here on claimedID is verified: derived from the public key, and
+	// the signature proves possession of its private key. (env.Source is
+	// still whatever the peer wrote, so it never reaches the audit log.)
 
 	// Held from the revocation check through persisting the admission, so
 	// RevokeNode can't interleave between "allowed" and "registered" (see
@@ -564,6 +592,7 @@ func (s *Server) handleRegister(ctx context.Context, conn domain.Conn, env *prot
 	if s.revocations.has(claimedID) {
 		s.admitMu.Unlock()
 		s.reject(ctx, conn, env.Source, revokedReason)
+		s.auditRejection("node.rejected", claimedID, conn.RemoteAddr(), revokedReason, nil)
 		return ""
 	}
 
@@ -572,10 +601,19 @@ func (s *Server) handleRegister(ctx context.Context, conn domain.Conn, env *prot
 	// credential: a reconnect still has to pass the proof-of-possession
 	// check above, but does not need to reuse a one-time enrollment token.
 	_, knownNode := s.Registry.Get(claimedID)
-	if !knownNode && payload.PairingToken != s.cfg.PairingToken && !s.enrollments.consume(payload.PairingToken) {
-		s.admitMu.Unlock()
-		s.reject(ctx, conn, env.Source, "invalid pairing token")
-		return ""
+	admittedBy := "known-identity"
+	if !knownNode {
+		switch {
+		case payload.PairingToken == s.cfg.PairingToken:
+			admittedBy = "pairing-token"
+		case s.enrollments.consume(payload.PairingToken):
+			admittedBy = "enrollment:" + tokenPrefix(payload.PairingToken)
+		default:
+			s.admitMu.Unlock()
+			s.reject(ctx, conn, env.Source, "invalid pairing token")
+			s.auditRejection("node.rejected", claimedID, conn.RemoteAddr(), "invalid pairing token", nil)
+			return ""
+		}
 	}
 
 	_, isNew := s.Registry.Upsert(payload.Manifest, conn)
@@ -587,6 +625,15 @@ func (s *Server) handleRegister(ctx context.Context, conn domain.Conn, env *prot
 		}
 	}
 	s.admitMu.Unlock()
+
+	// Recorded outside admitMu, so admission never holds the lock across
+	// an extra disk write. Routine reconnects go to the noise log.
+	detail := map[string]any{"by": admittedBy, "name": clip(node.Name), "hostname": clip(node.Hostname), "remote": conn.RemoteAddr()}
+	if admittedBy == "known-identity" {
+		s.audit(domain.AuditNoise, "node.reconnected", claimedID, actorNode, detail)
+	} else {
+		s.audit(domain.AuditAdmissions, "node.admitted", claimedID, actorNode, detail)
+	}
 
 	if isNew {
 		log.Printf("node.registered: %s (%s)", claimedID, node.Name)

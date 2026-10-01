@@ -183,3 +183,74 @@ func TestRevokeNodeForgetsRecordAndSurvivesReopen(t *testing.T) {
 		t.Fatalf("expected no revocations after UnrevokeNode, got %+v", revoked)
 	}
 }
+
+func TestNodeMetaPersistsAndIsClearedOnRevoke(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "harness.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	s.UpsertNode(testManifest("node-a", "A"))
+	meta := domain.NodeMeta{Alias: "Living-room PC", Labels: map[string]string{"gpu": "iris-xe"}}
+	if err := s.PutNodeMeta("node-a", meta); err != nil {
+		t.Fatalf("PutNodeMeta: %v", err)
+	}
+	s.PutNodeMeta("node-b", domain.NodeMeta{Alias: "B"})
+	s.PutNodeMeta("node-b", domain.NodeMeta{}) // empty deletes
+	s.Close()
+
+	s, err = Open(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer s.Close()
+	all, err := s.ListNodeMeta()
+	if err != nil || len(all) != 1 || all["node-a"].Alias != "Living-room PC" || all["node-a"].Labels["gpu"] != "iris-xe" {
+		t.Fatalf("expected node-a's metadata to survive reopen (and node-b's to be deleted), got %+v %v", all, err)
+	}
+	if err := s.RevokeNode(domain.RevokedNode{NodeID: "node-a"}); err != nil {
+		t.Fatalf("RevokeNode: %v", err)
+	}
+	if all, _ := s.ListNodeMeta(); len(all) != 0 {
+		t.Fatalf("expected revocation to clear the node's metadata, got %+v", all)
+	}
+}
+
+func TestAuditLogsAreOrderedTrimmedAndIndependent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "harness.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if _, err := s.AppendAudit(domain.AuditEntry{Log: domain.AuditSecurity, Kind: "node.revoked", NodeID: "node-a"}, 5); err != nil {
+		t.Fatalf("AppendAudit: %v", err)
+	}
+	// Flood the noise log far past its cap: it must trim itself without
+	// touching the security log.
+	for i := 0; i < 50; i++ {
+		if _, err := s.AppendAudit(domain.AuditEntry{Log: domain.AuditNoise, Kind: "node.rejected"}, 10); err != nil {
+			t.Fatalf("AppendAudit noise: %v", err)
+		}
+	}
+	s.Close()
+
+	s, err = Open(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer s.Close()
+	noise, _ := s.ListAudit(domain.AuditNoise, 0)
+	if len(noise) != 10 || noise[0].Seq != 50 || noise[9].Seq != 41 {
+		t.Fatalf("expected the newest 10 noise entries, newest first, got %d (first seq %d)", len(noise), noise[0].Seq)
+	}
+	security, _ := s.ListAudit(domain.AuditSecurity, 0)
+	if len(security) != 1 || security[0].Kind != "node.revoked" {
+		t.Fatalf("expected the security log untouched by noise, got %+v", security)
+	}
+	if limited, _ := s.ListAudit(domain.AuditNoise, 3); len(limited) != 3 || limited[0].Seq != 50 {
+		t.Fatalf("expected limit to return the newest 3, got %+v", limited)
+	}
+	if _, err := s.AppendAudit(domain.AuditEntry{Log: "bogus"}, 1); err == nil {
+		t.Fatal("expected an unknown audit log to be refused")
+	}
+}

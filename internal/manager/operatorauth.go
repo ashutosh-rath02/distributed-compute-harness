@@ -15,6 +15,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"home-harness/internal/domain"
 )
 
 // Operator authentication: who may drive the operator API at all.
@@ -140,8 +142,13 @@ func (s *Server) requireOperator(next http.Handler) http.Handler {
 			return
 		}
 		got := []byte(bearerToken(r))
-		if subtle.ConstantTimeCompare(got, []byte(token)) == 1 || subtle.ConstantTimeCompare(got, []byte(session)) == 1 {
-			next.ServeHTTP(w, r)
+		// Record which credential form acted, for the audit log.
+		if subtle.ConstantTimeCompare(got, []byte(token)) == 1 {
+			next.ServeHTTP(w, r.WithContext(withActor(r.Context(), actorOperatorToken)))
+			return
+		}
+		if subtle.ConstantTimeCompare(got, []byte(session)) == 1 {
+			next.ServeHTTP(w, r.WithContext(withActor(r.Context(), actorDashboardSession)))
 			return
 		}
 		w.Header().Set("WWW-Authenticate", `Bearer realm="home-harness operator API"`)
@@ -169,9 +176,11 @@ func (s *Server) apiLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if subtle.ConstantTimeCompare([]byte(req.Token), []byte(token)) != 1 {
+		s.auditRejection("operator.login-failed", "", r.RemoteAddr, "invalid login token", nil)
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "that login link is not valid for this manager"})
 		return
 	}
+	s.audit(domain.AuditSecurity, "operator.login", "", actorDashboardSession, map[string]any{"remote": r.RemoteAddr})
 	writeJSON(w, http.StatusOK, map[string]string{"session": dashboardSession(token)})
 }
 

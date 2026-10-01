@@ -48,6 +48,9 @@
     background: Field; color: FieldText;
   }
   .error { color: #f85149; font-size: 0.85rem; margin-top: 10px; }
+  .chip { display: inline-block; font-size: 0.72rem; padding: 1px 7px; margin: 2px 4px 0 0; border-radius: 9px; background: color-mix(in srgb, #2f81f7 18%, transparent); }
+  .note { display: block; font-size: 0.76rem; color: #d29922; margin-top: 3px; }
+  .subname { display: block; font-size: 0.75rem; color: GrayText; }
   .signin { border-color: #d29922; background: color-mix(in srgb, #d29922 12%, transparent); }
   .hint { font-size: 0.8rem; color: GrayText; margin-top: 4px; }
   .enrollment { margin-top: 16px; text-align: center; }
@@ -102,6 +105,12 @@
     <p class="hint">Refused on every reconnect, even with the shared pairing token. Revocation denies one identity: a device that knows the shared pairing token can enroll a new one, so also restart the manager with a new <code>-pairing-token</code> to cut it off completely.</p>
     <div id="revoked"></div>
   </div>
+  <details id="auditSection">
+    <summary><h2 style="display:inline">Audit log</h2></summary>
+    <p class="hint">Admissions (and how each device got in), revocations, invitations, updates, sign-ins and workloads, newest first.
+      It records what happened; it is not protection against someone who already holds the operator token.</p>
+    <div id="audit"></div>
+  </details>
 
   <h2>Run a visible test</h2>
   <div class="card">
@@ -294,14 +303,30 @@
         : (n.platform.os === "linux" && n.platform.architecture === "arm64")
           ? "📱 Android (Termux)"
           : n.platform.os + "/" + n.platform.architecture;
+      // Operator alias first, the agent's own name beneath it. Labels and
+      // same-machine notes come from agents or the operator: all escaped.
+      const display = n.alias || n.name || n.nodeId;
+      const subname = n.alias ? '<span class="subname">' + escapeHtml(n.name || n.nodeId) + "</span>" : "";
+      const chips = Object.entries(n.labels || {}).map(([k, v]) => '<span class="chip">' + escapeHtml(k + "=" + v) + "</span>").join("");
+      const peers = (n.sameHostAs || []).map((id) => {
+        const other = currentNodes.find((o) => o.nodeId === id);
+        const seen = other && other.lastSeen ? " (last seen " + new Date(other.lastSeen).toLocaleString() + ")" : "";
+        return (other ? (other.alias || other.name || id) : id) + seen;
+      }).join(", ");
+      // Neutral wording on purpose: the fingerprint is agent-asserted, so
+      // the operator decides what (if anything) to do.
+      const hostNote = !peers ? ""
+        : n.hostConflict ? '<span class="note">Reports the same machine ID as ' + escapeHtml(peers) + ", but different hardware — capacity counted for both.</span>"
+        : '<span class="note">Reports the same machine as ' + escapeHtml(peers) + " — capacity counted once.</span>";
       return "<tr>"
-        + "<td>" + escapeHtml(n.name || n.nodeId) + "</td>"
+        + "<td>" + escapeHtml(display) + subname + chips + hostNote + "</td>"
         + "<td>" + escapeHtml(platform) + "</td>"
         + '<td><span class="' + stateClass(n.state) + '">' + escapeHtml(n.state) + "</span>" + outdated + "</td>"
         + "<td>" + cpu + "</td>"
         + "<td>" + mem + "</td>"
-        + '<td><button class="small danger" data-revoke="' + escapeHtml(n.nodeId) + '" data-name="'
-        + escapeHtml(n.name || n.nodeId) + '">Revoke</button></td>'
+        + '<td><button class="small secondary" data-rename="' + escapeHtml(n.nodeId) + '">Rename</button> '
+        + '<button class="small danger" data-revoke="' + escapeHtml(n.nodeId) + '" data-name="'
+        + escapeHtml(display) + '">Revoke</button></td>'
         + "</tr>";
     }).join("");
     el.innerHTML =
@@ -329,6 +354,24 @@
   // Event delegation: rows are re-rendered on every SSE event, so the
   // buttons inside them can't hold their own listeners.
   document.getElementById("nodes").addEventListener("click", async (event) => {
+    const renameButton = event.target.closest("button[data-rename]");
+    if (renameButton) {
+      const node = currentNodes.find((n) => n.nodeId === renameButton.dataset.rename);
+      if (!node) return;
+      const alias = prompt("Name for this device (empty to use the agent's own name):", node.alias || "");
+      if (alias === null) return;
+      try {
+        const resp = await api("/nodes/" + encodeURIComponent(node.nodeId) + "/meta", {
+          method: "PUT", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({alias: alias.trim(), labels: node.labels || {}}),
+        });
+        if (!resp.ok) throw new Error((await resp.text()).trim() || resp.statusText);
+      } catch (e) {
+        alert("Rename failed: " + e.message);
+      }
+      refreshNodes();
+      return;
+    }
     const button = event.target.closest("button[data-revoke]");
     if (!button) return;
     const name = button.dataset.name;
@@ -419,8 +462,17 @@
   function updateSummary() {
     const ready = currentNodes.filter((n) => n.state === "READY");
     document.getElementById("readyCount").textContent = ready.length;
-    document.getElementById("totalMemory").textContent = fmtBytes(ready.reduce((sum, n) =>
-      sum + ((n.metrics && n.metrics.memoryAvailableBytes) || 0), 0));
+    // Identities corroborated as one machine (same fingerprint and
+    // hardware, per the manager) share its free memory: count it once.
+    const counted = new Set();
+    document.getElementById("totalMemory").textContent = fmtBytes(ready.reduce((sum, n) => {
+      if (n.sameHostAs && n.sameHostAs.length && !n.hostConflict) {
+        const machine = [n.nodeId, ...n.sameHostAs].sort()[0];
+        if (counted.has(machine)) return sum;
+        counted.add(machine);
+      }
+      return sum + ((n.metrics && n.metrics.memoryAvailableBytes) || 0);
+    }, 0));
   }
 
   function addTimelineEvent(event) {
@@ -434,6 +486,32 @@
     while (list.children.length > 30) list.lastElementChild.remove();
   }
 
+  async function refreshAudit() {
+    const el = document.getElementById("audit");
+    try {
+      const resp = await api("/audit?limit=50");
+      const entries = (await resp.json()) || [];
+      if (!entries.length) {
+        el.innerHTML = '<p class="empty">Nothing recorded yet.</p>';
+        return;
+      }
+      const nodeName = (id) => {
+        const n = currentNodes.find((o) => o.nodeId === id);
+        return n ? (n.alias || n.name || id) : id;
+      };
+      el.innerHTML = "<table><thead><tr><th>Time</th><th>What</th><th>By</th><th>Device</th><th>Detail</th></tr></thead><tbody>"
+        + entries.map((e) => "<tr><td>" + escapeHtml(new Date(e.time).toLocaleString()) + "</td><td>" + escapeHtml(e.kind)
+          + "</td><td>" + escapeHtml(e.actor || "-") + "</td><td>" + escapeHtml(e.nodeId ? nodeName(e.nodeId) : "-")
+          + '</td><td><div class="output">' + escapeHtml(e.detail ? JSON.stringify(e.detail) : "-") + "</div></td></tr>").join("")
+        + "</tbody></table>";
+    } catch (e) {
+      el.innerHTML = '<p class="error">Failed to load the audit log.</p>';
+    }
+  }
+  document.getElementById("auditSection").addEventListener("toggle", (event) => {
+    if (event.target.open) refreshAudit();
+  });
+
   function handleEvent(data) {
     let type = "";
     try {
@@ -444,6 +522,7 @@
     refreshNodes();
     refreshWorkloads();
     if (type === "node.revoked" || type === "node.unrevoked") refreshRevoked();
+    if (document.getElementById("auditSection").open) refreshAudit();
   }
 
   // Live updates from the SSE stream, read with fetch so the request can

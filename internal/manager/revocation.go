@@ -127,6 +127,7 @@ func (s *Server) RevokeNode(ctx context.Context, id domain.NodeID) (domain.Revok
 		}
 	}
 	s.revocations.put(revoked)
+	s.meta.set(id, domain.NodeMeta{}) // the store cleared it in RevokeNode's transaction
 	removed, _ := s.Registry.Remove(id)
 	s.admitMu.Unlock()
 
@@ -185,6 +186,7 @@ func (s *Server) apiRevokeNode(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	default:
+		s.audit(domain.AuditSecurity, "node.revoked", revoked.NodeID, actorFrom(r.Context()), map[string]any{"name": revoked.Name, "hostname": revoked.Hostname})
 		writeJSON(w, http.StatusOK, revoked)
 	}
 }
@@ -201,6 +203,7 @@ func (s *Server) apiUnrevokeNode(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	default:
+		s.audit(domain.AuditSecurity, "node.unrevoked", domain.NodeID(r.PathValue("id")), actorFrom(r.Context()), nil)
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

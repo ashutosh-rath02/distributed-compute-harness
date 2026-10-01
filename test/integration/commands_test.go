@@ -22,6 +22,11 @@ func startRegisteredAgent(t *testing.T, addr, name string) *agent.Agent {
 		IdentityDir:       filepath.Join(t.TempDir(), name),
 		Name:              name,
 		HeartbeatInterval: 100 * time.Millisecond,
+		// The manager binds its listener asynchronously, so a first dial
+		// can lose that race under load; with the 3s default backoff the
+		// retry would land at callers' 3s waits. Retry fast instead.
+		ReconnectBackoff:    50 * time.Millisecond,
+		MaxReconnectBackoff: 200 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatalf("agent.New: %v", err)
