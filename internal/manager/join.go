@@ -56,10 +56,42 @@ func (s *Server) joinBuild(platform string) (agentBuild, bool) {
 	return s.agents.forPlatform(goos, arch)
 }
 
+// joinBuilds returns every catalog build an onboarding script for
+// platform may install: the one for Windows/Android, or all builds for a
+// desktop-Unix OS (its script picks its own CPU's at install time).
+func (s *Server) joinBuilds(platform string) []agentBuild {
+	if goos, unix := joinscript.UnixPlatformOS(platform); unix {
+		var out []agentBuild
+		for _, b := range s.agents.builds {
+			if b.OS == goos {
+				out = append(out, b)
+			}
+		}
+		return out
+	}
+	if b, ok := s.joinBuild(platform); ok {
+		return []agentBuild{b}
+	}
+	return nil
+}
+
+// archBuilds maps joinBuilds by architecture, with each build's download
+// path given by pathFor — the Unix scripts' form of "which build".
+func (s *Server) archBuilds(platform string, pathFor func(agentBuild) string) map[string]joinscript.ArchBuild {
+	out := make(map[string]joinscript.ArchBuild)
+	for _, b := range s.joinBuilds(platform) {
+		out[b.Arch] = joinscript.ArchBuild{SHA256: b.SHA256, Path: pathFor(b)}
+	}
+	return out
+}
+
 // scriptInfo is the joinscript.Info for onboarding platform with this
-// manager's credentials and the matching catalog build.
+// manager's credentials and the matching catalog build(s).
 func (s *Server) scriptInfo(platform string) joinscript.Info {
 	build, ok := s.joinBuild(platform)
+	if _, unix := joinscript.UnixPlatformOS(platform); unix {
+		ok = len(s.joinBuilds(platform)) > 0
+	}
 	return joinscript.Info{
 		Fingerprint:          s.cfg.Fingerprint,
 		PairingToken:         s.cfg.PairingToken,
@@ -70,5 +102,6 @@ func (s *Server) scriptInfo(platform string) joinscript.Info {
 		RelayAvailable:       s.cfg.RelayAddr != "" && s.cfg.RelayToken != "",
 		RelayAddr:            s.cfg.RelayAddr,
 		RelayToken:           s.cfg.RelayToken,
+		ArchBuilds:           s.archBuilds(platform, agentBuild.downloadPath),
 	}
 }

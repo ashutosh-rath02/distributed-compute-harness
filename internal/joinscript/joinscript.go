@@ -29,6 +29,10 @@ type Info struct {
 	RelayToken           string
 	AgentBinaryPath      string
 	BootstrapURL         string
+	// ArchBuilds is used by the macOS/Linux scripts instead of the single
+	// AgentBinarySHA256/Path: every build for that OS keyed by GOARCH, so
+	// the script can pick its own CPU's at install time.
+	ArchBuilds map[string]ArchBuild
 }
 
 // TargetPlatform maps an onboarding platform name to the GOOS/GOARCH of
@@ -82,8 +86,8 @@ func BuildMode(mode Mode, addr, platform string, info Info) (string, error) {
 	if err := ValidateAddress(addr); err != nil {
 		return "", fmt.Errorf("invalid manager address %q (want host:port, e.g. 192.168.10.11:7420): %w", addr, err)
 	}
-	if platform != "windows" && platform != "android" {
-		return "", fmt.Errorf("unknown platform %q (want %q or %q)", platform, "windows", "android")
+	if !KnownPlatform(platform) {
+		return "", fmt.Errorf("unknown platform %q (want %s)", platform, Platforms)
 	}
 	if !info.AgentBinaryAvailable {
 		return "", fmt.Errorf("manager has no agent binary configured — restart it with -agent-binary (pointed at the right build for %s) to enable joining", platform)
@@ -101,6 +105,13 @@ func BuildMode(mode Mode, addr, platform string, info Info) (string, error) {
 	binaryPath := info.AgentBinaryPath
 	if binaryPath == "" {
 		binaryPath = "/agent-binary"
+	}
+
+	if _, unix := UnixPlatformOS(platform); unix {
+		return unixInstall(platform, info.ArchBuilds,
+			func(_ string, b ArchBuild) string { return scheme + "://" + addr + b.Path },
+			curlFlag, fmt.Sprintf("-pairing-token %s %s", info.PairingToken, authFlag),
+			"Installed. The agent is running and finds the manager on your network by itself.")
 	}
 
 	if platform == "android" {
@@ -189,8 +200,8 @@ func ValidateAddress(addr string) error {
 }
 
 func buildRemote(platform string, info Info) (string, error) {
-	if platform != "windows" && platform != "android" {
-		return "", fmt.Errorf("unknown platform %q (want %q or %q)", platform, "windows", "android")
+	if !KnownPlatform(platform) {
+		return "", fmt.Errorf("unknown platform %q (want %s)", platform, Platforms)
 	}
 	if !info.RelayAvailable || info.RelayAddr == "" || info.RelayToken == "" {
 		return "", fmt.Errorf("manager has no relay configured — restart it with -relay-addr and -relay-token to enable remote joining")
@@ -208,6 +219,14 @@ func buildRemote(platform string, info Info) (string, error) {
 	}
 	hash := strings.ToUpper(info.AgentBinarySHA256)
 	flags := fmt.Sprintf("-pairing-token %s %s -relay-addr %s -relay-token %s", info.PairingToken, authFlag, info.RelayAddr, info.RelayToken)
+	if _, unix := UnixPlatformOS(platform); unix {
+		urlFor := func(string, ArchBuild) string { return "" } // manual: ./agent
+		if info.BootstrapURL != "" {
+			urlFor = func(arch string, _ ArchBuild) string { return info.BootstrapURL + "/" + arch }
+		}
+		return unixInstall(platform, info.ArchBuilds, urlFor, "-L ", flags,
+			"Installed. The agent is running and connects through the relay.")
+	}
 	if info.BootstrapURL != "" {
 		if platform == "android" {
 			return fmt.Sprintf(`One-time prerequisites on the phone:

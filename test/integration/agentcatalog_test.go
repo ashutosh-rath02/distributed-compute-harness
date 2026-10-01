@@ -153,3 +153,63 @@ func TestAgentBuildDownloadThroughRelay(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// A macOS invitation can't know the Mac's CPU, so its script carries every
+// darwin build and downloads its own architecture's from the invitation.
+func TestMacOSInvitationServesEachArchitecture(t *testing.T) {
+	const addr = "127.0.0.1:19515"
+	armPath, armHash := writeDummyAgentBinary(t, []byte("apple silicon build"))
+	intelPath, intelHash := writeDummyAgentBinary(t, []byte("intel mac build"))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	transport := ws.New()
+	srv := manager.NewServer(transport, nil, manager.Config{
+		Addr: addr, PairingToken: pairingToken, HeartbeatTimeout: 2 * time.Second, EnrollmentTTL: time.Minute,
+		AgentBinaries: []manager.AgentBinary{
+			{OS: "darwin", Arch: "arm64", Path: armPath},
+			{OS: "darwin", Arch: "amd64", Path: intelPath},
+		},
+	})
+	transport.Handle("/enroll/", srv.EnrollmentHandler())
+	go srv.Run(ctx)
+	api := httptest.NewServer(srv.NewHTTPHandler())
+	defer api.Close()
+
+	var invite struct {
+		URL string `json:"url"`
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		resp, err := http.Post(api.URL+"/enrollments", "application/json", bytes.NewReader([]byte(`{"addr":"`+addr+`","platform":"macos"}`)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		json.NewDecoder(resp.Body).Decode(&invite)
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusCreated {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("create macOS invitation: %d", resp.StatusCode)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if _, page := get(t, invite.URL); !strings.Contains(page, "| bash") {
+		t.Fatalf("macOS invitation page should offer the curl | bash one-liner:\n%s", page)
+	}
+	_, setup := get(t, invite.URL+"/setup")
+	for _, want := range []string{armHash, intelHash, "/agent-binary/arm64", "/agent-binary/amd64", "launchctl"} {
+		if !strings.Contains(setup, want) {
+			t.Errorf("macOS setup script missing %q:\n%s", want, setup)
+		}
+	}
+	if _, body := get(t, invite.URL+"/agent-binary/arm64"); body != "apple silicon build" {
+		t.Errorf("arm64 download served %q", body)
+	}
+	if _, body := get(t, invite.URL+"/agent-binary/amd64"); body != "intel mac build" {
+		t.Errorf("amd64 download served %q", body)
+	}
+	if code, _ := get(t, invite.URL+"/agent-binary"); code != http.StatusNotFound {
+		t.Errorf("a Unix invitation must not serve an arch-less download, got %d", code)
+	}
+}

@@ -166,7 +166,7 @@ Commands:
   unrevoke <id>         lift a revocation; the node must then be admitted
                         afresh (its shared-token launcher does this on its
                         own; a one-time-invitation node needs a new one)
-  join <manager-addr|remote> [android]
+  join <manager-addr|remote> [windows|android|macos|linux]
                         print a ready-to-run onboarding block that
                         registers an agent — paste it into a terminal on
                         the new machine with no fingerprint lookup or
@@ -709,6 +709,16 @@ func (c *apiClient) cmdJoin(mode joinscript.Mode, addr, platform string) error {
 				scriptInfo.AgentBinaryPath = b.Path
 			}
 		}
+	} else if goos, unix := joinscript.UnixPlatformOS(platform); unix {
+		// macOS/Linux scripts get every build for the OS and pick their
+		// own CPU's at install time.
+		scriptInfo.ArchBuilds = map[string]joinscript.ArchBuild{}
+		for _, b := range info.AgentBinaries {
+			if b.OS == goos {
+				scriptInfo.ArchBuilds[b.Architecture] = joinscript.ArchBuild{SHA256: b.SHA256, Path: b.Path}
+			}
+		}
+		scriptInfo.AgentBinaryAvailable = len(scriptInfo.ArchBuilds) > 0
 	}
 	script, err := joinscript.BuildMode(mode, addr, platform, scriptInfo)
 	if err != nil {

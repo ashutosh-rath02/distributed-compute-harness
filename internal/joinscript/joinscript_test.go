@@ -279,3 +279,79 @@ func TestBuildRemoteRejectsUnusableRelayAddress(t *testing.T) {
 		t.Fatal("expected remote mode to reject a relay address without a host")
 	}
 }
+
+func unixInfo() Info {
+	return Info{
+		Fingerprint: "abc123", PairingToken: "secret-token", AgentBinaryAvailable: true,
+		ArchBuilds: map[string]ArchBuild{
+			"arm64": {SHA256: "AAAA", Path: "/agent-binaries/darwin/arm64"},
+			"amd64": {SHA256: "BBBB", Path: "/agent-binaries/darwin/amd64"},
+		},
+	}
+}
+
+func TestBuildMacOSPicksCPUAtInstallAndUsesLaunchd(t *testing.T) {
+	out, err := Build("192.168.10.11:7420", "macos", unixInfo())
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	for _, want := range []string{
+		"#!/usr/bin/env bash", `case "$(uname -m)" in`,
+		`arm64) url="https://192.168.10.11:7420/agent-binaries/darwin/arm64"; want="aaaa" ;;`,
+		`amd64) url="https://192.168.10.11:7420/agent-binaries/darwin/amd64"; want="bbbb" ;;`,
+		"curl -fsS -k ", "shasum -a 256", "LaunchAgents/com.homeharness.agent.plist", "launchctl bootstrap",
+		"<key>KeepAlive</key><true/>", `"$dir/agent" -pairing-token secret-token -manager-fingerprint abc123`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected macOS script to contain %q, got:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "-manager-addr") {
+		t.Error("LAN install must rediscover the manager rather than pin its IP")
+	}
+	if strings.Index(out, `"$got" != "$want"`) > strings.Index(out, `mv -f "$dir/agent.new" "$dir/agent"`) {
+		t.Error("hash verification must precede installation")
+	}
+}
+
+func TestBuildLinuxUsesSystemdWithFallback(t *testing.T) {
+	info := unixInfo()
+	info.ArchBuilds = map[string]ArchBuild{"amd64": {SHA256: "cccc", Path: "/agent-binaries/linux/amd64"}}
+	out, err := Build("192.168.10.11:7420", "linux", info)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	for _, want := range []string{"systemctl --user enable", "Restart=always", "command -v crontab", "nohup /bin/bash", `amd64) url=`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected Linux script to contain %q", want)
+		}
+	}
+	if strings.Contains(out, "arm64) url=") {
+		t.Error("only loaded architectures may appear")
+	}
+}
+
+func TestBuildUnixRemoteAndErrors(t *testing.T) {
+	info := unixInfo()
+	info.RelayAvailable, info.RelayAddr, info.RelayToken = true, "relay.example.com:8420", "ha1.cred"
+	info.BootstrapURL = "https://relay.example.com:8443/enroll/tok/agent-binary"
+	out, err := BuildMode(ModeRemote, "", "macos", info)
+	if err != nil {
+		t.Fatalf("BuildMode remote: %v", err)
+	}
+	if !strings.Contains(out, `url="https://relay.example.com:8443/enroll/tok/agent-binary/arm64"`) || !strings.Contains(out, "-relay-token ha1.cred") {
+		t.Errorf("remote macOS script should fetch per-arch from the bootstrap URL with relay flags:\n%s", out)
+	}
+	info.BootstrapURL = ""
+	if out, _ := BuildMode(ModeRemote, "", "linux", info); !strings.Contains(out, "cp ./agent") {
+		t.Error("manual relay path should install ./agent")
+	}
+	noBuilds := unixInfo()
+	noBuilds.ArchBuilds = nil
+	if _, err := Build("192.168.10.11:7420", "macos", noBuilds); err == nil {
+		t.Error("expected an error with no macOS builds")
+	}
+	if _, err := Build("192.168.10.11:7420", "beos", unixInfo()); err == nil || !strings.Contains(err.Error(), "macos") {
+		t.Errorf("unknown platform error should list the platforms, got %v", err)
+	}
+}

@@ -153,6 +153,8 @@
     <select id="platform">
       <option value="windows">Windows</option>
       <option value="android">Android (Termux)</option>
+      <option value="macos">macOS</option>
+      <option value="linux">Linux</option>
     </select>
 
     <div id="addrFields">
@@ -255,7 +257,11 @@
 
   // Join platforms the form offers, and the agent build each installs
   // (mirrors joinscript.TargetPlatform).
-  const joinPlatforms = { windows: ["windows", "amd64", "Windows"], android: ["linux", "arm64", "Android (Termux)"] };
+  // "*": a Unix script picks its own CPU's build, so any build for the OS will do.
+  const joinPlatforms = {
+    windows: ["windows", "amd64", "Windows"], android: ["linux", "arm64", "Android (Termux)"],
+    macos: ["darwin", "*", "macOS"], linux: ["linux", "*", "Linux"],
+  };
   let currentNodes = [];
 
   async function refreshNodes() {
@@ -407,7 +413,7 @@
     const select = document.getElementById("platform");
     for (const option of select.options) {
       const [os, arch, label] = joinPlatforms[option.value] || [];
-      const loaded = builds.some((b) => b.os === os && b.architecture === arch);
+      const loaded = builds.some((b) => b.os === os && (arch === "*" || b.architecture === arch));
       option.disabled = !loaded;
       option.textContent = label + (loaded ? "" : " (no agent build loaded)");
     }

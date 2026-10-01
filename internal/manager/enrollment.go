@@ -121,16 +121,15 @@ func (s *Server) apiCreateEnrollment(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "mode must be lan or remote", http.StatusBadRequest)
 		return
 	}
-	if req.Platform != "windows" && req.Platform != "android" {
-		http.Error(w, "platform must be windows or android", http.StatusBadRequest)
+	if !joinscript.KnownPlatform(req.Platform) {
+		http.Error(w, "platform must be one of "+joinscript.Platforms, http.StatusBadRequest)
 		return
 	}
-	// An invitation installs exactly the catalog build for its platform,
-	// so refuse one this manager has no build for rather than hand out a
-	// link that can only fail (or, worse, install another platform's).
-	if _, ok := s.joinBuild(req.Platform); !ok {
-		goos, arch, _ := joinscript.TargetPlatform(req.Platform)
-		http.Error(w, fmt.Sprintf("no agent build for %s (%s/%s) is loaded — restart the manager with an -agent-binary for it", req.Platform, goos, arch), http.StatusConflict)
+	// An invitation installs only catalog builds for its platform, so
+	// refuse one this manager has no build for rather than hand out a link
+	// that can only fail (or, worse, install another platform's).
+	if len(s.joinBuilds(req.Platform)) == 0 {
+		http.Error(w, fmt.Sprintf("no agent build for %s is loaded — restart the manager with an -agent-binary for it (see scripts/build-agents.sh)", req.Platform), http.StatusConflict)
 		return
 	}
 	var base string
@@ -207,7 +206,8 @@ var enrollmentPage = template.Must(template.New("enrollment").Parse(`<!doctype h
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Join Home Compute Harness</title><style>body{font-family:system-ui,sans-serif;max-width:42rem;margin:3rem auto;padding:0 1rem}a{display:block;margin:1rem 0;padding:1rem;background:#2f81f7;color:white;text-decoration:none;border-radius:.5rem}.note{color:#666}</style></head>
 <body><h1>Join Home Compute Harness</h1><p>This single-use {{.Platform}} invitation expires at {{.Expires}}.</p>
-<a href="{{.Base}}/setup">Open setup instructions</a>
+{{if .OneLiner}}<p>Open Terminal on this computer and run:</p><pre style="white-space:pre-wrap;word-break:break-all;background:#f3f3f3;padding:1rem;border-radius:.5rem">{{.OneLiner}}</pre>
+<a href="{{.Base}}/setup">View the setup script</a>{{else}}<a href="{{.Base}}/setup">Open setup instructions</a>{{end}}
 <p class="note">Copy and run the displayed command in this device's terminal. Your browser may show a certificate warning because this local manager uses its own pinned certificate; the setup script independently verifies the downloaded binary hash.</p></body></html>`))
 
 // EnrollmentHandler is deliberately mounted only on the agent-facing
@@ -231,13 +231,37 @@ func (s *Server) EnrollmentHandler() http.HandlerFunc {
 		basePath := "/enroll/" + e.Token
 		if len(parts) == 1 {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			enrollmentPage.Execute(w, map[string]string{"Expires": e.ExpiresAt.Format(time.RFC3339), "Base": basePath, "Platform": e.Platform})
+			page := map[string]string{"Expires": e.ExpiresAt.Format(time.RFC3339), "Base": basePath, "Platform": e.Platform}
+			if _, unix := joinscript.UnixPlatformOS(e.Platform); unix {
+				// The setup script is plain bash, so piping it avoids zsh (the
+				// macOS default) ever parsing a pasted script. -k only for
+				// the LAN manager's own self-signed certificate; the script
+				// verifies every download's hash itself.
+				insecureTLS := ""
+				if e.Mode != joinscript.ModeRemote && s.cfg.Fingerprint != "" {
+					insecureTLS = "k"
+				}
+				page["OneLiner"] = "curl -fsS" + insecureTLS + " '" + e.PublicURL + "/setup' | bash"
+			}
+			enrollmentPage.Execute(w, page)
 			return
 		}
 		switch parts[1] {
 		case "agent-binary":
-			build, ok := s.joinBuild(e.Platform)
-			if !ok {
+			// /agent-binary for Windows/Android; /agent-binary/{arch} for the
+			// Unix scripts, which pick their CPU's build themselves.
+			var build agentBuild
+			found := false
+			for _, b := range s.joinBuilds(e.Platform) {
+				if len(parts) == 2 || (len(parts) == 3 && b.Arch == parts[2]) {
+					build, found = b, true
+					break
+				}
+			}
+			if _, unix := joinscript.UnixPlatformOS(e.Platform); unix && len(parts) != 3 {
+				found = false
+			}
+			if !found {
 				http.NotFound(w, r)
 				return
 			}
@@ -254,6 +278,10 @@ func (s *Server) EnrollmentHandler() http.HandlerFunc {
 				Fingerprint: s.cfg.Fingerprint, PairingToken: e.Token,
 				Insecure: s.cfg.Fingerprint == "", AgentBinaryAvailable: ok,
 				AgentBinarySHA256: build.SHA256, AgentBinaryPath: basePath + "/agent-binary",
+				ArchBuilds: s.archBuilds(e.Platform, func(b agentBuild) string { return basePath + "/agent-binary/" + b.Arch }),
+			}
+			if _, unix := joinscript.UnixPlatformOS(e.Platform); unix {
+				info.AgentBinaryAvailable = len(info.ArchBuilds) > 0
 			}
 			var script string
 			if e.Mode == joinscript.ModeRemote {
