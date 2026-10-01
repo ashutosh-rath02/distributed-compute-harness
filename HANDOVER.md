@@ -201,16 +201,31 @@ Relay onboarding scripts are available from both the dashboard and `harnessctl j
 
 ---
 
-## 10. What's next — concrete options for the following increment
+## 10. Roadmap — agreed build order (2026-10-01)
 
-Done since the previous version of this list: phone-first one-time enrollment (old Option A), the relay-carried first download for invitation-enrolled remote devices (old Option B, for the invitation path; `harnessctl join remote` remains a manual-binary path), node revocation, and the operator-API browser guard. Remaining options, roughly in the order the architecture brief (`docs/SSE_Architecture_and_Solution_Brief.md` §10–11) ranks them:
+Done since the previous version of this list: phone-first one-time enrollment, the relay-carried first download for invitation-enrolled remote devices (`harnessctl join remote` remains a manual-binary path), node revocation, and the operator-API browser guard.
 
-- **Trust administration, part 2:** operator rename/labels, duplicate-physical-host warning (two identities on one machine currently double-count capacity), an audit log of admissions/revocations, credential rotation helpers.
-- **Capacity reservation + queueing:** placement checks live metrics but reserves nothing, so concurrent submissions can oversubscribe a node, and a submission with no eligible node is rejected rather than queued. Both are prerequisites for request-level fan-out/fan-in batch jobs.
-- **Multi-platform binary catalog:** the manager serves one agent binary at a time, so a phone manager can onboard only one platform without a restart.
-- **Safe capability UX / LLM vertical slice / v6 AI intent planner:** typed tasks instead of raw commands in the dashboard; `llm.inventory`/`llm.generate`; and eventually the v6 planner (which must sit on top of the deterministic core — AI proposes, harness enforces).
+The user asked for *all* remaining work, sequenced for the best order. Each item ends in its own plan → implement → test → review → commit cycle (§12); a later plan may still reorder if something new is learned, but say so explicitly.
 
-The native-Android-app vs. Termux-console question is still open and is the user's call.
+**Phase 1 — Secure, onboard-everything foundation**
+1. **Multi-platform agent catalog.** The manager serves one agent binary at a time, so a phone manager can onboard only one platform without a restart, and self-update can't reach a mixed fleet. Serve a catalog (windows/amd64, linux/arm64 for Android, linux/amd64, darwin/arm64, ...) and pick per invitation, join script, and self-update. Goes first because every later increment that changes agent behavior must be rolled out to *every* platform's agents through self-update.
+2. **Operator authentication.** `guardOperatorAPI` stops browsers, but on Android loopback is shared across apps: any installed app with network permission can call `127.0.0.1:7421` (`POST /workloads` runs code on the fleet; `GET /join-info` reveals the permanent tokens). Non-browser clients pass the guard by design. Sketch: a random operator token in the manager state dir; `harnessctl` reads it from the file; the dashboard gets it via a one-time login URL (printed by the launcher) exchanged for an HttpOnly, SameSite=Strict cookie. Must land before anything makes the API more powerful.
+3. **Fleet hygiene.** Operator rename/labels, duplicate-physical-host detection (two identities on one machine double-count capacity), and an admission/revocation audit log. Before reservation, so capacity numbers mean what they say.
+
+**Phase 2 — Real distributed compute**
+4. **Capacity reservation, multi-slot nodes, and a work queue.** Placement reserves cores/memory so concurrent submissions can't oversubscribe; nodes run N concurrent workloads (today's executor allows one); submissions with no free capacity wait instead of being rejected. Must handle a mixed-version fleet: agents advertise a slot count in the manifest, and absent means 1 (today's behavior).
+5. **Artifacts.** Content-addressed, hash-verified, size-capped files in and out of workloads, so tasks are no longer limited to argv in and 64 KiB stdout out. Before jobs, because the headline batch cases (images, documents) need files.
+6. **Fan-out/fan-in batch jobs.** One request → N tasks spread across devices → per-task retry → aggregated result. Builds on 4 and 5.
+
+**Phase 3 — Safe, typed capabilities**
+7. **Typed capability catalog + policy.** Allow-listed task types with parameter schemas, dashboard forms instead of raw commands, per-capability policy; raw `system.execute` becomes an explicit advanced opt-in.
+8. **LLM vertical slice.** `llm.inventory` / `llm.generate` against a local runtime (Ollama or llama.cpp), model/VRAM-aware placement, streamed results to the phone.
+
+**Phase 4 — Product packaging**
+9. **Native Android app (+ agent Windows service).** A foreground service running the manager (no Termux, survives OEM battery policy better) with the existing dashboard in a WebView, QR scanning, and boot start; agents install as a supervised Windows service instead of an HKCU Run entry. Here for effort vs. value: the manager serves the dashboard, so the shell doesn't churn with API changes. Move it up if Termux battery kills start hurting. Feasibility notes: this machine has the Android SDK (platforms 33/36, NDK 28), Flutter, and JDK 17; Android 10+ refuses to exec binaries from app-writable directories, so ship the manager as a `lib*.so` in `jniLibs` (or bind via gomobile). Decide that in the plan.
+
+**Phase 5 — Intelligence**
+10. **v6 AI intent planner.** Natural language → a typed job plan (7 + 6) → deterministic policy check → user approval on the phone → execution. Last, because it composes everything above and its safety rests on the typed catalog and policy (baseline principle #5: AI proposes, the harness enforces).
 
 ## 11. Known limitations and gotchas — read before touching related code
 
