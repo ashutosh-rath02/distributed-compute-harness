@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"log"
 
 	"home-harness/internal/domain"
@@ -33,11 +34,13 @@ func (a *Agent) handleWorkloadAssign(ctx context.Context, conn domain.Conn, env 
 		a.sendWorkloadStatus(ctx, conn, status)
 	})
 	if err != nil {
-		// Rejected before it ever ran (e.g. a workload is already in
-		// progress on this node) — report FAILED rather than leaving the
-		// manager waiting indefinitely for a status that will never come.
+		// Rejected before it ever ran — report FAILED rather than leaving
+		// the manager waiting for a status that will never come. A full
+		// executor (a race with the manager's view of free slots) is
+		// marked retryable so the manager re-queues it instead.
 		a.sendWorkloadStatus(ctx, conn, domain.WorkloadStatus{
 			ID: wl.ID, Target: wl.Target, State: domain.WorkloadFailed, Error: err.Error(),
+			Retryable: errors.Is(err, ErrExecutorFull),
 		})
 	}
 }

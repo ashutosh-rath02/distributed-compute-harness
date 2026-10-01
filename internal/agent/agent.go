@@ -85,6 +85,9 @@ type Config struct {
 	// SELF_UPDATE command (see selfUpdatePath).
 	SelfUpdateHTTPClient *http.Client
 	SelfUpdateBaseURL    string
+	// WorkloadSlots is how many workloads this agent runs at once (cmd/agent's
+	// -slots). 0 picks a default from the CPU count (see defaultSlots).
+	WorkloadSlots int
 	// HostFingerprint overrides host fingerprint detection: empty detects
 	// it (sysinfo.HostFingerprint), "-" reports none, and anything else is
 	// reported as given — so tests on one machine can simulate several.
@@ -152,7 +155,10 @@ func New(transport domain.Transport, cfg Config) (*Agent, error) {
 		}
 	}
 
-	a := &Agent{cfg: cfg, transport: transport, identity: id, startedAt: time.Now(), executor: NewExecutor(), binaryHash: binaryHash}
+	if cfg.WorkloadSlots < 1 {
+		cfg.WorkloadSlots = defaultSlots()
+	}
+	a := &Agent{cfg: cfg, transport: transport, identity: id, startedAt: time.Now(), executor: NewExecutorWithSlots(cfg.WorkloadSlots), binaryHash: binaryHash}
 	switch cfg.HostFingerprint {
 	case "":
 		a.hostFingerprint, a.hostFingerprintSource = sysinfo.HostFingerprint(context.Background())
@@ -322,6 +328,8 @@ func (a *Agent) buildManifest(ctx context.Context) domain.Manifest {
 		// Lets the manager tell this build apart from agents that can only
 		// download the legacy /agent-binary route (manager/selfupdate.go).
 		AgentFeatures: []string{domain.FeatureSelfUpdatePath},
+		// The manager reserves this many concurrent workloads for us.
+		WorkloadSlots: a.executor.Slots(),
 	}
 }
 
@@ -409,4 +417,17 @@ func (a *Agent) send(ctx context.Context, conn domain.Conn, msgType protocol.Mes
 		return err
 	}
 	return conn.Send(ctx, wire)
+}
+
+// defaultSlots is half the logical CPUs (each workload may itself use
+// several threads), at least 1 and at most 16. Override with -slots.
+func defaultSlots() int {
+	n := runtime.NumCPU() / 2
+	if n < 1 {
+		return 1
+	}
+	if n > 16 {
+		return 16
+	}
+	return n
 }

@@ -51,6 +51,9 @@ func (s *Server) reconcileWorkloads(ctx context.Context) {
 			return
 		case <-ticker.C:
 			s.reconcileOnce(ctx)
+			s.dispatchQueued(ctx) // also catches requeue backoffs expiring
+		case <-s.dispatchKick:
+			s.dispatchQueued(ctx)
 		}
 	}
 }
@@ -67,13 +70,13 @@ func (s *Server) reconcileOnce(ctx context.Context) {
 // restartWorkload attempts to re-run a restart-eligible workload.
 func (s *Server) restartWorkload(ctx context.Context, rec WorkloadRecord) {
 	// A FAILED status with a zero StartedAt means this attempt was
-	// rejected before any process ever launched (the executor was already
-	// busy with another workload — v1's known one-workload-per-node
-	// collision, see placement.go's selectNode doc comment — or an
-	// insecure-mode refusal), not a real crash. Deferring here instead of
-	// counting it keeps a benign placement collision from burning a
+	// rejected before any process ever launched (e.g. an insecure-mode
+	// refusal; a busy refusal never lands here — it is re-queued, see
+	// handleBusyRefusal), not a real crash. Deferring here instead of
+	// counting it keeps a placement-time rejection from burning a
 	// restart-count increment and a backoff doubling for a workload that
-	// never actually failed.
+	// never actually failed. A restart that finds every eligible node full
+	// is deferred the same way and retried next tick.
 	if rec.Status.State == domain.WorkloadFailed && rec.Status.StartedAt.IsZero() {
 		s.Workloads.DeferRestart(rec.Workload.ID, time.Now().Add(s.cfg.ReconcileInterval))
 		return
@@ -87,8 +90,10 @@ func (s *Server) restartWorkload(ctx context.Context, rec WorkloadRecord) {
 	if rec.Workload.Pinned {
 		restartTarget = rec.Workload.Target
 	}
+	s.placeMu.Lock()
 	targetRec, resolvedTarget, err := s.resolveWorkloadTarget(restartTarget, rec.Workload.EffectiveCapability(), rec.Workload.Requirements)
 	if err != nil {
+		s.placeMu.Unlock()
 		// No eligible node right now (e.g. right after a manager restart,
 		// before any node has reconnected — Registry.Seed starts nodes
 		// OFFLINE — or a Pinned node that's temporarily down). Not the
@@ -98,6 +103,7 @@ func (s *Server) restartWorkload(ctx context.Context, rec WorkloadRecord) {
 	}
 
 	newRec, ok := s.Workloads.MarkRestarting(rec.Workload.ID, resolvedTarget)
+	s.placeMu.Unlock()
 	if !ok {
 		return // vanished between the RestartCandidates snapshot and now
 	}

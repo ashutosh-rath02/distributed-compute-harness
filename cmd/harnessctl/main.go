@@ -392,6 +392,10 @@ type nodeView struct {
 	Labels       map[string]string `json:"labels"`
 	SameHostAs   []domain.NodeID   `json:"sameHostAs"`
 	HostConflict bool              `json:"hostConflict"`
+	// Slots is how many workloads the node runs at once; Running, how many
+	// of them are in use.
+	Slots   int `json:"slots"`
+	Running int `json:"running"`
 }
 
 // displayName is the operator's alias when set, else the agent's name.
@@ -412,7 +416,7 @@ func (c *apiClient) cmdNodes() error {
 		return nil
 	}
 
-	fmt.Printf("%-24s %-20s %-12s %-8s %-14s %s\n", "NODE ID", "NAME", "STATE", "CPU%", "LAST SEEN", "AGENT")
+	fmt.Printf("%-24s %-20s %-12s %-8s %-6s %-14s %s\n", "NODE ID", "NAME", "STATE", "CPU%", "BUSY", "LAST SEEN", "AGENT")
 	for _, n := range nodes {
 		lastSeen := "-"
 		if !n.LastSeen.IsZero() {
@@ -433,8 +437,9 @@ func (c *apiClient) cmdNodes() error {
 		case len(n.SameHostAs) > 0:
 			agent += " SAME-HOST"
 		}
-		fmt.Printf("%-24s %-20s %-12s %-8.1f %-14s %s\n",
-			n.NodeID, truncate(n.displayName(), 20), n.State, n.Metrics.CPUPercent, lastSeen, agent)
+		busy := fmt.Sprintf("%d/%d", n.Running, max(n.Slots, 1))
+		fmt.Printf("%-24s %-20s %-12s %-8.1f %-6s %-14s %s\n",
+			n.NodeID, truncate(n.displayName(), 20), n.State, n.Metrics.CPUPercent, busy, lastSeen, agent)
 	}
 	return nil
 }
@@ -556,11 +561,18 @@ func (c *apiClient) cmdRunWorkload(target, command string, args []string, capabi
 		return fmt.Errorf("manager returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
 
-	var wl domain.Workload
+	var wl struct {
+		domain.Workload
+		State domain.WorkloadState `json:"state"`
+	}
 	if err := json.NewDecoder(resp.Body).Decode(&wl); err != nil {
 		return err
 	}
-	fmt.Printf("Workload submitted: %s (target: %s)\n", wl.ID, wl.Target)
+	if wl.State == domain.WorkloadQueued {
+		fmt.Printf("Workload queued: %s (every eligible node is busy; it starts as soon as one has a free slot)\n", wl.ID)
+	} else {
+		fmt.Printf("Workload submitted: %s (target: %s)\n", wl.ID, wl.Target)
+	}
 	fmt.Printf("Check status with: harnessctl workload %s\n", wl.ID)
 	return nil
 }

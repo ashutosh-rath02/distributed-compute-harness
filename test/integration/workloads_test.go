@@ -270,28 +270,25 @@ func TestWorkloadDisconnectFreesNodeForNewWorkload(t *testing.T) {
 	})
 }
 
-func TestWorkloadRejectsSecondConcurrentAssignOnSameNode(t *testing.T) {
+// A node's slots bound how much runs on it at once: with one slot, a
+// second workload is QUEUED (not rejected, not run in parallel) and starts
+// as soon as the first one frees the slot.
+func TestSecondWorkloadOnSingleSlotNodeIsQueuedThenRuns(t *testing.T) {
 	const addr = "127.0.0.1:19266"
 	srv := startManager(t, addr, 2*time.Second)
-	a := startRegisteredAgent(t, addr, "workload-agent-e")
-
-	waitFor(t, 3*time.Second, func() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	a := startAgentWithSlots(t, ctx, addr, "single-slot-agent", 1)
+	waitFor(t, 5*time.Second, func() bool {
 		rec, ok := srv.Registry.Get(a.NodeID())
 		return ok && rec.State == domain.NodeReady
 	})
 
-	sleepCmd, sleepArgv := sleepArgs("5")
-	// Generous bounds: waitFor returns as soon as each condition holds, but
-	// starting powershell.exe can take seconds on a loaded Windows machine
-	// (e.g. the whole suite running in parallel), and the submit context
-	// must outlive both waits since the second submit reuses it.
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	sleepCmd, sleepArgv := sleepArgs("30")
 	first, err := srv.SubmitWorkload(ctx, a.NodeID(), sleepCmd, sleepArgv, "", nil, domain.ResourceRequirements{}, domain.RestartNever)
 	if err != nil {
 		t.Fatalf("SubmitWorkload (first): %v", err)
 	}
-
 	waitFor(t, 10*time.Second, func() bool {
 		rec, ok := srv.Workloads.Get(first.ID)
 		return ok && rec.Status.State == domain.WorkloadRunning
@@ -302,16 +299,29 @@ func TestWorkloadRejectsSecondConcurrentAssignOnSameNode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitWorkload (second): %v", err)
 	}
-
-	// The agent rejects the second assignment (only one workload at a time
-	// per node in v0) — the manager should see that as a reported FAILED
-	// status, not silence.
-	waitFor(t, 10*time.Second, func() bool {
-		rec, ok := srv.Workloads.Get(second.ID)
-		return ok && rec.Status.State == domain.WorkloadFailed
-	})
+	if rec, _ := srv.Workloads.Get(second.ID); rec.Status.State != domain.WorkloadQueued {
+		t.Fatalf("expected the second workload QUEUED behind the busy slot, got %s", rec.Status.State)
+	}
 
 	if err := srv.CancelWorkload(ctx, first.ID); err != nil {
-		t.Fatalf("CancelWorkload cleanup: %v", err)
+		t.Fatalf("CancelWorkload: %v", err)
 	}
+	waitFor(t, 15*time.Second, func() bool {
+		rec, _ := srv.Workloads.Get(second.ID)
+		return rec.Status.State == domain.WorkloadCompleted
+	})
+}
+
+func startAgentWithSlots(t *testing.T, ctx context.Context, addr, name string, slots int) *agent.Agent {
+	t.Helper()
+	a, err := agent.New(ws.New(), agent.Config{
+		ManagerAddr: addr, PairingToken: pairingToken, IdentityDir: filepath.Join(t.TempDir(), name),
+		Name: name, HeartbeatInterval: 100 * time.Millisecond, ReconnectBackoff: 50 * time.Millisecond,
+		MaxReconnectBackoff: 200 * time.Millisecond, WorkloadSlots: slots, HostFingerprint: "-",
+	})
+	if err != nil {
+		t.Fatalf("agent.New: %v", err)
+	}
+	go a.Run(ctx)
+	return a
 }

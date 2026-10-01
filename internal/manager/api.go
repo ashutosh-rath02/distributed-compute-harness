@@ -26,6 +26,10 @@ type nodeView struct {
 	// the dashboard and harnessctl show the same verdict POST
 	// /nodes/{id}/update acts on instead of each re-deriving it.
 	UpdateStatus UpdateStatus `json:"updateStatus"`
+	// Slots is how many workloads the node runs at once; Running is how
+	// many of them are in use (PENDING/RUNNING on it) — see queue.go.
+	Slots   int `json:"slots"`
+	Running int `json:"running"`
 	// Operator metadata (fleet.go) and same-machine hints. SameHostAs
 	// lists other identities reporting this node's host fingerprint;
 	// HostConflict means they match by fingerprint only, not hardware.
@@ -50,6 +54,8 @@ func (s *Server) toNodeView(rec *NodeRecord, relations map[domain.NodeID]hostRel
 		LastSeen:     rec.LastSeen,
 		Metrics:      rec.LastMetrics,
 		UpdateStatus: s.UpdateStatusFor(rec),
+		Slots:        rec.slots(),
+		Running:      s.Workloads.usageOn(rec.Node.Identity.NodeID).running,
 
 		Alias:                 meta.Alias,
 		Labels:                meta.Labels,
@@ -431,7 +437,16 @@ func (s *Server) apiPostWorkload(w http.ResponseWriter, r *http.Request) {
 	s.audit(domain.AuditSecurity, "workload.submitted", wl.Target, actorFrom(r.Context()), map[string]any{
 		"workloadId": string(wl.ID), "command": wl.Command, "capability": string(wl.EffectiveCapability()), "args": len(wl.Args),
 	})
-	writeJSON(w, http.StatusAccepted, wl)
+	// The workload plus its state: QUEUED when every eligible node is full
+	// right now (it starts as soon as one has room), else PENDING.
+	state := domain.WorkloadPending
+	if rec, ok := s.Workloads.Get(wl.ID); ok {
+		state = rec.Status.State
+	}
+	writeJSON(w, http.StatusAccepted, struct {
+		domain.Workload
+		State domain.WorkloadState `json:"state"`
+	}{wl, state})
 }
 
 func (s *Server) apiListWorkloads(w http.ResponseWriter, r *http.Request) {

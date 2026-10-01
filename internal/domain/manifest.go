@@ -19,6 +19,17 @@ type Manifest struct {
 	// means none: the manager must fall back to legacy behavior. Distinct
 	// from Capabilities, which are workload types a node can execute.
 	AgentFeatures []string `json:"agentFeatures,omitempty"`
+	// WorkloadSlots is how many workloads this agent runs at once. Absent
+	// (an older agent) means 1, which is exactly how those agents behave.
+	WorkloadSlots int `json:"workloadSlots,omitempty"`
+}
+
+// Slots is the manifest's workload slot count, treating absent as 1.
+func (m Manifest) Slots() int {
+	if m.WorkloadSlots < 1 {
+		return 1
+	}
+	return m.WorkloadSlots
 }
 
 // FeatureSelfUpdatePath means the agent downloads a self-update from the

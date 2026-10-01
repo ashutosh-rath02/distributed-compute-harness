@@ -95,6 +95,7 @@
     <div class="card"><span class="hint">Ready compute nodes</span><div class="metric" id="readyCount">-</div></div>
     <div class="card"><span class="hint">Available memory</span><div class="metric" id="totalMemory">-</div></div>
     <div class="card"><span class="hint">Workloads completed</span><div class="metric" id="completedCount">-</div></div>
+    <div class="card"><span class="hint">Running / queued</span><div class="metric" id="queueCount">-</div></div>
   </div>
   <p class="sub">Operator dashboard — your sign-in is kept only in this browser, for this exact address. Generated onboarding scripts below include this harness's pairing token in plain text. <a href="#" id="signout">Sign out of this browser</a></p>
 
@@ -330,13 +331,14 @@
         + '<td><span class="' + stateClass(n.state) + '">' + escapeHtml(n.state) + "</span>" + outdated + "</td>"
         + "<td>" + cpu + "</td>"
         + "<td>" + mem + "</td>"
+        + "<td>" + escapeHtml(String(n.running || 0) + " / " + String(n.slots || 1)) + "</td>"
         + '<td><button class="small secondary" data-rename="' + escapeHtml(n.nodeId) + '">Rename</button> '
         + '<button class="small danger" data-revoke="' + escapeHtml(n.nodeId) + '" data-name="'
         + escapeHtml(display) + '">Revoke</button></td>'
         + "</tr>";
     }).join("");
     el.innerHTML =
-      "<table><thead><tr><th>Name</th><th>Platform</th><th>State</th><th>CPU</th><th>Mem free</th><th></th></tr></thead>"
+      "<table><thead><tr><th>Name</th><th>Platform</th><th>State</th><th>CPU</th><th>Mem free</th><th title='Workloads running / slots'>Busy</th><th></th></tr></thead>"
       + "<tbody>" + rows + "</tbody></table>";
   }
 
@@ -448,6 +450,9 @@
       }));
       document.getElementById("completedCount").textContent =
         (workloads || []).filter((w) => w.state === "COMPLETED").length;
+      const running = (workloads || []).filter((w) => w.state === "RUNNING" || w.state === "PENDING").length;
+      const queued = (workloads || []).filter((w) => w.state === "QUEUED").length;
+      document.getElementById("queueCount").textContent = running + " / " + queued;
       const el = document.getElementById("workloads");
       if (!recent.length) {
         el.innerHTML = '<p class="empty">No tasks yet.</p>';
@@ -603,12 +608,14 @@
       const text = await resp.text();
       if (!resp.ok) throw new Error(text.trim() || resp.statusText);
       const workload = JSON.parse(text);
-      progress.textContent = "ASSIGNED to " + workload.target + " (" + workload.id + ")";
+      progress.textContent = workload.state === "QUEUED"
+        ? "QUEUED: every eligible device is busy; it starts when one frees a slot (" + workload.id + ")"
+        : "ASSIGNED to " + workload.target + " (" + workload.id + ")";
       for (let attempt = 0; attempt < 150; attempt++) {
         await new Promise((resolve) => setTimeout(resolve, 500));
         const statusResp = await api("/workloads/" + encodeURIComponent(workload.id));
         const status = await statusResp.json();
-        progress.textContent = status.state + " on " + status.target
+        progress.textContent = status.state + (status.target ? " on " + status.target : "")
           + (status.stdout ? "\nOutput: " + status.stdout.trim() : "")
           + (status.stderr ? "\nError output: " + status.stderr.trim() : "");
         if (["COMPLETED", "FAILED", "CANCELED"].includes(status.state)) break;

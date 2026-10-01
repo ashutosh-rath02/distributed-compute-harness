@@ -52,21 +52,53 @@ func nodeFits(rec *NodeRecord, capability domain.CapabilityName, req domain.Reso
 	return true, ""
 }
 
+// couldEverFit reports whether rec could run a workload with req once it
+// is idle: the capability, declared cores, and declared total memory. Live
+// figures (free memory, CPU load) are deliberately left out — they reflect
+// what is running right now, so a busy node failing them means "queue",
+// not "reject". A node that declares no total memory falls back to its
+// live free memory, as before.
+func couldEverFit(rec *NodeRecord, capability domain.CapabilityName, req domain.ResourceRequirements) (bool, string) {
+	if !rec.HasCapability(capability) {
+		return false, fmt.Sprintf("does not declare capability %q", capability)
+	}
+	if req.MinCPUCores > 0 {
+		cores, ok := domain.StaticCapacity(rec.Resources, domain.ResourceCPUCores)
+		if !ok || cores < req.MinCPUCores {
+			return false, fmt.Sprintf("requires %.2f CPU cores, node declares %.2f", req.MinCPUCores, cores)
+		}
+	}
+	if req.MinMemoryBytes > 0 {
+		total, declared := domain.StaticCapacity(rec.Resources, domain.ResourceMemoryBytes)
+		switch {
+		case declared && total < float64(req.MinMemoryBytes):
+			return false, fmt.Sprintf("requires %d bytes of memory, node has %.0f in total", req.MinMemoryBytes, total)
+		case !declared && !rec.LastMetrics.LastHeartbeat.IsZero() && rec.LastMetrics.MemoryAvailableBytes < req.MinMemoryBytes:
+			return false, fmt.Sprintf("requires %d bytes available memory, node has %d", req.MinMemoryBytes, rec.LastMetrics.MemoryAvailableBytes)
+		}
+	}
+	return true, ""
+}
+
 // selectNode picks the best candidate satisfying req: the one with the
 // most available memory (the only live, absolute resource signal that
 // exists), breaking ties by ascending NodeID for full determinism. This is
 // deliberately a single-signal preference, not a weighted or multi-factor
 // score — v1.md §19 excludes an "AI scheduler" from scope.
 //
-// Known, accepted characteristic: because this is deterministic,
-// back-to-back similar submissions can keep picking the same node until
-// its heartbeat catches up, colliding with the one-workload-per-node rule
-// (rejected, reported FAILED — v1's existing, tested behavior). v1's
-// arbitrary map order accidentally spread load; this trades that for
-// explainability. Not addressed here — would mean consulting
-// WorkloadRegistry's in-flight state from placement, a reasonable v2.1
-// follow-up.
+// selectNode is selectNodeWithUsage for an idle fleet (no reservations).
+// Real placement (resolveWorkloadTarget) uses selectNodeWithUsage with what
+// is already reserved on each node (queue.go).
 func selectNode(candidates []*NodeRecord, capability domain.CapabilityName, req domain.ResourceRequirements) (*NodeRecord, error) {
+	return selectNodeWithUsage(candidates, nil, capability, req)
+}
+
+// selectNodeWithUsage is selectNode that, given current reservations,
+// prefers the node with the most memory left after them, then the fewest
+// running workloads — spreading a burst of submissions across nodes
+// instead of piling onto whichever had the most free memory a heartbeat
+// ago.
+func selectNodeWithUsage(candidates []*NodeRecord, usage map[domain.NodeID]nodeUsage, capability domain.CapabilityName, req domain.ResourceRequirements) (*NodeRecord, error) {
 	var best *NodeRecord
 	var reasons []string
 
@@ -76,13 +108,24 @@ func selectNode(candidates []*NodeRecord, capability domain.CapabilityName, req 
 			reasons = append(reasons, fmt.Sprintf("%s: %s", rec.Node.Identity.NodeID, reason))
 			continue
 		}
+		if best == nil {
+			best = rec
+			continue
+		}
+		ru, bu := usage[rec.Node.Identity.NodeID], usage[best.Node.Identity.NodeID]
+		free := func(r *NodeRecord, u nodeUsage) uint64 {
+			if u.memory >= r.LastMetrics.MemoryAvailableBytes {
+				return 0
+			}
+			return r.LastMetrics.MemoryAvailableBytes - u.memory
+		}
+		rf, bf := free(rec, ru), free(best, bu)
 		switch {
-		case best == nil:
+		case rf > bf:
 			best = rec
-		case rec.LastMetrics.MemoryAvailableBytes > best.LastMetrics.MemoryAvailableBytes:
+		case rf == bf && ru.running < bu.running:
 			best = rec
-		case rec.LastMetrics.MemoryAvailableBytes == best.LastMetrics.MemoryAvailableBytes &&
-			rec.Node.Identity.NodeID < best.Node.Identity.NodeID:
+		case rf == bf && ru.running == bu.running && rec.Node.Identity.NodeID < best.Node.Identity.NodeID:
 			best = rec
 		}
 	}

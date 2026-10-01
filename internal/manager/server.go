@@ -104,6 +104,14 @@ type Server struct {
 	meta     *nodeMetaStore
 	auditLog *auditRecorder
 
+	// placeMu serializes "check room, then reserve" (placement plus the
+	// state change that makes the reservation count), so two concurrent
+	// submissions can never both take a node's last slot.
+	placeMu      sync.Mutex
+	dispatchKick chan struct{}
+	requeueMu    sync.Mutex
+	requeues     map[domain.WorkloadID]int
+
 	pendingMu sync.Mutex
 	pending   map[string]pendingCommand
 
@@ -133,17 +141,19 @@ func NewServer(transport domain.Transport, store PersistentStore, cfg Config) *S
 		cfg.EnrollmentTTL = defaultEnrollmentTTL
 	}
 	s := &Server{
-		cfg:         cfg,
-		transport:   transport,
-		store:       store,
-		Registry:    NewRegistry(),
-		Workloads:   NewWorkloadRegistry(),
-		Events:      eventbus.New(),
-		pending:     make(map[string]pendingCommand),
-		enrollments: newEnrollmentStore(),
-		revocations: newRevocationList(),
-		meta:        newNodeMetaStore(),
-		auditLog:    newAuditRecorder(),
+		cfg:          cfg,
+		transport:    transport,
+		store:        store,
+		Registry:     NewRegistry(),
+		Workloads:    NewWorkloadRegistry(),
+		Events:       eventbus.New(),
+		pending:      make(map[string]pendingCommand),
+		enrollments:  newEnrollmentStore(),
+		revocations:  newRevocationList(),
+		meta:         newNodeMetaStore(),
+		auditLog:     newAuditRecorder(),
+		dispatchKick: make(chan struct{}, 1),
+		requeues:     make(map[domain.WorkloadID]int),
 	}
 
 	if cfg.OperatorToken == "" {
@@ -269,19 +279,33 @@ func (s *Server) SubmitWorkload(ctx context.Context, target domain.NodeID, comma
 		capability = domain.CapabilitySystemExecute
 	}
 	pinned := target != ""
-	rec, target, err := s.resolveWorkloadTarget(target, capability, req)
-	if err != nil {
-		return domain.Workload{}, err
-	}
-
 	id, err := newRandomID()
 	if err != nil {
 		return domain.Workload{}, err
 	}
+	s.placeMu.Lock()
+	rec, resolved, err := s.resolveWorkloadTarget(target, capability, req)
+	if errors.Is(err, errNoRoom) {
+		// Some ready node could run it, just not right now: queue it.
+		w := domain.Workload{ID: domain.WorkloadID(id), Target: target, Pinned: pinned, Command: command, Args: args, Capability: capability, Params: params, Requirements: req, RestartPolicy: restartPolicy}
+		wrec := s.Workloads.enqueue(w, time.Now().UTC())
+		s.placeMu.Unlock()
+		s.persistWorkloadRecord(wrec)
+		log.Printf("workload.queued: %s (%s)", w.ID, err)
+		s.publish(domain.EventWorkloadQueued, target, map[string]any{"workloadId": string(w.ID), "command": command, "capability": string(capability)})
+		return w, nil
+	}
+	if err != nil {
+		s.placeMu.Unlock()
+		return domain.Workload{}, err
+	}
+	target = resolved
+
 	w := domain.Workload{ID: domain.WorkloadID(id), Target: target, Pinned: pinned, Command: command, Args: args, Capability: capability, Params: params, Requirements: req, RestartPolicy: restartPolicy}
 	status := domain.WorkloadStatus{ID: w.ID, Target: target, State: domain.WorkloadPending}
 
 	wrec := s.Workloads.Put(w, status)
+	s.placeMu.Unlock()
 	s.persistWorkloadRecord(wrec)
 
 	s.send(ctx, rec.Conn, protocol.MsgWorkloadAssign, domain.ManagerNodeID, target, protocol.WorkloadAssignPayload{Workload: w})
@@ -305,8 +329,14 @@ func (s *Server) resolveWorkloadTarget(target domain.NodeID, capability domain.C
 		if !ok || rec.Conn == nil || rec.State != domain.NodeReady {
 			return nil, "", ErrNodeNotConnected
 		}
-		if ok, reason := nodeFits(rec, capability, req); !ok {
+		if ok, reason := couldEverFit(rec, capability, req); !ok {
 			return nil, "", fmt.Errorf("%w (%s: %s)", ErrNoEligibleNode, target, reason)
+		}
+		if ok, reason := nodeFits(rec, capability, req); !ok {
+			return nil, "", fmt.Errorf("%w (%s: %s)", errNoRoom, target, reason)
+		}
+		if ok, reason := hasRoom(rec, s.Workloads.usageOn(target), req); !ok {
+			return nil, "", fmt.Errorf("%w (%s: %s)", errNoRoom, target, reason)
 		}
 		return rec, target, nil
 	}
@@ -317,9 +347,39 @@ func (s *Server) resolveWorkloadTarget(target domain.NodeID, capability domain.C
 			candidates = append(candidates, rec)
 		}
 	}
-	best, err := selectNode(candidates, capability, req)
+	if len(candidates) == 0 {
+		return nil, "", ErrNoReadyNode
+	}
+	// First: could any ready node run it at all, once idle? If not,
+	// reject. Then: which of those can take it right now (live state and
+	// free slots)? None → queue.
+	var never, notNow []string
+	var withRoom []*NodeRecord
+	usage := make(map[domain.NodeID]nodeUsage)
+	for _, rec := range candidates {
+		id := rec.Node.Identity.NodeID
+		if ok, reason := couldEverFit(rec, capability, req); !ok {
+			never = append(never, fmt.Sprintf("%s: %s", id, reason))
+			continue
+		}
+		if ok, reason := nodeFits(rec, capability, req); !ok {
+			notNow = append(notNow, fmt.Sprintf("%s: %s", id, reason))
+			continue
+		}
+		u := s.Workloads.usageOn(id)
+		if ok, reason := hasRoom(rec, u, req); !ok {
+			notNow = append(notNow, fmt.Sprintf("%s: %s", id, reason))
+			continue
+		}
+		withRoom = append(withRoom, rec)
+		usage[id] = u
+	}
+	if len(never) == len(candidates) {
+		return nil, "", fmt.Errorf("%w (%v)", ErrNoEligibleNode, never)
+	}
+	best, err := selectNodeWithUsage(withRoom, usage, capability, req)
 	if err != nil {
-		return nil, "", err
+		return nil, "", fmt.Errorf("%w (%v)", errNoRoom, notNow)
 	}
 	return best, best.Node.Identity.NodeID, nil
 }
@@ -332,10 +392,18 @@ func (s *Server) CancelWorkload(ctx context.Context, id domain.WorkloadID) error
 	if !ok {
 		return fmt.Errorf("manager: unknown workload %s", id)
 	}
+	if canceled, ok := s.Workloads.cancelQueued(id, "canceled while queued"); ok {
+		s.forgetRequeues(id)
+		s.persistWorkloadRecord(canceled)
+		log.Printf("workload.canceled: %s (while queued)", id)
+		s.publish(domain.EventWorkloadCanceled, canceled.Workload.Target, map[string]any{"workloadId": string(id), "reason": "canceled while queued"})
+		return nil
+	}
 	rec, ok := s.Registry.Get(wrec.Workload.Target)
 	if !ok || rec.Conn == nil {
 		return ErrNodeNotConnected
 	}
+	s.Workloads.markCancelRequested(id)
 	s.send(ctx, rec.Conn, protocol.MsgWorkloadCancel, domain.ManagerNodeID, wrec.Workload.Target, protocol.WorkloadCancelPayload{ID: id})
 	return nil
 }
@@ -646,6 +714,7 @@ func (s *Server) handleRegister(ctx context.Context, conn domain.Conn, env *prot
 
 	s.send(ctx, conn, protocol.MsgRegisterAck, domain.ManagerNodeID, claimedID,
 		protocol.RegisterAckPayload{NodeID: claimedID, ServerTime: time.Now().UTC()})
+	s.kickDispatch() // new capacity: queued work may fit now
 
 	return claimedID
 }
@@ -751,8 +820,23 @@ func (s *Server) handleWorkloadStatus(nodeID domain.NodeID, env *protocol.Envelo
 		return
 	}
 
+	// Refused only for lack of a free slot (the manager's view raced the
+	// agent's): re-queue rather than fail. Only agents that never ran it
+	// can mark a refusal retryable, so a real failure is never retried here.
+	if payload.Status.State == domain.WorkloadFailed && payload.Status.Retryable && payload.Status.StartedAt.IsZero() {
+		s.handleBusyRefusal(nodeID, payload.Status)
+		return
+	}
+
 	wrec, _ := s.Workloads.UpdateStatus(payload.Status)
 	s.persistWorkloadRecord(wrec)
+	switch payload.Status.State {
+	case domain.WorkloadCompleted, domain.WorkloadFailed, domain.WorkloadCanceled:
+		// A slot freed: this node can take work again, and the queue may move.
+		s.Registry.holdOffBusy(nodeID, time.Time{})
+		s.forgetRequeues(payload.Status.ID)
+		s.kickDispatch()
+	}
 
 	switch payload.Status.State {
 	case domain.WorkloadRunning:

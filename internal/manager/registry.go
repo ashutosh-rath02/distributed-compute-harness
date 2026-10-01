@@ -25,10 +25,34 @@ type NodeRecord struct {
 	State         domain.NodeState
 	LastSeen      time.Time
 	Conn          domain.Conn
+	// slotsN is the node's advertised workload slot count (Manifest.Slots:
+	// absent = 1). busyUntil holds placement off a node that just refused
+	// work for lack of a free slot: until then, or until it next finishes
+	// a workload, whichever is first (queue.go).
+	slotsN    int
+	busyUntil time.Time
 	// LastMetrics is the most recently reported live CPU/memory figures
 	// from a HEARTBEAT, distinct from the static Resources declared at
 	// registration (v1.md §13's runtime vs persistent state split).
 	LastMetrics domain.RuntimeState
+}
+
+// slots is how many workloads the node runs at once.
+func (rec *NodeRecord) slots() int {
+	if rec.slotsN < 1 {
+		return 1
+	}
+	return rec.slotsN
+}
+
+// holdOffBusy keeps placement off a node that refused work for lack of
+// slots until until; the zero time clears it (it finished something).
+func (r *Registry) holdOffBusy(id domain.NodeID, until time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if rec, ok := r.nodes[id]; ok {
+		rec.busyUntil = until
+	}
 }
 
 // hasAgentFeature reports whether rec's last manifest advertised feature.
@@ -76,6 +100,7 @@ func (r *Registry) Upsert(manifest domain.Manifest, conn domain.Conn) (rec *Node
 			Resources:     manifest.Resources,
 			Capabilities:  manifest.Capabilities,
 			AgentFeatures: manifest.AgentFeatures,
+			slotsN:        manifest.Slots(),
 			State:         domain.NodeConnected,
 			LastSeen:      time.Now(),
 			Conn:          conn,
@@ -87,6 +112,8 @@ func (r *Registry) Upsert(manifest domain.Manifest, conn domain.Conn) (rec *Node
 	existing.Resources = manifest.Resources
 	existing.Capabilities = manifest.Capabilities
 	existing.AgentFeatures = manifest.AgentFeatures
+	existing.slotsN = manifest.Slots()
+	existing.busyUntil = time.Time{} // a fresh process starts with free slots
 	existing.Conn = conn
 	existing.LastSeen = time.Now()
 	// A reconnect (new process, new connection) invalidates any previous
@@ -226,6 +253,7 @@ func (r *Registry) Seed(manifest domain.Manifest) {
 		Resources:     manifest.Resources,
 		Capabilities:  manifest.Capabilities,
 		AgentFeatures: manifest.AgentFeatures,
+		slotsN:        manifest.Slots(),
 		State:         domain.NodeOffline,
 	}
 }

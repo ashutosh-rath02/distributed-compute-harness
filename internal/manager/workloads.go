@@ -14,6 +14,10 @@ type WorkloadRecord struct {
 	Workload domain.Workload
 	Status   domain.WorkloadStatus
 	Restart  domain.RestartState
+	// cancelRequested: the operator canceled this attempt while it was
+	// PENDING, so a busy refusal racing that cancel must not re-queue it
+	// (queue.go). In memory only; it matters for one assignment's lifetime.
+	cancelRequested bool
 }
 
 // WorkloadRegistry tracks every workload the manager has submitted, keyed
@@ -24,6 +28,9 @@ type WorkloadRecord struct {
 type WorkloadRegistry struct {
 	mu        sync.RWMutex
 	workloads map[domain.WorkloadID]*WorkloadRecord
+	// lastQueuedAt keeps queue timestamps strictly increasing (queue.go):
+	// back-to-back submissions can read the same wall-clock time.
+	lastQueuedAt time.Time
 }
 
 // NewWorkloadRegistry returns an empty workload registry.
@@ -121,7 +128,7 @@ func (wr *WorkloadRegistry) CancelPinnedTo(nodeID domain.NodeID, reason string) 
 			continue
 		}
 		state := rec.Status.State
-		inFlight := state == domain.WorkloadPending || state == domain.WorkloadRunning
+		inFlight := state == domain.WorkloadPending || state == domain.WorkloadRunning || state == domain.WorkloadQueued
 		if !inFlight && !rec.Workload.RestartPolicy.WantsRestartAfter(state) {
 			continue
 		}
@@ -193,6 +200,7 @@ func (wr *WorkloadRegistry) MarkRestarting(id domain.WorkloadID, target domain.N
 	}
 	rec.Workload.Target = target
 	rec.Status = domain.WorkloadStatus{ID: id, Target: target, State: domain.WorkloadPending}
+	rec.cancelRequested = false
 	rec.Restart.Count++
 	return *rec, true
 }
@@ -224,6 +232,9 @@ func (wr *WorkloadRegistry) Seed(pw domain.PersistedWorkload) {
 	status := pw.Status
 	if status.State == domain.WorkloadPending || status.State == domain.WorkloadRunning {
 		status.State = domain.WorkloadUnknown
+	}
+	if status.QueuedAt.After(wr.lastQueuedAt) {
+		wr.lastQueuedAt = status.QueuedAt
 	}
 	wr.workloads[pw.Workload.ID] = &WorkloadRecord{Workload: pw.Workload, Status: status, Restart: pw.Restart}
 }

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -112,8 +113,8 @@ func TestExecutorRejectsConcurrentWorkload(t *testing.T) {
 	}
 
 	err = e.Start(context.Background(), echoWorkload("w4", "hi"), func(domain.WorkloadStatus) {})
-	if err == nil {
-		t.Fatal("expected second concurrent Start to be rejected")
+	if !errors.Is(err, ErrExecutorFull) {
+		t.Fatalf("expected the second concurrent Start on a 1-slot executor to fail with ErrExecutorFull, got %v", err)
 	}
 
 	if cancelErr := e.Cancel("w3"); cancelErr != nil {
@@ -481,5 +482,96 @@ func TestResolveCommandPathSkipsNonExecutableFile(t *testing.T) {
 	const name = "not-executable"
 	if got := resolveCommandPath(name); got != name {
 		t.Errorf("resolveCommandPath(%q) = %q, want unchanged for a non-executable file", name, got)
+	}
+}
+
+// startTracked starts wl and returns a channel closed with its terminal
+// status.
+func startTracked(t *testing.T, e *Executor, wl domain.Workload) <-chan domain.WorkloadStatus {
+	t.Helper()
+	done := make(chan domain.WorkloadStatus, 1)
+	err := e.Start(context.Background(), wl, func(s domain.WorkloadStatus) {
+		if s.State != domain.WorkloadRunning {
+			done <- s
+		}
+	})
+	if err != nil {
+		t.Fatalf("Start %s: %v", wl.ID, err)
+	}
+	return done
+}
+
+func waitTerminal(t *testing.T, ch <-chan domain.WorkloadStatus) domain.WorkloadStatus {
+	t.Helper()
+	select {
+	case s := <-ch:
+		return s
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for a terminal workload status")
+		return domain.WorkloadStatus{}
+	}
+}
+
+func TestExecutorRunsUpToSlotsConcurrently(t *testing.T) {
+	e := NewExecutorWithSlots(2)
+	if e.Slots() != 2 {
+		t.Fatalf("Slots() = %d, want 2", e.Slots())
+	}
+	a := startTracked(t, e, sleepWorkload("slot-a", "30"))
+	b := startTracked(t, e, sleepWorkload("slot-b", "30"))
+
+	err := e.Start(context.Background(), echoWorkload("slot-c", "hi"), func(domain.WorkloadStatus) {})
+	if !errors.Is(err, ErrExecutorFull) {
+		t.Fatalf("third Start on a 2-slot executor: got %v, want ErrExecutorFull", err)
+	}
+
+	// Freeing one slot admits the next; the other keeps running.
+	if err := e.Cancel("slot-a"); err != nil {
+		t.Fatalf("Cancel slot-a: %v", err)
+	}
+	if s := waitTerminal(t, a); s.State != domain.WorkloadCanceled {
+		t.Fatalf("slot-a: got %s, want CANCELED", s.State)
+	}
+	c := startTracked(t, e, echoWorkload("slot-c", "hi"))
+	if s := waitTerminal(t, c); s.State != domain.WorkloadCompleted {
+		t.Fatalf("slot-c: got %s (%s), want COMPLETED", s.State, s.Error)
+	}
+	select {
+	case s := <-b:
+		t.Fatalf("slot-b finished early: %+v", s)
+	default:
+	}
+
+	// CancelCurrent (connection loss) stops every running workload.
+	d := startTracked(t, e, sleepWorkload("slot-d", "30"))
+	e.CancelCurrent()
+	for name, ch := range map[string]<-chan domain.WorkloadStatus{"slot-b": b, "slot-d": d} {
+		if s := waitTerminal(t, ch); s.State != domain.WorkloadCanceled {
+			t.Fatalf("%s after CancelCurrent: got %s, want CANCELED", name, s.State)
+		}
+	}
+}
+
+func TestExecutorRefusesDuplicateRunningID(t *testing.T) {
+	e := NewExecutorWithSlots(2)
+	a := startTracked(t, e, sleepWorkload("dup", "30"))
+	err := e.Start(context.Background(), sleepWorkload("dup", "30"), func(domain.WorkloadStatus) {})
+	if err == nil || errors.Is(err, ErrExecutorFull) {
+		t.Fatalf("duplicate Start of a running ID: got %v, want a non-retryable refusal", err)
+	}
+	if err := e.Cancel("dup"); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if s := waitTerminal(t, a); s.State != domain.WorkloadCanceled {
+		t.Fatalf("got %s, want CANCELED", s.State)
+	}
+}
+
+func TestNewExecutorWithSlotsClampsToOne(t *testing.T) {
+	if got := NewExecutorWithSlots(0).Slots(); got != 1 {
+		t.Fatalf("NewExecutorWithSlots(0).Slots() = %d, want 1", got)
+	}
+	if got := NewExecutor().Slots(); got != 1 {
+		t.Fatalf("NewExecutor().Slots() = %d, want 1", got)
 	}
 }

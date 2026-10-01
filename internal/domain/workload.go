@@ -12,6 +12,11 @@ type WorkloadID string
 type WorkloadState string
 
 const (
+	// WorkloadQueued is accepted but not yet placed: some ready node could
+	// run it, but none has a free slot (or the reserved resources) right
+	// now. The manager dispatches it as soon as capacity frees up. Only the
+	// manager sets it; agents never report it.
+	WorkloadQueued    WorkloadState = "QUEUED"
 	WorkloadPending   WorkloadState = "PENDING"
 	WorkloadRunning   WorkloadState = "RUNNING"
 	WorkloadCompleted WorkloadState = "COMPLETED"
@@ -104,6 +109,16 @@ type WorkloadStatus struct {
 	Error      string    `json:"error,omitempty"`
 	StartedAt  time.Time `json:"startedAt,omitempty"`
 	FinishedAt time.Time `json:"finishedAt,omitempty"`
+	// Retryable is set by an agent that refused an assignment only because
+	// all its workload slots were busy (a race with the manager's view):
+	// the manager re-queues the workload instead of failing it. Never set
+	// for refusals that would recur (insecure mode, unknown capability).
+	Retryable bool `json:"retryable,omitempty"`
+	// QueuedAt orders the queue (oldest first) and NotBefore delays a
+	// re-queued workload's next placement attempt. Manager-owned, only
+	// meaningful while QUEUED.
+	QueuedAt  time.Time `json:"queuedAt,omitempty"`
+	NotBefore time.Time `json:"notBefore,omitempty"`
 }
 
 // PersistedWorkload is what survives a manager restart for one workload:

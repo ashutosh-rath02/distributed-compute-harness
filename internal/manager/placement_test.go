@@ -217,7 +217,7 @@ func TestResolveWorkloadTargetIntegratesWithRegistry(t *testing.T) {
 	r.UpdateResources("node-b", []domain.Resource{{Kind: domain.ResourceCPUCores, Capacity: 8, Unit: "cores"}}, defaultCaps)
 	r.RecordHeartbeat("node-b", domain.RuntimeState{MemoryAvailableBytes: 6 << 30, CPUPercent: 10, LastHeartbeat: time.Now()})
 
-	s := &Server{Registry: r}
+	s := &Server{Registry: r, Workloads: NewWorkloadRegistry()}
 
 	rec, id, err := s.resolveWorkloadTarget("", domain.CapabilitySystemExecute, domain.ResourceRequirements{MinMemoryBytes: 4 << 30})
 	if err != nil {

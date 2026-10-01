@@ -17,12 +17,19 @@ import (
 	"home-harness/internal/domain"
 )
 
-// Executor runs at most one workload at a time on this node (v1 keeps
-// concurrency simple and explicit: a second ASSIGN while one is already
-// running is rejected rather than silently queued or run in parallel).
+// ErrExecutorFull is returned by Start when every workload slot is busy.
+// The agent reports it as a retryable refusal, so the manager re-queues
+// the workload instead of failing it.
+var ErrExecutorFull = errors.New("executor: all workload slots are busy")
+
+// Executor runs up to slots workloads at once on this node (advertised in
+// the manifest so the manager reserves capacity accordingly). An ASSIGN
+// beyond that is refused, never silently queued or oversubscribed here —
+// queueing is the manager's job.
 type Executor struct {
 	mu      sync.Mutex
-	current *runningWorkload
+	slots   int
+	running map[domain.WorkloadID]*runningWorkload
 	// canceledBeforeStart records IDs that were canceled before Start was
 	// ever called for them. Ordinarily WORKLOAD_ASSIGN and WORKLOAD_CANCEL
 	// arrive strictly in order on the same connection (the agent's receive
@@ -37,10 +44,20 @@ type runningWorkload struct {
 	canceled bool
 }
 
-// NewExecutor returns an idle Executor.
-func NewExecutor() *Executor {
-	return &Executor{canceledBeforeStart: make(map[domain.WorkloadID]bool)}
+// NewExecutor returns an idle single-slot Executor.
+func NewExecutor() *Executor { return NewExecutorWithSlots(1) }
+
+// NewExecutorWithSlots returns an idle Executor running up to slots
+// workloads at once (minimum 1).
+func NewExecutorWithSlots(slots int) *Executor {
+	if slots < 1 {
+		slots = 1
+	}
+	return &Executor{slots: slots, running: make(map[domain.WorkloadID]*runningWorkload), canceledBeforeStart: make(map[domain.WorkloadID]bool)}
 }
+
+// Slots reports how many workloads this executor runs at once.
+func (e *Executor) Slots() int { return e.slots }
 
 // Start begins running wl, invoking onStatus once immediately with
 // WorkloadRunning and once more with the terminal status
@@ -49,9 +66,9 @@ func NewExecutor() *Executor {
 // for the initial one. What "running" means depends on wl's capability
 // (EffectiveCapability) — see startExecute/startFilesystemRead.
 //
-// The busy/canceled-before-start checks and single-slot registration below
-// are capability-agnostic: v1's "only one workload per node at a time"
-// invariant applies uniformly regardless of what's being invoked.
+// The busy/canceled-before-start checks and slot registration below are
+// capability-agnostic: every workload, whatever it invokes, takes one of
+// the executor's slots.
 func (e *Executor) Start(ctx context.Context, wl domain.Workload, onStatus func(domain.WorkloadStatus)) error {
 	e.mu.Lock()
 	if e.canceledBeforeStart[wl.ID] {
@@ -62,10 +79,13 @@ func (e *Executor) Start(ctx context.Context, wl domain.Workload, onStatus func(
 		})
 		return nil
 	}
-	if e.current != nil {
-		busy := e.current.id
+	if _, dup := e.running[wl.ID]; dup {
 		e.mu.Unlock()
-		return fmt.Errorf("executor: workload %s is already running; only one workload per node at a time in v0", busy)
+		return fmt.Errorf("executor: workload %s is already running here", wl.ID)
+	}
+	if len(e.running) >= e.slots {
+		e.mu.Unlock()
+		return fmt.Errorf("%w (%d of %d in use)", ErrExecutorFull, e.slots, e.slots)
 	}
 
 	capability := wl.EffectiveCapability()
@@ -87,7 +107,7 @@ func (e *Executor) Start(ctx context.Context, wl domain.Workload, onStatus func(
 	}
 
 	runCtx, cancel := context.WithCancel(ctx)
-	e.current = &runningWorkload{id: wl.ID, cancel: cancel}
+	e.running[wl.ID] = &runningWorkload{id: wl.ID, cancel: cancel}
 	e.mu.Unlock()
 
 	switch capability {
@@ -292,8 +312,8 @@ func readFileCapped(path string, limit int) (content string, truncated bool, err
 // so a stale WORKLOAD_CANCEL doesn't look like it silently succeeded.
 func (e *Executor) Cancel(id domain.WorkloadID) error {
 	e.mu.Lock()
-	rw := e.current
-	if rw == nil || rw.id != id {
+	rw := e.running[id]
+	if rw == nil {
 		e.canceledBeforeStart[id] = true
 		e.mu.Unlock()
 		return fmt.Errorf("executor: no running workload with id %s (noted in case its ASSIGN hasn't arrived yet)", id)
@@ -305,20 +325,20 @@ func (e *Executor) Cancel(id domain.WorkloadID) error {
 	return nil
 }
 
-// CancelCurrent terminates whatever workload is currently running,
-// regardless of ID, and is a no-op if none is. It exists for connection
-// loss: the manager marks a node's in-flight workloads FAILED as soon as
-// it goes offline (failWorkloadsFor), so leaving the agent to keep running
-// one afterward would leave the two sides permanently disagreeing about
-// whether it's still going.
+// CancelCurrent terminates every running workload and is a no-op if none
+// is. It exists for connection loss: the manager marks a node's in-flight
+// workloads FAILED as soon as it goes offline (failWorkloadsFor), so
+// leaving the agent to keep running them afterward would leave the two
+// sides permanently disagreeing about whether they're still going.
 func (e *Executor) CancelCurrent() {
 	e.mu.Lock()
-	rw := e.current
-	if rw != nil {
+	var all []*runningWorkload
+	for _, rw := range e.running {
 		rw.canceled = true
+		all = append(all, rw)
 	}
 	e.mu.Unlock()
-	if rw != nil {
+	for _, rw := range all {
 		rw.cancel()
 	}
 }
@@ -331,9 +351,9 @@ func (e *Executor) CancelCurrent() {
 func (e *Executor) clear(id domain.WorkloadID) (canceled bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.current != nil && e.current.id == id {
-		canceled = e.current.canceled
-		e.current = nil
+	if rw := e.running[id]; rw != nil {
+		canceled = rw.canceled
+		delete(e.running, id)
 	}
 	return canceled
 }

@@ -141,6 +141,7 @@ func (s *Server) RevokeNode(ctx context.Context, id domain.NodeID) (domain.Revok
 	}
 	s.failPendingCommandsFor(id, revokedReason)
 	for _, wrec := range s.Workloads.CancelPinnedTo(id, revokedReason) {
+		s.forgetRequeues(wrec.Workload.ID)
 		s.persistWorkloadRecord(wrec)
 		log.Printf("workload.canceled: %s (%s)", wrec.Workload.ID, revokedReason)
 		s.publish(domain.EventWorkloadCanceled, id, map[string]any{"workloadId": string(wrec.Workload.ID), "reason": revokedReason})
