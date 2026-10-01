@@ -49,6 +49,10 @@ type Config struct {
 	RelayPublicURL      string
 	EnrollmentTTL       time.Duration
 	EnrollmentPublisher EnrollmentPublisher
+	// OperatorToken is the operator API credential (operatorauth.go).
+	// Empty disables operator authentication — only for tests and
+	// embedding; cmd/manager always loads or creates one.
+	OperatorToken string
 }
 
 // PersistentStore is the subset of persistent storage the manager needs:
@@ -132,6 +136,9 @@ func NewServer(transport domain.Transport, store PersistentStore, cfg Config) *S
 		revocations: newRevocationList(),
 	}
 
+	if cfg.OperatorToken == "" {
+		log.Println("manager: operator API authentication disabled (no operator token configured)")
+	}
 	s.agents = &agentCatalog{}
 	if len(cfg.AgentBinaries) == 0 {
 		log.Println("manager: self-update and binary onboarding disabled: -agent-binary not set")
@@ -683,6 +690,17 @@ func (s *Server) handleWorkloadStatus(nodeID domain.NodeID, env *protocol.Envelo
 	}
 	if current.Workload.Target != nodeID {
 		log.Printf("manager: ignoring workload status from %s claiming to report on a workload assigned to %s (may be a stale report from a superseded restart attempt, not necessarily a forgery)", nodeID, current.Workload.Target)
+		return
+	}
+
+	// An agent may only report the states an execution actually passes
+	// through. Anything else is a buggy or hostile agent; refusing it keeps
+	// arbitrary strings out of persisted state and out of the dashboard,
+	// which holds the operator's credential.
+	switch payload.Status.State {
+	case domain.WorkloadRunning, domain.WorkloadCompleted, domain.WorkloadFailed, domain.WorkloadCanceled:
+	default:
+		log.Printf("manager: ignoring workload status from %s with invalid state %q", nodeID, payload.Status.State)
 		return
 	}
 

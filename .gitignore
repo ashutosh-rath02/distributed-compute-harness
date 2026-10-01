@@ -6,3 +6,5 @@
 *.db
 *.log
 harness-manager-tls/
+# operator API credential the manager creates in its working directory
+harness-operator-token

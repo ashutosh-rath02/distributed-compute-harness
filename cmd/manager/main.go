@@ -34,6 +34,7 @@ func main() {
 	apiAddr := flag.String("api-addr", "127.0.0.1:7421", "address to serve the HTTP observability/control API on (loopback by default: POST /nodes/{id}/commands has no auth of its own, so widening this exposes unauthenticated command dispatch to the network)")
 	dbPath := flag.String("db", "harness-manager.db", "path to the persistent store file")
 	tlsDir := flag.String("tls-dir", "harness-manager-tls", "directory holding the manager's persistent TLS certificate")
+	operatorTokenFile := flag.String("operator-token-file", "harness-operator-token", "file holding the operator API token, created (owner-only) on first run. Every API call needs it: harnessctl reads this file, and the dashboard signs in through the login link logged at startup. Delete it and restart to revoke every client")
 	pairingToken := flag.String("pairing-token", "", "shared secret agents must present to register (required)")
 	heartbeatTimeout := flag.Duration("heartbeat-timeout", 15*time.Second, "how long without a heartbeat before a node is marked offline")
 	reconcileInterval := flag.Duration("reconcile-interval", 5*time.Second, "how often to check for workloads that need restarting (RestartPolicy on-failure/always)")
@@ -83,6 +84,11 @@ func main() {
 	// for would fail much later, at the first invitation or update.
 	if _, err := manager.BuildAgentCatalog(agentBinaries); err != nil {
 		log.Fatalf("manager: -agent-binary: %v", err)
+	}
+
+	operatorToken, err := manager.LoadOrCreateOperatorToken(*operatorTokenFile)
+	if err != nil {
+		log.Fatalf("manager: %v", err)
 	}
 
 	store, err := persistent.Open(*dbPath)
@@ -140,6 +146,7 @@ func main() {
 		RelayToken:          *relayToken,
 		RelayPublicURL:      *relayPublicURL,
 		EnrollmentPublisher: enrollmentPublisher,
+		OperatorToken:       operatorToken,
 	})
 	// Registered before Run (which calls transport.Listen) — puts the
 	// download on the exact address/port agents already dial, no new port
@@ -186,6 +193,7 @@ func main() {
 	}()
 
 	log.Printf("harness manager listening on %s (API on %s)", *addr, *apiAddr)
+	log.Printf("manager: dashboard sign-in link (keep it private, it grants full control): %s", manager.LoginURL(*apiAddr, operatorToken))
 	if err := srv.Run(ctx); err != nil && ctx.Err() == nil {
 		log.Fatalf("manager: %v", err)
 	}

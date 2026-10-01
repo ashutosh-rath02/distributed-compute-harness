@@ -211,7 +211,7 @@ The user asked for *all* remaining work, sequenced for the best order. Each item
 
 **Phase 1 — Secure, onboard-everything foundation**
 1. ✅ **Multi-platform agent catalog** — done (see §7, "Agent catalog"). Was: the manager serves one agent binary at a time, so a phone manager can onboard only one platform without a restart, and self-update can't reach a mixed fleet. Serve a catalog (windows/amd64, linux/arm64 for Android, linux/amd64, darwin/arm64, ...) and pick per invitation, join script, and self-update. Goes first because every later increment that changes agent behavior must be rolled out to *every* platform's agents through self-update.
-2. **Operator authentication.** `guardOperatorAPI` stops browsers, but on Android loopback is shared across apps: any installed app with network permission can call `127.0.0.1:7421` (`POST /workloads` runs code on the fleet; `GET /join-info` reveals the permanent tokens). Non-browser clients pass the guard by design. Sketch: a random operator token in the manager state dir; `harnessctl` reads it from the file; the dashboard gets it via a one-time login URL (printed by the launcher) exchanged for an HttpOnly, SameSite=Strict cookie. Must land before anything makes the API more powerful.
+2. ✅ **Operator authentication** — done (see §11, operator API bullet). Was: `guardOperatorAPI` stops browsers, but on Android loopback is shared across apps: any installed app with network permission can call `127.0.0.1:7421` (`POST /workloads` runs code on the fleet; `GET /join-info` reveals the permanent tokens). Non-browser clients pass the guard by design. Sketch: a random operator token in the manager state dir; `harnessctl` reads it from the file; the dashboard gets it via a one-time login URL (printed by the launcher) exchanged for an HttpOnly, SameSite=Strict cookie. Must land before anything makes the API more powerful.
 3. **Fleet hygiene.** Operator rename/labels, duplicate-physical-host detection (two identities on one machine double-count capacity), and an admission/revocation audit log. Before reservation, so capacity numbers mean what they say.
 
 **Phase 2 — Real distributed compute**
@@ -241,7 +241,12 @@ The user asked for *all* remaining work, sequenced for the best order. Each item
 - **Relay connects wait briefly for a listener.** The manager's pool slots expire together at the relay's idle timeout and re-dial in lockstep, so the relay holds an unmatched `connect` for `connectGrace` (500ms) instead of failing instantly; a connect for a session with no manager still fails fast.
 - **Downloaded self-update binaries must be created with `0o755`**, not `os.Create`'s default `0o644` — invisible on Windows (no POSIX exec bit concept) but breaks every Linux/Termux self-update relaunch with "permission denied." Already fixed in `internal/agent/selfupdate.go`'s `downloadFile`.
 - **This dev machine has no cgo/gcc**, so `go test -race` fails with "requires cgo." Use plain `go test -count=2` (or higher) for flake-hunting instead of relying on the race detector here.
-- **The operator-facing HTTP API (`127.0.0.1:7421` default) is intentionally loopback-only.** `POST /nodes/{id}/commands` and `POST /workloads` have no authentication of their own — the trust model is "same-machine access is already fully privileged." Widening `-api-addr` to the LAN would expose unauthenticated arbitrary code execution on every registered node. If LAN-wide dashboard access is ever wanted, it needs a real auth layer first — this has been explicitly scoped out of every increment so far, not an oversight. **Loopback does not keep out a browser on the same machine**, and the manager's phone also browses the web: until `internal/manager/apiguard.go`, any visited page could fire a no-preflight `text/plain` POST at `/workloads` (verified with real headless Chrome: a cross-origin page ran a command on a registered node) or, via DNS rebinding, read `/join-info`'s tokens. Every operator route is now wrapped in `guardOperatorAPI` — Go's `http.CrossOriginProtection` for non-safe methods plus a Host allow-list (IP literals and `localhost` only). Keep new operator routes on `NewHTTPHandler`'s mux so they inherit it, and never perform state changes on GET.
+- **The operator API (`127.0.0.1:7421` default) is loopback-only *and* authenticated** — three independent layers, all on `NewHTTPHandler`'s mux, so new operator routes must be registered there and must never change state on GET:
+  1. **Host allow-list + `http.CrossOriginProtection`** (`apiguard.go`): stops a browser on the same machine being used as a proxy (CSRF; DNS rebinding). Before this, any visited page could run commands on the fleet — reproduced in headless Chrome.
+  2. **Operator token** (`operatorauth.go`): every route except `GET /` (the static dashboard shell), `POST /login`, and the token-scoped `GET /enrollments/{token}/qr` needs `Authorization: Bearer` with either the raw token (from `-operator-token-file`, default `harness-operator-token`, 0600, created on first run) or the dashboard session `HMAC(token, "harness-dashboard-session-v1")`. This closes the hole the guard deliberately leaves open: on Android, loopback is shared by *every installed app*, which before this could submit workloads, revoke nodes, or read `/join-info`'s tokens (mutation-tested: with auth off, an uncredentialed client did all three).
+  3. **No cookies, ever.** Cookies aren't isolated by port (RFC 6265 §8.5; SameSite ignores port), so a cookie for `:7421` would also be sent to an app listening on any other `127.0.0.1` port — verified in real Chrome with a canary cookie. The dashboard keeps its session in `localStorage` (origin-scoped, port included) and sends it only as a header from its own `api()` wrapper; `/events` is read with a fetch-streaming SSE reader because `EventSource` can't send headers. Consequences to preserve: the dashboard must never load external scripts, and must render every agent-supplied value escaped (`escapeHtml`/`textContent`; class names via the whitelisting `stateClass`) — enrolled agents control node names, workload output, and reported states, and script injection there would steal the operator's credential from `localStorage` (the manager also rejects workload states an agent can't legitimately report); "Sign out" only clears that browser's copy; revoking every client means deleting the token file and restarting.
+
+  Sign-in: the manager logs `http://127.0.0.1:7421/#login=<token>` at startup (the fragment never reaches a server; the dashboard trades it for a session and scrubs it from the URL/history). The Termux installer opens it with `termux-open-url`. `harnessctl` reads the same token file from its working directory (`-token-file`) or `HARNESS_OPERATOR_TOKEN`; `harnessctl login-url` prints the link. Widening `-api-addr` beyond loopback is still unsupported: the browser guard's Host check and the plain-HTTP transport both assume a local listener.
 - **Placement (`selectNode`) always breaks ties by NodeID, not randomly** — deterministic, but can repeatedly target the same node for back-to-back submissions faster than heartbeats refresh its metrics (see §7's placement section). Understood, not yet addressed.
 
 ---
@@ -282,13 +287,16 @@ go build -o bin\harnessctl.exe .\cmd\harnessctl
 .\bin\agent.exe -pairing-token <secret> -manager-fingerprint <fingerprint> `
     -relay-addr <relay-addr> -relay-token <relay-secret>
 
-# operator CLI (defaults to the manager's loopback API at 127.0.0.1:7421)
+# operator CLI (defaults to the manager's loopback API at 127.0.0.1:7421). It needs the
+# manager's operator token: run it from the manager's working directory (where
+# harness-operator-token was created), or pass -token-file / set HARNESS_OPERATOR_TOKEN
 .\bin\harnessctl.exe nodes
 .\bin\harnessctl.exe run <node-id> <command...>
 .\bin\harnessctl.exe join <manager-lan-addr> [android]   # generates a onboarding script
 
-# local web dashboard (loopback-only)
-# open http://127.0.0.1:7421/ in a browser
+# local web dashboard (loopback-only): open the sign-in link the manager logs at startup
+# (http://127.0.0.1:7421/#login=...), or print it with:
+.\bin\harnessctl.exe login-url
 ```
 
 Full test suite: `go test ./... -count=2` from the repo root (add `-v` for verbose output; `-race` is **not** available on this dev machine, see §11).

@@ -65,6 +65,7 @@ func (s *Server) toNodeView(rec *NodeRecord) nodeView {
 //	GET  /join-script                the ready-to-paste onboarding script for ?addr=&platform=
 //	POST /enrollments                create a short-lived LAN or public-relay QR/link invitation
 //	GET  /enrollments/{token}/qr     render an invitation URL as a self-contained SVG QR code
+//	POST /login                      exchange the operator token for a dashboard session (operatorauth.go)
 //	GET  /                           a local web dashboard (node list + "add a device" form)
 //	POST /workloads                 submit a workload: {"target":"...optional...","command":"...","args":[...],"requirements":{...optional...}}
 //	GET  /workloads                 list all known workloads
@@ -105,7 +106,11 @@ func (s *Server) NewHTTPHandler() http.Handler {
 	mux.HandleFunc("GET /workloads", s.apiListWorkloads)
 	mux.HandleFunc("GET /workloads/{id}", s.apiGetWorkload)
 	mux.HandleFunc("POST /workloads/{id}/cancel", s.apiCancelWorkload)
-	return guardOperatorAPI(mux)
+	mux.HandleFunc("POST /login", s.apiLogin)
+	// Host check and CSRF protection first (apiguard.go), then operator
+	// authentication (operatorauth.go) — browser defenses and the
+	// credential check are independent layers.
+	return guardOperatorAPI(s.requireOperator(mux))
 }
 
 func (s *Server) apiListNodes(w http.ResponseWriter, r *http.Request) {

@@ -51,10 +51,12 @@ for agent in "${staged_agents[@]}"; do
   mv -f "$install_dir/bin/agents/$name.new" "$install_dir/bin/agents/$name"
 done
 
-if [[ ! -s "$install_dir/state/pairing-token" ]]; then
-  od -An -N32 -tx1 /dev/urandom | tr -d ' \n' > "$install_dir/state/pairing-token"
-  chmod 600 "$install_dir/state/pairing-token"
-fi
+for secret in pairing-token operator-token; do
+  if [[ ! -s "$install_dir/state/$secret" ]]; then
+    od -An -N32 -tx1 /dev/urandom | tr -d ' \n' > "$install_dir/state/$secret"
+    chmod 600 "$install_dir/state/$secret"
+  fi
+done
 
 if [[ -s "$install_dir/state/manager.pid" ]]; then
   old_pid="$(cat "$install_dir/state/manager.pid")"
@@ -87,6 +89,7 @@ exec "$install_dir/bin/manager" \
   -addr :7420 \
   -api-addr 127.0.0.1:7421 \
   -pairing-token "$pairing_token" \
+  -operator-token-file "$install_dir/state/operator-token" \
   "${agent_args[@]}" \
   -db "$install_dir/state/manager.db" \
   -tls-dir "$install_dir/state/tls"
@@ -112,6 +115,16 @@ if ! kill -0 "$manager_pid" 2>/dev/null; then
   exit 1
 fi
 
+# Sign the phone's browser in directly. The operator token rides in the
+# link's fragment (never sent to a server) and the dashboard scrubs it from
+# the address bar; opening it here avoids a copy-paste through the
+# clipboard, which keyboards and foreground apps can read.
+login_url="http://127.0.0.1:7421/#login=$(cat "$install_dir/state/operator-token")"
 echo "Home Harness manager started (PID $manager_pid) serving ${#staged_agents[@]} agent build(s)."
-echo "Open http://127.0.0.1:7421 in the phone browser."
+if termux-open-url "$login_url" 2>/dev/null; then
+  echo "Opened the dashboard sign-in link in the phone browser."
+else
+  echo "Open this private sign-in link in the phone browser: $login_url"
+fi
+echo "harnessctl on this phone: export HARNESS_OPERATOR_TOKEN=\$(cat $install_dir/state/operator-token)"
 echo "Log: $install_dir/state/manager.log"

@@ -23,6 +23,7 @@ import (
 
 func main() {
 	apiAddr := flag.String("api-addr", "http://127.0.0.1:7421", "manager API base URL")
+	tokenFile := flag.String("token-file", "harness-operator-token", "the manager's operator token file (its -operator-token-file); the "+operatorTokenEnv+" environment variable overrides it")
 	flag.Usage = usage
 	flag.Parse()
 
@@ -32,12 +33,14 @@ func main() {
 		os.Exit(2)
 	}
 
-	client := &apiClient{base: strings.TrimRight(*apiAddr, "/")}
+	client := newAPIClient(strings.TrimRight(*apiAddr, "/"), loadOperatorToken(*tokenFile))
 	var err error
 
 	switch args[0] {
 	case "nodes":
 		err = client.cmdNodes()
+	case "login-url":
+		err = client.cmdLoginURL()
 	case "node":
 		err = requireArgs(args, 2, "node <id>", func() error { return client.cmdNode(args[1]) })
 	case "resources":
@@ -110,6 +113,8 @@ Commands:
   info <id>             send GET_SYSTEM_INFO, print the result
   refresh <id>          send REQUEST_RESOURCE_REFRESH, print the result
   events                tail the harness event stream
+  login-url             print the dashboard sign-in link (it carries the
+                        operator token: keep it private)
   run [-min-mem SIZE] [-min-cores N] [-max-cpu PCT] [-restart POLICY] <id|-> <cmd> [args...]
                         submit a workload (id or "-" for auto-pick using v2's
                         resource-aware placement), print its ID. cmd/args are
@@ -292,8 +297,67 @@ func requireArgs(args []string, n int, usage string, fn func() error) error {
 }
 
 type apiClient struct {
-	base string
-	http http.Client
+	base  string
+	token string
+	http  http.Client
+}
+
+// operatorTokenEnv overrides -token-file, e.g. on the phone:
+// HARNESS_OPERATOR_TOKEN=$(cat ~/.home-harness/state/operator-token).
+const operatorTokenEnv = "HARNESS_OPERATOR_TOKEN"
+
+// loadOperatorToken returns the operator token from the environment or
+// the manager's token file — "" if neither is available, which still
+// works against a manager with authentication disabled and otherwise
+// fails with bearerTransport's explanation.
+func loadOperatorToken(path string) string {
+	if token := strings.TrimSpace(os.Getenv(operatorTokenEnv)); token != "" {
+		return token
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func newAPIClient(base, token string) *apiClient {
+	c := &apiClient{base: base, token: token}
+	c.http.Transport = &bearerTransport{token: token, base: http.DefaultTransport}
+	return c
+}
+
+// bearerTransport sends the operator token on every request (including
+// the long-lived /events stream) and turns a 401 into an actionable error
+// instead of each command's generic "manager returned 401".
+type bearerTransport struct {
+	token string
+	base  http.RoundTripper
+}
+
+func (t *bearerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.token != "" {
+		req = req.Clone(req.Context())
+		req.Header.Set("Authorization", "Bearer "+t.token)
+	}
+	resp, err := t.base.RoundTrip(req)
+	if err == nil && resp.StatusCode == http.StatusUnauthorized {
+		resp.Body.Close()
+		if t.token == "" {
+			return nil, fmt.Errorf("the manager requires its operator token: run harnessctl from the manager's directory, or pass -token-file or set %s", operatorTokenEnv)
+		}
+		return nil, fmt.Errorf("the manager rejected this operator token (was its token file replaced?); use the manager's current -operator-token-file")
+	}
+	return resp, err
+}
+
+// cmdLoginURL prints the dashboard sign-in link for this manager.
+func (c *apiClient) cmdLoginURL() error {
+	if c.token == "" {
+		return fmt.Errorf("no operator token found: run from the manager's directory, or pass -token-file or set %s", operatorTokenEnv)
+	}
+	fmt.Println(c.base + "/#login=" + c.token)
+	return nil
 }
 
 type nodeView struct {
