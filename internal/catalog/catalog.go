@@ -51,6 +51,13 @@ type Param struct {
 	Pattern   string `json:"pattern,omitempty"`
 	MaxLength int    `json:"maxLength,omitempty"`
 	AllowDash bool   `json:"allowDash,omitempty"`
+	// Multiline allows newlines and tabs (free text such as a prompt —
+	// never an argv element).
+	Multiline bool `json:"multiline,omitempty"`
+	// ChoicesAttr names the capability attribute that lists this
+	// parameter's valid values per node (e.g. "models"): placement only
+	// picks a node whose list holds the value.
+	ChoicesAttr string `json:"choicesAttr,omitempty"`
 }
 
 // Inputs bounds the files a task type takes.
@@ -82,6 +89,15 @@ type Type struct {
 	// together (an archive), so the manager can refuse up front what
 	// would exceed the upload budget.
 	OutputAtMostInputs bool `json:"outputAtMostInputs,omitempty"`
+	// MaxPerNode bounds how many of this type one node runs at once
+	// (0 = only its slots): one local model generation at a time.
+	MaxPerNode int `json:"maxPerNode,omitempty"`
+	// Streams: the agent reports output while the task runs, not only at
+	// the end (a model's answer, token by token).
+	Streams bool `json:"streams,omitempty"`
+	// DefaultMaxRuntimeSeconds is the per-attempt limit when policy sets
+	// none for this type.
+	DefaultMaxRuntimeSeconds int `json:"defaultMaxRuntimeSeconds,omitempty"`
 }
 
 func num(v float64) *float64 { return &v }
@@ -147,6 +163,83 @@ var builtins = []Type{
 		Outputs:     []string{"counts.json"},
 		Reduce:      true,
 	},
+	{
+		Name: "llm.generate", Version: "1", Title: "Ask a local AI model",
+		Description: "Run a prompt on a local model (Ollama) on whichever device has it, streaming the answer back. Text files given as input are included as context.",
+		Params: []Param{
+			{Name: "model", Type: String, Title: "Model", Required: true, Pattern: ModelPattern, MaxLength: 128, ChoicesAttr: AttrModels},
+			{Name: "prompt", Type: String, Title: "Prompt", Required: true, MaxLength: 16 << 10, Multiline: true, AllowDash: true},
+			{Name: "system", Type: String, Title: "System instructions (optional)", MaxLength: 4 << 10, Multiline: true, AllowDash: true},
+			{Name: "temperature", Type: Number, Title: "Temperature", Default: "0.7", Min: num(0), Max: num(2)},
+			{Name: "max_tokens", Type: Int, Title: "Max tokens", Default: "512", Min: num(1), Max: num(8192)},
+			{Name: "seed", Type: Int, Title: "Seed (0 = random)", Default: "0", Min: num(0), Max: num(2147483647)},
+		},
+		Inputs:  Inputs{Min: 0, Max: 16, Description: "text files to use as context (at most 32 KiB together)"},
+		Outputs: []string{"response.txt"},
+		// The model stays loaded in the runtime, so live free memory
+		// already reflects it: one generation per node is the real guard,
+		// the reservation only keeps room for the request itself.
+		Requirements:             domain.ResourceRequirements{MinMemoryBytes: 256 << 20},
+		MaxPerNode:               1,
+		Streams:                  true,
+		DefaultMaxRuntimeSeconds: 600,
+	},
+	{
+		Name: "llm.inventory", Version: "1", Title: "List local AI models",
+		Description: "List the models the device's local runtime (Ollama) has.",
+	},
+}
+
+// AttrModels is the capability attribute listing a node's local models
+// (comma-separated, normalized by NormalizeModel).
+const AttrModels = "models"
+
+// ModelPattern matches an Ollama model reference ("llama3.2",
+// "qwen2.5:7b-instruct-q4_K_M", "hf.co/user/repo:tag").
+const ModelPattern = `[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}`
+
+// NormalizeModel gives a model reference its canonical form: lowercase,
+// with the implicit ":latest" tag made explicit.
+func NormalizeModel(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return ""
+	}
+	if !strings.Contains(name[strings.LastIndex(name, "/")+1:], ":") {
+		name += ":latest"
+	}
+	return name
+}
+
+// Offers reports whether a node whose capability carries attrs can take
+// params for t: every parameter with ChoicesAttr must be in that list.
+// (False with the missing value as the reason.)
+func (t Type) Offers(attrs map[string]string, params map[string]string) (bool, string) {
+	for _, p := range t.Params {
+		if p.ChoicesAttr == "" {
+			continue
+		}
+		want := NormalizeModel(params[p.Name])
+		have := false
+		for _, v := range strings.Split(attrs[p.ChoicesAttr], ",") {
+			have = have || (v != "" && NormalizeModel(v) == want)
+		}
+		if !have {
+			return false, fmt.Sprintf("has no %s %q", p.Name, params[p.Name])
+		}
+	}
+	return true, ""
+}
+
+// HasChoices reports whether placement must match some parameter
+// against node attributes.
+func (t Type) HasChoices() bool {
+	for _, p := range t.Params {
+		if p.ChoicesAttr != "" {
+			return true
+		}
+	}
+	return false
 }
 
 var byName = func() map[domain.CapabilityName]Type {
@@ -283,6 +376,9 @@ func (p Param) check(v string) (string, error) {
 			return "", errors.New("may not start with '-'")
 		}
 		for _, r := range v {
+			if p.Multiline && (r == '\n' || r == '\r' || r == '\t') {
+				continue
+			}
 			if r < 0x20 || r == 0x7f {
 				return "", errors.New("contains a control character")
 			}

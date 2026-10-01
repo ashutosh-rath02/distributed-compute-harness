@@ -27,6 +27,7 @@ const (
 	EventWorkloadFailed    EventType = "workload.failed"
 	EventWorkloadCanceled  EventType = "workload.canceled"
 	EventWorkloadQueued    EventType = "workload.queued"
+	EventWorkloadProgress  EventType = "workload.progress"
 	EventJobSubmitted      EventType = "job.submitted"
 	EventJobFinished       EventType = "job.finished"
 )

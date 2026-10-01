@@ -46,6 +46,12 @@ type Executor struct {
 	// (cmd/agent's -disable-capabilities): never advertised, and refused
 	// if assigned anyway.
 	disabled map[domain.CapabilityName]bool
+	// handlers implement the catalog types (internal/tasks); per agent,
+	// since some depend on the device's own configuration (Ollama).
+	handlers *tasks.Registry
+	// progressEvery is how often a streaming task reports its output so
+	// far.
+	progressEvery time.Duration
 }
 
 type runningWorkload struct {
@@ -63,7 +69,8 @@ func NewExecutorWithSlots(slots int) *Executor {
 	if slots < 1 {
 		slots = 1
 	}
-	return &Executor{slots: slots, running: make(map[domain.WorkloadID]*runningWorkload), canceledBeforeStart: make(map[domain.WorkloadID]bool)}
+	return &Executor{slots: slots, running: make(map[domain.WorkloadID]*runningWorkload), canceledBeforeStart: make(map[domain.WorkloadID]bool),
+		handlers: tasks.Builtins(), progressEvery: time.Second}
 }
 
 // Slots reports how many workloads this executor runs at once.
@@ -87,6 +94,51 @@ func (e *Executor) Start(ctx context.Context, wl domain.Workload, onStatus func(
 // files, moved with xfer (files.go). For a workload without files it is
 // exactly Start.
 func (e *Executor) StartWithFiles(ctx context.Context, wl domain.Workload, xfer ArtifactTransfer, onStatus func(domain.WorkloadStatus)) error {
+	capability := wl.EffectiveCapability()
+	refuse := func(msg string) error {
+		onStatus(domain.WorkloadStatus{ID: wl.ID, Target: wl.Target, State: domain.WorkloadFailed, Error: msg})
+		return nil
+	}
+	// Everything that needs no executor state is checked first, outside
+	// the lock: a handler's availability probe may be an HTTP call.
+	if e.disabled[capability] {
+		return refuse(fmt.Sprintf("capability %q is disabled on this device", capability))
+	}
+	var handler tasks.Handler
+	var streams bool
+	if t, ok := catalog.Lookup(capability); ok {
+		h, ok := e.handlers.Lookup(capability)
+		if !ok {
+			return refuse(fmt.Sprintf("this agent has no handler for %s", capability))
+		}
+		if err := h.Available(ctx); err != nil {
+			return refuse(fmt.Sprintf("%s is unavailable on this device: %v", capability, err))
+		}
+		// The agent links the same catalog: re-validate what the manager
+		// compiled, so a version mismatch is refused rather than misread.
+		params, outputs, err := t.Compile(wl.Params, wl.Inputs)
+		if err != nil {
+			return refuse(fmt.Sprintf("assignment doesn't match this agent's %s v%s: %v", capability, t.Version, err))
+		}
+		if !sameParams(params, wl.Params) || !slices.Equal(outputs, wl.Outputs) {
+			return refuse(fmt.Sprintf("assignment doesn't match this agent's %s v%s (update the agent or the manager)", capability, t.Version))
+		}
+		handler, streams = h, t.Streams
+	} else if capability != domain.CapabilitySystemExecute && capability != domain.CapabilityFilesystemRead {
+		// Defense in depth, expected to be unreachable in the normal path:
+		// the manager already refuses to dispatch a capability a node
+		// hasn't declared (internal/manager/placement.go) — this only
+		// fires for a stale manifest or a bypassed check. No StartedAt
+		// set, mirroring the insecure-mode-refusal literal in
+		// workloads.go: a placement-time rejection, not a real failure, so
+		// v3's reconciler defers it rather than counting it against the
+		// restart backoff curve.
+		return refuse(fmt.Sprintf("agent does not implement capability %q", capability))
+	}
+	if wl.HasFiles() && capability == domain.CapabilityFilesystemRead {
+		return refuse(fmt.Sprintf("capability %q can't take input or output files", capability))
+	}
+
 	e.mu.Lock()
 	if e.canceledBeforeStart[wl.ID] {
 		delete(e.canceledBeforeStart, wl.ID)
@@ -105,55 +157,6 @@ func (e *Executor) StartWithFiles(ctx context.Context, wl domain.Workload, xfer 
 		return fmt.Errorf("%w (%d of %d in use)", ErrExecutorFull, e.slots, e.slots)
 	}
 
-	capability := wl.EffectiveCapability()
-	refuse := func(msg string) error {
-		e.mu.Unlock()
-		onStatus(domain.WorkloadStatus{ID: wl.ID, Target: wl.Target, State: domain.WorkloadFailed, Error: msg})
-		return nil
-	}
-	if e.disabled[capability] {
-		return refuse(fmt.Sprintf("capability %q is disabled on this device", capability))
-	}
-	var handler tasks.Handler
-	if t, ok := catalog.Lookup(capability); ok {
-		h, ok := tasks.Lookup(capability)
-		if !ok {
-			return refuse(fmt.Sprintf("this agent has no handler for %s", capability))
-		}
-		if err := h.Available(ctx); err != nil {
-			return refuse(fmt.Sprintf("%s is unavailable on this device: %v", capability, err))
-		}
-		// The agent links the same catalog: re-validate what the manager
-		// compiled, so a version mismatch is refused rather than misread.
-		params, outputs, err := t.Compile(wl.Params, wl.Inputs)
-		if err != nil {
-			return refuse(fmt.Sprintf("assignment doesn't match this agent's %s v%s: %v", capability, t.Version, err))
-		}
-		if !sameParams(params, wl.Params) || !slices.Equal(outputs, wl.Outputs) {
-			return refuse(fmt.Sprintf("assignment doesn't match this agent's %s v%s (update the agent or the manager)", capability, t.Version))
-		}
-		handler = h
-	} else if capability != domain.CapabilitySystemExecute && capability != domain.CapabilityFilesystemRead {
-		e.mu.Unlock()
-		// Defense in depth, expected to be unreachable in the normal path:
-		// the manager already refuses to dispatch a capability a node
-		// hasn't declared (internal/manager/placement.go) — this only
-		// fires for a stale manifest or a bypassed check. No StartedAt
-		// set, mirroring the insecure-mode-refusal literal in
-		// workloads.go: a placement-time rejection, not a real failure, so
-		// v3's reconciler defers it rather than counting it against the
-		// restart backoff curve.
-		onStatus(domain.WorkloadStatus{
-			ID: wl.ID, Target: wl.Target, State: domain.WorkloadFailed,
-			Error: fmt.Sprintf("agent does not implement capability %q", capability),
-		})
-		return nil
-	}
-
-	if wl.HasFiles() && capability == domain.CapabilityFilesystemRead {
-		return refuse(fmt.Sprintf("capability %q can't take input or output files", capability))
-	}
-
 	var runCtx context.Context
 	var cancel context.CancelFunc
 	if wl.TimeoutSeconds > 0 {
@@ -166,9 +169,9 @@ func (e *Executor) StartWithFiles(ctx context.Context, wl domain.Workload, xfer 
 
 	switch {
 	case handler != nil:
-		go e.runTask(runCtx, cancel, wl, xfer, onStatus, handlerRunner(handler, wl))
+		go e.runTask(runCtx, cancel, wl, xfer, onStatus, handlerRunner(handler, wl), streams)
 	case wl.HasFiles():
-		go e.runTask(runCtx, cancel, wl, xfer, onStatus, execRunner(wl))
+		go e.runTask(runCtx, cancel, wl, xfer, onStatus, execRunner(wl), false)
 	case capability == domain.CapabilitySystemExecute:
 		e.startExecute(runCtx, cancel, wl, onStatus)
 	case capability == domain.CapabilityFilesystemRead:
@@ -179,6 +182,12 @@ func (e *Executor) StartWithFiles(ctx context.Context, wl domain.Workload, xfer 
 
 // SetWorkRoot sets where working directories for file workloads go.
 func (e *Executor) SetWorkRoot(dir string) { e.workRoot = dir }
+
+// SetHandlers sets the catalog handlers this executor runs.
+func (e *Executor) SetHandlers(r *tasks.Registry) { e.handlers = r }
+
+// Handlers returns them (the agent advertises what they offer).
+func (e *Executor) Handlers() *tasks.Registry { return e.handlers }
 
 // SetDisabled turns capabilities off on this device.
 func (e *Executor) SetDisabled(names []domain.CapabilityName) {
@@ -455,12 +464,15 @@ func (e *Executor) clear(id domain.WorkloadID) (canceled bool) {
 // always reports success to the writer (a subprocess's stdout/stderr pipe)
 // so a chatty process is never blocked or errored by the cap.
 type cappedBuffer struct {
+	mu        sync.Mutex
 	buf       bytes.Buffer
 	limit     int
 	truncated bool
 }
 
 func (c *cappedBuffer) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	remaining := c.limit - c.buf.Len()
 	if remaining <= 0 {
 		c.truncated = true
@@ -475,4 +487,8 @@ func (c *cappedBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (c *cappedBuffer) String() string { return c.buf.String() }
+func (c *cappedBuffer) String() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.String()
+}

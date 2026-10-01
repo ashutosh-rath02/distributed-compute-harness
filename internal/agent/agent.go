@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"reflect"
 	"runtime"
 	"sync"
 	"time"
@@ -39,6 +40,15 @@ type Config struct {
 	Discoverer   domain.Discoverer
 	PairingToken string
 	IdentityDir  string
+	// OllamaURL is where this device's Ollama listens, for the local-model
+	// task types (cmd/agent's -ollama-url; empty = $OLLAMA_HOST or the
+	// default local one). The device owner's setting: the manager can't
+	// point it anywhere.
+	OllamaURL string
+	// CapabilityProbeInterval is how often the agent re-checks what it can
+	// run (Ollama started later, a model pulled) and tells the manager
+	// when that changed. Default 30s; negative disables.
+	CapabilityProbeInterval time.Duration
 	// DisabledCapabilities are capabilities the device owner turned off
 	// (cmd/agent's -disable-capabilities): never advertised, refused if
 	// assigned. E.g. system.execute,filesystem.read leaves only the
@@ -130,6 +140,10 @@ type Agent struct {
 	// construction from more than one goroutine.
 	addrMu             sync.Mutex
 	currentManagerAddr string
+
+	// advertised is what the manager was last told this agent can run.
+	advMu      sync.Mutex
+	advertised []domain.Capability
 }
 
 // New loads (or generates, on first run) the agent's identity and returns
@@ -177,6 +191,10 @@ func New(transport domain.Transport, cfg Config) (*Agent, error) {
 	a := &Agent{cfg: cfg, transport: transport, identity: id, startedAt: time.Now(), executor: NewExecutorWithSlots(cfg.WorkloadSlots), binaryHash: binaryHash}
 	a.executor.SetWorkRoot(cfg.WorkDir)
 	a.executor.SetDisabled(cfg.DisabledCapabilities)
+	a.executor.SetHandlers(tasks.NewRegistry(tasks.Options{OllamaURL: cfg.OllamaURL}))
+	if a.cfg.CapabilityProbeInterval == 0 {
+		a.cfg.CapabilityProbeInterval = 30 * time.Second
+	}
 	switch cfg.HostFingerprint {
 	case "":
 		a.hostFingerprint, a.hostFingerprintSource = sysinfo.HostFingerprint(context.Background())
@@ -273,6 +291,7 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 	errCh := make(chan error, 2)
 	go a.heartbeatLoop(ctx, conn, errCh)
 	go a.receiveLoop(ctx, conn, errCh)
+	go a.capabilityLoop(ctx, conn)
 
 	select {
 	case err := <-errCh:
@@ -294,6 +313,7 @@ func (a *Agent) resolveManagerAddr(ctx context.Context) (string, error) {
 
 func (a *Agent) register(ctx context.Context, conn domain.Conn) error {
 	manifest := a.buildManifest(ctx)
+	a.setAdvertised(manifest.Capabilities)
 	signature := a.identity.Sign(protocol.RegisterSignedData(a.cfg.PairingToken, a.identity.NodeID))
 	if err := a.send(ctx, conn, protocol.MsgRegister, domain.ManagerNodeID,
 		protocol.RegisterPayload{Manifest: manifest, PairingToken: a.cfg.PairingToken, Signature: signature}); err != nil {
@@ -460,10 +480,51 @@ func defaultSlots() int {
 func (a *Agent) capabilities(ctx context.Context) ([]domain.Resource, []domain.Capability, error) {
 	resources, raw, err := sysinfo.Manifest(ctx)
 	var out []domain.Capability
-	for _, c := range append(raw, tasks.Capabilities(ctx)...) {
+	for _, c := range append(raw, a.executor.Handlers().Capabilities(ctx)...) {
 		if !a.executor.Disabled(c.Name) {
 			out = append(out, c)
 		}
 	}
 	return resources, out, err
+}
+
+func (a *Agent) setAdvertised(caps []domain.Capability) {
+	a.advMu.Lock()
+	a.advertised = caps
+	a.advMu.Unlock()
+}
+
+// capabilityLoop re-checks what this agent can run and sends
+// CAPABILITY_UPDATE when it changed (Ollama started after the agent, a
+// model was pulled or removed) — so the manager places by what is true
+// now, not by what was true at registration.
+func (a *Agent) capabilityLoop(ctx context.Context, conn domain.Conn) {
+	if a.cfg.CapabilityProbeInterval < 0 {
+		return
+	}
+	tick := time.NewTicker(a.cfg.CapabilityProbeInterval)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+		resources, caps, err := a.capabilities(ctx)
+		if err != nil {
+			continue
+		}
+		a.advMu.Lock()
+		same := reflect.DeepEqual(caps, a.advertised)
+		a.advMu.Unlock()
+		if same {
+			continue
+		}
+		if err := a.send(ctx, conn, protocol.MsgCapabilityUpdate, domain.ManagerNodeID, protocol.CapabilityUpdatePayload{Resources: resources, Capabilities: caps}); err != nil {
+			log.Printf("agent %s: send CAPABILITY_UPDATE: %v", a.identity.NodeID, err)
+			continue
+		}
+		log.Printf("agent %s: capabilities changed; told the manager", a.identity.NodeID)
+		a.setAdvertised(caps)
+	}
 }

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"home-harness/internal/artifacts"
+	"home-harness/internal/catalog"
 	"home-harness/internal/domain"
 	"home-harness/internal/eventbus"
 	"home-harness/internal/identity"
@@ -411,10 +412,11 @@ type placement struct {
 	req        domain.ResourceRequirements
 	features   []string        // agent features required (requiredFeatures)
 	avoid      []domain.NodeID // prefer other nodes (a job task's failed attempts)
+	params     map[string]string
 }
 
 func placementFor(w domain.Workload) placement {
-	p := placement{capability: w.EffectiveCapability(), req: w.Requirements, features: requiredFeatures(w), avoid: w.AvoidNodes}
+	p := placement{capability: w.EffectiveCapability(), req: w.Requirements, features: requiredFeatures(w), avoid: w.AvoidNodes, params: w.Params}
 	if w.Pinned {
 		p.target = w.Target
 	}
@@ -424,7 +426,26 @@ func placementFor(w domain.Workload) placement {
 // unconstrained reports whether any node with the capability and a free
 // slot would do — so if one such workload finds no room, none will.
 func (p placement) unconstrained() bool {
+	if t, ok := catalog.Lookup(p.capability); ok && (t.HasChoices() || t.MaxPerNode > 0) {
+		return false // a node-specific miss says nothing about other work
+	}
 	return p.target == "" && p.req.IsEmpty() && len(p.features) == 0 && len(p.avoid) == 0
+}
+
+// offers reports whether rec matches p's catalog parameters (e.g. has
+// the requested model).
+func offers(rec *NodeRecord, p placement) (bool, string) {
+	t, ok := catalog.Lookup(p.capability)
+	if !ok || !t.HasChoices() {
+		return true, ""
+	}
+	var attrs map[string]string
+	for _, c := range rec.Capabilities {
+		if c.Name == p.capability {
+			attrs = c.Attributes
+		}
+	}
+	return t.Offers(attrs, p.params)
 }
 
 // resolve answers p. usage, if non-nil, is the reservations to place
@@ -448,10 +469,17 @@ func (s *Server) resolve(p placement, usage map[domain.NodeID]nodeUsage) (*NodeR
 		if sel := s.policyFor(p.capability).NodeLabels; !s.matchesLabels(p.target, sel) {
 			return nil, "", fmt.Errorf("%w (%s: lacks the labels policy requires for %s (%v))", ErrNoEligibleNode, p.target, p.capability, sel)
 		}
+		if ok, reason := offers(rec, p); !ok {
+			return nil, "", fmt.Errorf("%w (%s: %s)", ErrNoEligibleNode, p.target, reason)
+		}
 		if ok, reason := nodeFits(rec, p.capability, p.req); !ok {
 			return nil, "", fmt.Errorf("%w (%s: %s)", errNoRoom, p.target, reason)
 		}
-		if ok, reason := hasRoom(rec, usageOf(p.target), p.req); !ok {
+		u := usageOf(p.target)
+		if ok, reason := hasRoom(rec, u, p.req); !ok {
+			return nil, "", fmt.Errorf("%w (%s: %s)", errNoRoom, p.target, reason)
+		}
+		if ok, reason := perNodeRoom(u, p.capability); !ok {
 			return nil, "", fmt.Errorf("%w (%s: %s)", errNoRoom, p.target, reason)
 		}
 		return rec, p.target, nil
@@ -482,6 +510,10 @@ func (s *Server) resolve(p placement, usage map[domain.NodeID]nodeUsage) (*NodeR
 			never = append(never, fmt.Sprintf("%s: lacks the labels policy requires for %s (%v)", id, p.capability, selector))
 			continue
 		}
+		if ok, reason := offers(rec, p); !ok {
+			never = append(never, fmt.Sprintf("%s: %s", id, reason))
+			continue
+		}
 		eligible = append(eligible, rec)
 		if !slices.Contains(p.avoid, id) {
 			preferred = append(preferred, rec)
@@ -504,6 +536,10 @@ func (s *Server) resolve(p placement, usage map[domain.NodeID]nodeUsage) (*NodeR
 		}
 		u := usageOf(id)
 		if ok, reason := hasRoom(rec, u, p.req); !ok {
+			notNow = append(notNow, fmt.Sprintf("%s: %s", id, reason))
+			continue
+		}
+		if ok, reason := perNodeRoom(u, p.capability); !ok {
 			notNow = append(notNow, fmt.Sprintf("%s: %s", id, reason))
 			continue
 		}
@@ -974,6 +1010,24 @@ func (s *Server) handleWorkloadStatus(nodeID domain.NodeID, env *protocol.Envelo
 	case domain.WorkloadRunning, domain.WorkloadCompleted, domain.WorkloadFailed, domain.WorkloadCanceled:
 	default:
 		log.Printf("manager: ignoring workload status from %s with invalid state %q", nodeID, payload.Status.State)
+		return
+	}
+
+	// A finished workload stays finished: a report that it is running
+	// (a late progress update, say) must not bring it back — it would
+	// hold its slot forever.
+	switch current.Status.State {
+	case domain.WorkloadCompleted, domain.WorkloadFailed, domain.WorkloadCanceled, domain.WorkloadUnknown:
+		if payload.Status.State == domain.WorkloadRunning {
+			return
+		}
+	}
+	// RUNNING again while RUNNING is a streaming task's output so far:
+	// shown live, not written to disk every second.
+	if current.Status.State == domain.WorkloadRunning && payload.Status.State == domain.WorkloadRunning {
+		payload.Status.Outputs = nil
+		s.Workloads.UpdateStatus(payload.Status)
+		s.publish(domain.EventWorkloadProgress, nodeID, map[string]any{"workloadId": string(payload.Status.ID)})
 		return
 	}
 

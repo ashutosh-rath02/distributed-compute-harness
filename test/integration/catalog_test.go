@@ -357,8 +357,12 @@ func TestTypedSubmissionsAreValidated(t *testing.T) {
 		t.Fatalf("catalog lists %d types", len(cat.Types))
 	}
 	for _, ty := range cat.Types {
-		if ty.Nodes != 1 {
-			t.Errorf("%s offered by %d nodes, want 1", ty.Name, ty.Nodes)
+		want := 1
+		if strings.HasPrefix(ty.Name, "llm.") {
+			want = 0 // needs a local model runtime; the test agent has none
+		}
+		if ty.Nodes != want {
+			t.Errorf("%s offered by %d nodes, want %d", ty.Name, ty.Nodes, want)
 		}
 	}
 }

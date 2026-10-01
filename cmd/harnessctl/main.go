@@ -57,6 +57,10 @@ func main() {
 		err = cmdMap(client, args[1:])
 	case "tasks":
 		err = client.cmdTasks(args[1:])
+	case "models":
+		err = client.cmdModels()
+	case "ask":
+		err = cmdAsk(client, args[1:])
 	case "do":
 		err = cmdDo(client, args[1:])
 	case "policy":
@@ -192,6 +196,11 @@ Commands:
                         run one typed task, e.g.
                           harnessctl do -in photo.jpg image.resize width=800
                           harnessctl do cpu.burn seconds=30
+  models                list the local AI models (Ollama) the fleet's devices
+                        have, and where
+  ask [-model M] [-in FILE ...] [-target ID] "question"
+                        ask a local model on whichever device has it; the
+                        answer streams back as it is written (Ctrl-C cancels)
   policy                show what the fleet may run
   policy type <name> on|off | labels key=value,...|- | max-runtime 10m|0
                         enable/disable a type (raw system.execute and

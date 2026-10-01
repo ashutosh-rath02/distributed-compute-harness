@@ -35,6 +35,7 @@ func main() {
 	insecure := flag.Bool("insecure", false, "disable TLS: connect over plaintext ws:// with no manager authentication (dev/local use only; must match the manager's -insecure)")
 	relayAddr := flag.String("relay-addr", "", "relay server (cmd/relay) address to connect through, for a manager that isn't on this device's LAN; if set, -manager-addr/discovery are not used")
 	slots := flag.Int("slots", 0, "how many workloads this agent runs at once (0 = half the CPU count, at most 16)")
+	ollamaURL := flag.String("ollama-url", "", "where this device's Ollama listens, for the local-model task types (default $OLLAMA_HOST, else http://127.0.0.1:11434); they're offered only while it answers")
 	disable := flag.String("disable-capabilities", "", "comma-separated capabilities this device won't offer, e.g. system.execute,filesystem.read to allow only the sandboxed built-in task types")
 	workDir := flag.String("work-dir", "", "where workloads that take input/output files get their working directories (default: the user cache dir); never inside -identity-dir")
 	relayToken := flag.String("relay-token", "", "the manager's relay session token (required if -relay-addr is set)")
@@ -88,6 +89,7 @@ func main() {
 		WorkloadSlots:             *slots,
 		WorkDir:                   *workDir,
 		DisabledCapabilities:      splitCapabilities(*disable),
+		OllamaURL:                 *ollamaURL,
 		Name:                      *name,
 		HeartbeatInterval:         *heartbeatInterval,
 		InsecureWorkloadsDisabled: *insecure,

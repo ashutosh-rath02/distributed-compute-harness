@@ -116,6 +116,8 @@ func (a *Agent) refreshResources(ctx context.Context, conn domain.Conn, cmdID st
 	update := protocol.CapabilityUpdatePayload{Resources: resources, Capabilities: capabilities}
 	if err := a.send(ctx, conn, protocol.MsgCapabilityUpdate, domain.ManagerNodeID, update); err != nil {
 		log.Printf("agent %s: send CAPABILITY_UPDATE: %v", a.identity.NodeID, err)
+	} else {
+		a.setAdvertised(capabilities)
 	}
 
 	return domain.CommandResult{

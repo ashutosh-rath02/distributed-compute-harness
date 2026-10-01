@@ -48,6 +48,7 @@
     background: Field; color: FieldText;
   }
   #fileArgs { min-height: 60px; margin-top: 4px; }
+  textarea.param { min-height: 90px; margin-top: 4px; font-family: inherit; font-size: 0.9rem; }
   label.inline { display: flex; gap: 8px; align-items: flex-start; }
   label.inline input { width: auto; margin-top: 2px; }
   details.job summary { cursor: pointer; }
@@ -694,10 +695,21 @@
   let catalogTypes = [];
   let rawPolicy = {};
 
-  function paramField(prefix, p) {
+  function paramField(prefix, p, choices) {
     const id = prefix + "_" + p.name;
     const label = '<label for="' + escapeHtml(id) + '">' + escapeHtml(p.title || p.name) + "</label>";
     const attrs = ' id="' + escapeHtml(id) + '" data-param="' + escapeHtml(p.name) + '"';
+    if (p.choicesAttr) {
+      // Values only some devices have (e.g. models): offer what the
+      // fleet has right now.
+      const values = (choices || {})[p.name] || [];
+      if (!values.length) return label + "<select" + attrs + ' disabled><option value="">(no device has one yet)</option></select>';
+      return label + "<select" + attrs + ">" + values.map((v) => '<option value="' + escapeHtml(v) + '">' + escapeHtml(v) + "</option>").join("") + "</select>";
+    }
+    if (p.multiline) {
+      return label + '<textarea class="param"' + attrs + (p.maxLength ? ' maxlength="' + escapeHtml(String(p.maxLength)) + '"' : "") + ">"
+        + escapeHtml(p.default || "") + "</textarea>";
+    }
     if (p.type === "enum") {
       return label + "<select" + attrs + ">" + p.enum.map((v) => '<option value="' + escapeHtml(v) + '"'
         + (v === p.default ? " selected" : "") + ">" + escapeHtml(v) + "</option>").join("") + "</select>";
@@ -732,7 +744,7 @@
     if (!t) { box.hidden = true; document.getElementById("typedParams").innerHTML = ""; return; }
     document.getElementById("typedDescription").textContent = t.description
       + (t.nodes ? "" : " (No ready device offers it right now.)") + (t.policy.enabled ? "" : " (Disabled by policy.)");
-    document.getElementById("typedParams").innerHTML = (t.params || []).map((p) => paramField("tp", p)).join("");
+    document.getElementById("typedParams").innerHTML = (t.params || []).map((p) => paramField("tp", p, t.choices)).join("");
     const takesFiles = t.inputs && t.inputs.max > 0;
     box.hidden = !takesFiles;
     if (takesFiles) {
@@ -750,7 +762,7 @@
     const batch = document.getElementById("typedBatch").checked;
     document.getElementById("typedReduceBox").hidden = !batch;
     const r = catalogTypes.find((t) => t.name === document.getElementById("typedReduce").value);
-    document.getElementById("typedReduceParams").innerHTML = r ? (r.params || []).map((p) => paramField("rp", p)).join("") : "";
+    document.getElementById("typedReduceParams").innerHTML = r ? (r.params || []).map((p) => paramField("rp", p, r.choices)).join("") : "";
   }
 
   async function refreshCatalog() {
@@ -802,7 +814,7 @@
     const batch = document.getElementById("typedBatch").checked && t.inputs.max === 1;
     button.disabled = true;
     try {
-      if (t.inputs.max > 0 && files.length < Math.max(1, t.inputs.min)) throw new Error("Pick the input file(s).");
+      if (files.length < (t.inputs.min || 0)) throw new Error("Pick the input file(s): this task needs at least " + t.inputs.min + ".");
       const inputs = [];
       for (const f of files) inputs.push(await uploadFile(f, progress));
       let resp;
@@ -886,15 +898,29 @@
     }
   });
 
+  const pendingRefresh = {nodes: false, workloads: false};
+  let refreshTimer = null;
+  function scheduleRefresh(nodes) {
+    pendingRefresh.nodes = pendingRefresh.nodes || nodes;
+    pendingRefresh.workloads = true;
+    if (refreshTimer) return;
+    refreshTimer = setTimeout(() => {
+      refreshTimer = null;
+      if (pendingRefresh.nodes) refreshNodes();
+      if (pendingRefresh.workloads) refreshWorkloads();
+      pendingRefresh.nodes = pendingRefresh.workloads = false;
+    }, 500);
+  }
+
   function handleEvent(data) {
     let type = "";
     try {
       const event = JSON.parse(data);
       type = event.type;
-      addTimelineEvent(event);
+      if (type !== "workload.progress") addTimelineEvent(event);
     } catch (e) { /* keep live refresh working */ }
-    refreshNodes();
-    refreshWorkloads();
+    scheduleRefresh(type !== "workload.progress");
+    if (type === "workload.progress") return;
     if (type.startsWith("job.") || type.startsWith("workload.")) scheduleJobs();
     if (type.startsWith("node.")) refreshCatalog();
     if (type === "node.revoked" || type === "node.unrevoked") refreshRevoked();

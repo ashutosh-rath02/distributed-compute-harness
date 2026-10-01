@@ -27,4 +27,7 @@ const (
 type Capability struct {
 	Name    CapabilityName `json:"name"`
 	Version string         `json:"version"`
+	// Attributes carry per-node detail placement can match against, e.g.
+	// "models" for the local models an llm.generate node has.
+	Attributes map[string]string `json:"attributes,omitempty"`
 }

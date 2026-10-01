@@ -102,6 +102,7 @@ func (s *Server) toNodeView(rec *NodeRecord, relations map[domain.NodeID]hostRel
 //	DELETE /artifacts/{sha}          delete a stored file no live workload needs
 //	GET  /catalog                    the typed task types, their schemas, policy, and how many nodes offer each (policy.go)
 //	GET  /policy, PUT /policy        what the fleet may run: per-type enable, node labels, max runtime
+//	GET  /models                     the local AI models READY nodes have, and where
 //	POST /jobs                       submit a batch job: {"tasks":[...],"reduce":{...},"maxAttempts":3} (jobs.go)
 //	GET  /jobs                       list jobs with progress counts
 //	GET  /jobs/{id}                  one job: every task's state, attempts, node, outputs
@@ -149,6 +150,7 @@ func (s *Server) NewHTTPHandler() http.Handler {
 	mux.HandleFunc("GET /artifacts/{sha}", s.apiGetArtifact)
 	mux.HandleFunc("DELETE /artifacts/{sha}", s.apiDeleteArtifact)
 	mux.HandleFunc("GET /catalog", s.apiGetCatalog)
+	mux.HandleFunc("GET /models", s.apiListModels)
 	mux.HandleFunc("GET /policy", s.apiGetPolicy)
 	mux.HandleFunc("PUT /policy", s.apiPutPolicy)
 	mux.HandleFunc("POST /jobs", s.apiPostJob)

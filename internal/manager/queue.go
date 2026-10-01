@@ -8,6 +8,7 @@ import (
 	"sort"
 	"time"
 
+	"home-harness/internal/catalog"
 	"home-harness/internal/domain"
 )
 
@@ -51,6 +52,9 @@ type nodeUsage struct {
 	running int
 	cores   float64
 	memory  uint64
+	// perCapability counts running workloads by capability, for catalog
+	// types limited per node (catalog.Type.MaxPerNode).
+	perCapability map[domain.CapabilityName]int
 }
 
 // usageOn derives node's current reservations from its in-flight work.
@@ -65,7 +69,7 @@ func (wr *WorkloadRegistry) usageOn(node domain.NodeID) nodeUsage {
 		if rec.Status.State != domain.WorkloadPending && rec.Status.State != domain.WorkloadRunning {
 			continue
 		}
-		u.add(rec.Workload.Requirements)
+		u.add(rec.Workload)
 	}
 	return u
 }
@@ -81,16 +85,30 @@ func (wr *WorkloadRegistry) usageByNode() map[domain.NodeID]nodeUsage {
 			continue
 		}
 		u := out[rec.Workload.Target]
-		u.add(rec.Workload.Requirements)
+		u.add(rec.Workload)
 		out[rec.Workload.Target] = u
 	}
 	return out
 }
 
-func (u *nodeUsage) add(req domain.ResourceRequirements) {
+func (u *nodeUsage) add(w domain.Workload) {
 	u.running++
-	u.cores += req.MinCPUCores
-	u.memory += req.MinMemoryBytes
+	u.cores += w.Requirements.MinCPUCores
+	u.memory += w.Requirements.MinMemoryBytes
+	if u.perCapability == nil {
+		u.perCapability = map[domain.CapabilityName]int{}
+	}
+	u.perCapability[w.EffectiveCapability()]++
+}
+
+// perNodeRoom reports whether u leaves room for one more of capability
+// under its catalog type's MaxPerNode.
+func perNodeRoom(u nodeUsage, capability domain.CapabilityName) (bool, string) {
+	t, ok := catalog.Lookup(capability)
+	if !ok || t.MaxPerNode <= 0 || u.perCapability[capability] < t.MaxPerNode {
+		return true, ""
+	}
+	return false, fmt.Sprintf("already runs %d %s (at most %d per node)", u.perCapability[capability], capability, t.MaxPerNode)
 }
 
 // hasRoom reports whether rec can take one more workload with req on top
@@ -291,7 +309,7 @@ func (s *Server) dispatchQueued(ctx context.Context) {
 			continue // canceled meanwhile
 		}
 		u := usage[id]
-		u.add(assigned.Workload.Requirements)
+		u.add(assigned.Workload)
 		usage[id] = u
 		out = append(out, dispatch{target.Conn, assigned})
 	}

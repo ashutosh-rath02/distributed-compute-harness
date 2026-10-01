@@ -7,6 +7,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sort"
+	"strings"
 	"sync"
 
 	"home-harness/internal/catalog"
@@ -61,8 +63,8 @@ func effectivePolicy(p domain.Policy, capability domain.CapabilityName) domain.T
 	if tp, ok := p.Types[capability]; ok {
 		return tp
 	}
-	if _, ok := catalog.Lookup(capability); ok {
-		return domain.TypePolicy{Enabled: true}
+	if t, ok := catalog.Lookup(capability); ok {
+		return domain.TypePolicy{Enabled: true, MaxRuntimeSeconds: t.DefaultMaxRuntimeSeconds}
 	}
 	return domain.TypePolicy{Enabled: p.AllowUnlisted}
 }
@@ -167,6 +169,9 @@ type catalogEntry struct {
 	// Nodes is how many READY nodes offer this type (at this version)
 	// and pass its policy's label selector.
 	Nodes int `json:"nodes"`
+	// Choices are the values READY nodes offer for parameters with a
+	// ChoicesAttr (e.g. the fleet's models), by parameter name.
+	Choices map[string][]string `json:"choices,omitempty"`
 }
 
 func (s *Server) apiGetCatalog(w http.ResponseWriter, r *http.Request) {
@@ -174,10 +179,31 @@ func (s *Server) apiGetCatalog(w http.ResponseWriter, r *http.Request) {
 	var out []catalogEntry
 	for _, t := range catalog.Types() {
 		e := catalogEntry{Type: t, Policy: effectivePolicy(p, t.Name)}
+		seen := map[string]map[string]bool{}
 		for _, rec := range s.Registry.List() {
 			if rec.State == domain.NodeReady && offersVersion(rec, t.Name) && s.matchesLabels(rec.Node.Identity.NodeID, e.Policy.NodeLabels) {
 				e.Nodes++
+				for _, param := range t.Params {
+					if param.ChoicesAttr == "" {
+						continue
+					}
+					for _, v := range attrValues(rec, t.Name, param.ChoicesAttr) {
+						if seen[param.Name] == nil {
+							seen[param.Name] = map[string]bool{}
+						}
+						if !seen[param.Name][v] {
+							seen[param.Name][v] = true
+							if e.Choices == nil {
+								e.Choices = map[string][]string{}
+							}
+							e.Choices[param.Name] = append(e.Choices[param.Name], v)
+						}
+					}
+				}
 			}
+		}
+		for k := range e.Choices {
+			sort.Strings(e.Choices[k])
 		}
 		out = append(out, e)
 	}
@@ -186,6 +212,52 @@ func (s *Server) apiGetCatalog(w http.ResponseWriter, r *http.Request) {
 		raw[name] = effectivePolicy(p, name)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"types": out, "raw": raw})
+}
+
+// attrValues lists the comma-separated attribute attr of rec's
+// capability.
+func attrValues(rec *NodeRecord, capability domain.CapabilityName, attr string) []string {
+	for _, c := range rec.Capabilities {
+		if c.Name == capability {
+			var out []string
+			for _, v := range strings.Split(c.Attributes[attr], ",") {
+				if v = strings.TrimSpace(v); v != "" {
+					out = append(out, v)
+				}
+			}
+			return out
+		}
+	}
+	return nil
+}
+
+// apiListModels is GET /models: every local model the READY fleet has,
+// and which nodes have it.
+func (s *Server) apiListModels(w http.ResponseWriter, r *http.Request) {
+	type nodeRef struct {
+		ID   domain.NodeID `json:"id"`
+		Name string        `json:"name"`
+	}
+	byModel := map[string][]nodeRef{}
+	for _, rec := range s.Registry.List() {
+		if rec.State != domain.NodeReady {
+			continue
+		}
+		for _, m := range attrValues(rec, "llm.generate", catalog.AttrModels) {
+			byModel[m] = append(byModel[m], nodeRef{rec.Node.Identity.NodeID, s.nodeDisplayName(rec.Node.Identity.NodeID)})
+		}
+	}
+	type row struct {
+		Model string    `json:"model"`
+		Nodes []nodeRef `json:"nodes"`
+	}
+	out := []row{}
+	for m, nodes := range byModel {
+		sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
+		out = append(out, row{m, nodes})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Model < out[j].Model })
+	writeJSON(w, http.StatusOK, out)
 }
 
 // offersVersion reports whether rec advertises capability at the

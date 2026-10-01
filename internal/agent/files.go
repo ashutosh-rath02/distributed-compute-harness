@@ -59,7 +59,7 @@ func handlerRunner(h tasks.Handler, wl domain.Workload) runner {
 // Output contract (strict, so batch jobs can rely on it): every declared
 // output must exist as a regular file after a successful run, or the
 // workload FAILS. A failed or canceled run uploads nothing.
-func (e *Executor) runTask(runCtx context.Context, cancel context.CancelFunc, wl domain.Workload, xfer ArtifactTransfer, onStatus func(domain.WorkloadStatus), run runner) {
+func (e *Executor) runTask(runCtx context.Context, cancel context.CancelFunc, wl domain.Workload, xfer ArtifactTransfer, onStatus func(domain.WorkloadStatus), run runner, streams bool) {
 	defer cancel()
 	startedAt := time.Now().UTC()
 	var dir string
@@ -123,7 +123,35 @@ func (e *Executor) runTask(runCtx context.Context, cancel context.CancelFunc, wl
 	stdout := &cappedBuffer{limit: domain.OutputCapBytes}
 	stderr := &cappedBuffer{limit: domain.OutputCapBytes}
 	onStatus(domain.WorkloadStatus{ID: wl.ID, Target: wl.Target, State: domain.WorkloadRunning, StartedAt: startedAt})
+	// A streaming task reports its output so far while it runs. The
+	// reporter is stopped, and waited for, before anything else is sent:
+	// a progress report arriving after the final status would make a
+	// finished workload look running again.
+	stopProgress := func() {}
+	if streams {
+		done := make(chan struct{})
+		exited := make(chan struct{})
+		go func() {
+			defer close(exited)
+			tick := time.NewTicker(e.progressEvery)
+			defer tick.Stop()
+			last := ""
+			for {
+				select {
+				case <-done:
+					return
+				case <-tick.C:
+					if out := stdout.String(); out != last {
+						last = out
+						onStatus(domain.WorkloadStatus{ID: wl.ID, Target: wl.Target, State: domain.WorkloadRunning, StartedAt: startedAt, Stdout: out})
+					}
+				}
+			}
+		}()
+		stopProgress = func() { close(done); <-exited }
+	}
 	runErr := run(runCtx, dir, stdout, stderr)
+	stopProgress()
 
 	status := domain.WorkloadStatus{
 		Stdout: stdout.String(), Stderr: stderr.String(), Truncated: stdout.truncated || stderr.truncated,

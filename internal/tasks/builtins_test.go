@@ -51,13 +51,15 @@ func run(t *testing.T, name domain.CapabilityName, params map[string]string, fil
 }
 
 func TestEveryCatalogTypeHasAHandler(t *testing.T) {
+	full := NewRegistry(Options{OllamaURL: "127.0.0.1:1"}) // nothing listens there
 	for _, ty := range catalog.Types() {
-		if _, ok := Lookup(ty.Name); !ok {
+		if _, ok := full.Lookup(ty.Name); !ok {
 			t.Errorf("catalog type %s has no handler", ty.Name)
 		}
 	}
-	if got := len(Capabilities(context.Background())); got != len(catalog.Types()) {
-		t.Fatalf("advertised %d types, catalog has %d", got, len(catalog.Types()))
+	// Without a reachable Ollama only the self-contained types are offered.
+	if got, want := len(full.Capabilities(context.Background())), len(builtinHandlers()); got != want {
+		t.Fatalf("advertised %d types, want the %d built-ins", got, want)
 	}
 }
 

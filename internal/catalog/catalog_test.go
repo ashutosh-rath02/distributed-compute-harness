@@ -78,7 +78,13 @@ func TestEveryBuiltinCompilesWithDefaults(t *testing.T) {
 			}
 			inputs = append(inputs, domain.ArtifactRef{Name: "in" + string(rune('a'+i)) + "." + ext, SHA256: strings.Repeat("0", 64)})
 		}
-		params, outputs, err := ty.Compile(nil, inputs)
+		given := map[string]string{}
+		for _, p := range ty.Params {
+			if p.Required && p.Default == "" {
+				given[p.Name] = "x" // a valid value for every required param today
+			}
+		}
+		params, outputs, err := ty.Compile(given, inputs)
 		if err != nil {
 			t.Errorf("%s: %v", ty.Name, err)
 			continue
@@ -98,5 +104,49 @@ func TestEveryBuiltinCompilesWithDefaults(t *testing.T) {
 	}
 	if IsRaw("image.resize") || !IsRaw(domain.CapabilitySystemExecute) || !IsRaw(domain.CapabilityFilesystemRead) {
 		t.Fatal("IsRaw classification")
+	}
+}
+
+func TestPromptsMayBeMultilineAndStartWithADash(t *testing.T) {
+	ty := mustType(t, "llm.generate")
+	prompt := "- list the steps\n\t1. first\r\n2. second"
+	params, outputs, err := ty.Compile(map[string]string{"model": "llama3.2", "prompt": prompt}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if params["prompt"] != prompt || params["max_tokens"] != "512" || len(outputs) != 1 || outputs[0] != "response.txt" {
+		t.Fatalf("params %v outputs %v", params, outputs)
+	}
+	for _, bad := range []map[string]string{
+		{"model": "-rf", "prompt": "x"},                              // a model is still never dash-led
+		{"model": "llama3.2", "prompt": "a" + string(rune(0)) + "b"}, // NUL is still refused
+		{"model": "llama 3", "prompt": "x"},                          // not a model reference
+		{"model": "llama3.2", "prompt": strings.Repeat("p", 16<<10+1)},
+	} {
+		if _, _, err := ty.Compile(bad, nil); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%q: accepted", bad)
+		}
+	}
+}
+
+func TestModelNormalizationAndMatching(t *testing.T) {
+	for in, want := range map[string]string{
+		"llama3.2": "llama3.2:latest", "Llama3.2:3B": "llama3.2:3b", "hf.co/User/Repo": "hf.co/user/repo:latest",
+		"hf.co/u/r:q4": "hf.co/u/r:q4", "registry:5000/m": "registry:5000/m:latest",
+	} {
+		if got := NormalizeModel(in); got != want {
+			t.Errorf("NormalizeModel(%q) = %q, want %q", in, got, want)
+		}
+	}
+	ty := mustType(t, "llm.generate")
+	attrs := map[string]string{AttrModels: "llama3.2:latest,qwen2.5:7b"}
+	if ok, _ := ty.Offers(attrs, map[string]string{"model": "llama3.2"}); !ok {
+		t.Fatal("llama3.2 should match llama3.2:latest")
+	}
+	if ok, why := ty.Offers(attrs, map[string]string{"model": "qwen2.5"}); ok || !strings.Contains(why, "qwen2.5") {
+		t.Fatalf("qwen2.5 (:latest) must not match qwen2.5:7b: %v %s", ok, why)
+	}
+	if ok, _ := mustType(t, "image.resize").Offers(nil, map[string]string{"width": "1"}); !ok || mustType(t, "image.resize").HasChoices() {
+		t.Fatal("a type without choice params is offered by any node")
 	}
 }
