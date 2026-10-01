@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"home-harness/internal/artifacts"
 	"home-harness/internal/discovery/udp"
 	"home-harness/internal/domain"
 	"home-harness/internal/manager"
@@ -47,6 +48,10 @@ func main() {
 	relayToken := flag.String("relay-token", "", "shared secret identifying this manager's session at the relay (required if -relay-addr is set; same care as -pairing-token: long, random, not reused)")
 	relayPublicURL := flag.String("relay-public-url", "", "browser-trusted HTTPS base URL exposed by the relay for internet enrollment links (e.g. https://relay.example.com:8443)")
 	relayEnrollmentToken := flag.String("relay-enrollment-token", "", "secret authorizing this manager to publish internet enrollment links (required with -relay-public-url)")
+	artifactDir := flag.String("artifact-dir", "harness-artifacts", "directory holding workload input/output files (content-addressed); \"\" disables workload files")
+	artifactMax := flag.String("artifact-max-size", "256MiB", "largest single workload file accepted (upload or output)")
+	artifactTotal := flag.String("artifact-store-size", "4GiB", "most space all stored workload files may use; uploads beyond it are refused")
+	artifactRetention := flag.Duration("artifact-retention", 7*24*time.Hour, "how long a stored file no queued/running/restarting workload needs is kept after it was last used")
 	flag.Parse()
 
 	if *checkAgentBinaries {
@@ -135,6 +140,23 @@ func main() {
 	if *relayPublicURL != "" {
 		enrollmentPublisher = &manager.HTTPEnrollmentPublisher{URL: *relayPublicURL, RelaySession: *relayToken, PublishToken: *relayEnrollmentToken}
 	}
+	var artifactStore *artifacts.Store
+	if *artifactDir != "" {
+		maxBytes, err := parseSize(*artifactMax)
+		if err != nil {
+			log.Fatalf("manager: -artifact-max-size: %v", err)
+		}
+		totalBytes, err := parseSize(*artifactTotal)
+		if err != nil {
+			log.Fatalf("manager: -artifact-store-size: %v", err)
+		}
+		artifactStore, err = artifacts.Open(artifacts.Config{Dir: *artifactDir, MaxBytes: maxBytes, TotalBytes: totalBytes})
+		if err != nil {
+			log.Fatalf("manager: %v", err)
+		}
+		used, total := artifactStore.Usage()
+		log.Printf("manager: workload file store at %s (%d of %d bytes used)", *artifactDir, used, total)
+	}
 	srv := manager.NewServer(finalTransport, store, manager.Config{
 		Addr:                *addr,
 		PairingToken:        *pairingToken,
@@ -147,6 +169,8 @@ func main() {
 		RelayPublicURL:      *relayPublicURL,
 		EnrollmentPublisher: enrollmentPublisher,
 		OperatorToken:       operatorToken,
+		Artifacts:           artifactStore,
+		ArtifactRetention:   *artifactRetention,
 	})
 	// Registered before Run (which calls transport.Listen) — puts the
 	// download on the exact address/port agents already dial, no new port
@@ -157,10 +181,13 @@ func main() {
 	transport.Handle("/agent-binary", srv.AgentBinaryHandler())
 	transport.Handle("GET /agent-binaries/{os}/{arch}", srv.AgentBinariesHandler())
 	transport.Handle("/enroll/", srv.EnrollmentHandler())
+	// Workload file transfers, authorized per assignment (manager/artifacts.go).
+	transport.Handle("/workload-artifacts/", srv.ArtifactTransferHandler())
 	if relayTransport != nil {
 		relayTransport.Handle("/agent-binary", srv.AgentBinaryHandler())
 		relayTransport.Handle("GET /agent-binaries/{os}/{arch}", srv.AgentBinariesHandler())
 		relayTransport.Handle("/enroll/", srv.EnrollmentHandler())
+		relayTransport.Handle("/workload-artifacts/", srv.ArtifactTransferHandler())
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -229,4 +256,16 @@ func portOf(addr string) (int, error) {
 		return 0, fmt.Errorf("invalid port %q: %w", portStr, err)
 	}
 	return port, nil
+}
+
+// parseSize parses a positive human-readable byte size flag ("256MiB").
+func parseSize(v string) (int64, error) {
+	n, err := domain.ParseByteSize(v)
+	if err != nil {
+		return 0, err
+	}
+	if n == 0 || n > 1<<50 {
+		return 0, fmt.Errorf("size %q out of range", v)
+	}
+	return int64(n), nil
 }

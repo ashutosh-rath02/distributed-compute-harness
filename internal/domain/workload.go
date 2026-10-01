@@ -73,6 +73,11 @@ type Workload struct {
 	// string-keyed map, and system.execute's existing wire/CLI shape has
 	// no reason to change.
 	Params map[string]string `json:"params,omitempty"`
+	// Inputs are files fetched into the workload's working directory before
+	// it runs; Outputs are files it must leave there, uploaded afterwards
+	// (artifact.go). Only system.execute workloads may declare them.
+	Inputs  []ArtifactRef `json:"inputs,omitempty"`
+	Outputs []string      `json:"outputs,omitempty"`
 }
 
 // EffectiveCapability returns w.Capability, or CapabilitySystemExecute if
@@ -119,6 +124,9 @@ type WorkloadStatus struct {
 	// meaningful while QUEUED.
 	QueuedAt  time.Time `json:"queuedAt,omitempty"`
 	NotBefore time.Time `json:"notBefore,omitempty"`
+	// Outputs are the declared output files the agent uploaded, as the
+	// manager verified them against what it actually received.
+	Outputs []ArtifactRef `json:"outputs,omitempty"`
 }
 
 // PersistedWorkload is what survives a manager restart for one workload:

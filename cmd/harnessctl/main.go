@@ -47,6 +47,12 @@ func main() {
 		err = requireArgs(args, 3, "label <id> key=value|key= ...", func() error { return client.cmdLabel(args[1], args[2:]) })
 	case "audit":
 		err = cmdAudit(client, args[1:])
+	case "artifact":
+		err = cmdArtifact(client, args[1:])
+	case "artifacts":
+		err = client.cmdArtifacts()
+	case "outputs":
+		err = cmdOutputs(client, args[1:])
 	case "node":
 		err = requireArgs(args, 2, "node <id>", func() error { return client.cmdNode(args[1]) })
 	case "resources":
@@ -128,7 +134,8 @@ Commands:
   audit [-noise] [-n N] show the audit log, newest first: admissions (and
                         how), revocations, invitations, updates, sign-ins,
                         workloads; -noise shows rejections and reconnects
-  run [-min-mem SIZE] [-min-cores N] [-max-cpu PCT] [-restart POLICY] <id|-> <cmd> [args...]
+  run [-min-mem SIZE] [-min-cores N] [-max-cpu PCT] [-restart POLICY]
+      [-in [name=]FILE|name=sha256:HEX ...] [-out NAME ...] <id|-> <cmd> [args...]
                         submit a workload (id or "-" for auto-pick using v2's
                         resource-aware placement), print its ID. cmd/args are
                         passed directly to exec, not a shell — on Windows,
@@ -138,6 +145,13 @@ Commands:
                         a size like "2GiB"; with an explicit id, the node is
                         still checked against any given requirements. This is
                         always the "system.execute" capability (v4).
+                        -in uploads a local file (or names a stored one) into
+                        the workload's working directory; -out names a file
+                        it must leave there, fetched afterwards with
+                        "outputs". Names are relative paths like in/a.csv.
+                        The program runs with that directory as its cwd: run
+                        scripts through their interpreter ("sh x.sh",
+                        "powershell -File x.ps1", "python x.py").
   invoke [-min-mem SIZE] [-min-cores N] [-max-cpu PCT] [-restart POLICY]
          <id|-> <capability> [key=value ...]
                         submit a workload invoking a named capability other
@@ -146,6 +160,14 @@ Commands:
                         clear error if the target (or every node, for "-")
                         doesn't declare that capability. See "node <id>" for
                         what a node declares.
+  outputs <workload-id> [dir]
+                        download the files a workload delivered into dir
+  artifact put <file>   store a file on the manager, print its sha256
+  artifact get <sha256> [out-file]
+                        download a stored file
+  artifact rm <sha256>  delete a stored file (refused while a queued or
+                        running workload needs it)
+  artifacts             list stored files and how much space they use
   workloads             list all known workloads
   workload <id>         show one workload's request, state, and captured output
   cancel <workload-id>  request cancellation of a running workload
@@ -198,8 +220,11 @@ func cmdRun(client *apiClient, args []string) error {
 	minCores := fs.Float64("min-cores", 0, "minimum declared CPU cores required on the target node")
 	maxCPU := fs.Float64("max-cpu", 0, "maximum acceptable live CPU load percent on the target node")
 	restart := fs.String("restart", "never", `restart policy: "never" (default), "on-failure", or "always" — a non-"never" policy makes this a v3 "service" the manager keeps restarting after it stops`)
+	var inputs, outputs fileList
+	fs.Var(&inputs, "in", `input file, repeatable: "name=path", "path" (named after its base name), or "name=sha256:<hex>" for a stored file`)
+	fs.Var(&outputs, "out", "output file the workload must produce in its working directory, repeatable (e.g. out/result.csv)")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: harnessctl run [-min-mem SIZE] [-min-cores N] [-max-cpu PCT] [-restart POLICY] <id|-> <command> [args...]")
+		fmt.Fprintln(os.Stderr, "usage: harnessctl run [-min-mem SIZE] [-min-cores N] [-max-cpu PCT] [-restart POLICY] [-in FILE ...] [-out NAME ...] <id|-> <command> [args...]")
 	}
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -229,8 +254,12 @@ func cmdRun(client *apiClient, args []string) error {
 	if _, err := domain.ParseRestartPolicy(*restart); err != nil {
 		return err
 	}
+	in, err := client.resolveInputs(inputs)
+	if err != nil {
+		return err
+	}
 
-	return client.cmdRunWorkload(target, rest[1], rest[2:], "", nil, req, *restart)
+	return client.cmdRunWorkload(target, rest[1], rest[2:], "", nil, req, *restart, in, outputs)
 }
 
 // cmdInvoke mirrors cmdRun's flag-parsing structure exactly, for a workload
@@ -281,7 +310,7 @@ func cmdInvoke(client *apiClient, args []string) error {
 		return err
 	}
 
-	return client.cmdRunWorkload(target, "", nil, capability, params, req, *restart)
+	return client.cmdRunWorkload(target, "", nil, capability, params, req, *restart, nil, nil)
 }
 
 // parseParams turns a list of "key=value" positional args into a map, for
@@ -539,13 +568,17 @@ type workloadView struct {
 	Error         string                      `json:"error,omitempty"`
 	StartedAt     time.Time                   `json:"startedAt,omitempty"`
 	FinishedAt    time.Time                   `json:"finishedAt,omitempty"`
+	Inputs        []domain.ArtifactRef        `json:"inputs,omitempty"`
+	Outputs       []string                    `json:"outputs,omitempty"`
+	OutputFiles   []domain.ArtifactRef        `json:"outputFiles,omitempty"`
 }
 
-func (c *apiClient) cmdRunWorkload(target, command string, args []string, capability string, params map[string]string, req domain.ResourceRequirements, restartPolicy string) error {
+func (c *apiClient) cmdRunWorkload(target, command string, args []string, capability string, params map[string]string, req domain.ResourceRequirements, restartPolicy string, inputs []map[string]string, outputs []string) error {
 	reqBody, err := json.Marshal(map[string]any{
 		"target": target, "command": command, "args": args,
 		"capability": capability, "params": params,
 		"requirements": req, "restartPolicy": restartPolicy,
+		"inputs": inputs, "outputs": outputs,
 	})
 	if err != nil {
 		return err
@@ -643,6 +676,23 @@ func (c *apiClient) cmdWorkload(id string) error {
 		fmt.Printf("Error          %s\n", w.Error)
 	} else if w.ExitCode != nil {
 		fmt.Printf("Exit code      %d\n", *w.ExitCode)
+	}
+	for _, in := range w.Inputs {
+		fmt.Printf("Input          %s (%s, %s)\n", in.Name, humanBytes(uint64(in.Size)), in.SHA256[:12])
+	}
+	delivered := map[string]domain.ArtifactRef{}
+	for _, o := range w.OutputFiles {
+		delivered[o.Name] = o
+	}
+	for _, name := range w.Outputs {
+		if o, ok := delivered[name]; ok {
+			fmt.Printf("Output         %s (%s, %s)\n", name, humanBytes(uint64(o.Size)), o.SHA256[:12])
+		} else {
+			fmt.Printf("Output         %s (not delivered)\n", name)
+		}
+	}
+	if len(w.OutputFiles) > 0 {
+		fmt.Printf("               fetch with: harnessctl outputs %s [dir]\n", w.ID)
 	}
 	if w.Stdout != "" {
 		fmt.Printf("\nStdout:\n%s\n", w.Stdout)
@@ -976,44 +1026,9 @@ func truncate(s string, n int) string {
 	return s[:n-1] + "…"
 }
 
-// parseBytes parses a human-readable byte size like "2GiB", "512MB", "1024",
-// or "1.5G" (case-insensitive, decimal and binary suffixes treated the
-// same way) — the inverse of humanBytes, for the "-min-mem" flag.
-func parseBytes(s string) (uint64, error) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return 0, nil
-	}
-	i := 0
-	for i < len(s) && (s[i] >= '0' && s[i] <= '9' || s[i] == '.') {
-		i++
-	}
-	if i == 0 {
-		return 0, fmt.Errorf("invalid size %q: no numeric value", s)
-	}
-	n, err := strconv.ParseFloat(s[:i], 64)
-	if err != nil {
-		return 0, fmt.Errorf("invalid size %q: %w", s, err)
-	}
-
-	suffix := strings.ToUpper(strings.TrimSpace(s[i:]))
-	var mult float64
-	switch suffix {
-	case "", "B":
-		mult = 1
-	case "K", "KB", "KIB":
-		mult = 1 << 10
-	case "M", "MB", "MIB":
-		mult = 1 << 20
-	case "G", "GB", "GIB":
-		mult = 1 << 30
-	case "T", "TB", "TIB":
-		mult = 1 << 40
-	default:
-		return 0, fmt.Errorf("invalid size %q: unrecognized unit %q", s, suffix)
-	}
-	return uint64(n * mult), nil
-}
+// parseBytes parses a human-readable byte size like "2GiB" (see
+// domain.ParseByteSize) — the inverse of humanBytes, for "-min-mem".
+func parseBytes(s string) (uint64, error) { return domain.ParseByteSize(s) }
 
 func humanBytes(b uint64) string {
 	const unit = 1024

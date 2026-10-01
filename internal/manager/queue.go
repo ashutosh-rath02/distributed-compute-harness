@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"home-harness/internal/domain"
-	"home-harness/internal/protocol"
 )
 
 // Capacity reservation and the work queue.
@@ -246,7 +245,7 @@ func (s *Server) dispatchQueued(ctx context.Context) {
 			continue // canceled meanwhile
 		}
 		s.persistWorkloadRecord(assigned)
-		s.send(ctx, target.Conn, protocol.MsgWorkloadAssign, domain.ManagerNodeID, assigned.Workload.Target, protocol.WorkloadAssignPayload{Workload: assigned.Workload})
+		s.assign(ctx, target.Conn, assigned.Workload)
 		log.Printf("workload.assigned: %s to %s (from the queue)", assigned.Workload.ID, assigned.Workload.Target)
 		s.publish(domain.EventWorkloadAssigned, assigned.Workload.Target, map[string]any{
 			"workloadId": string(assigned.Workload.ID), "command": assigned.Workload.Command, "capability": string(assigned.Workload.EffectiveCapability()), "fromQueue": true,
@@ -261,7 +260,7 @@ func (s *Server) placeTarget(w domain.Workload) (*NodeRecord, error) {
 	if w.Pinned {
 		pin = w.Target
 	}
-	rec, _, err := s.resolveWorkloadTarget(pin, w.EffectiveCapability(), w.Requirements)
+	rec, _, err := s.resolveWorkloadTarget(pin, w.EffectiveCapability(), w.Requirements, requiredFeatures(w)...)
 	return rec, err
 }
 
@@ -271,6 +270,7 @@ func (s *Server) placeTarget(w domain.Workload) (*NodeRecord, error) {
 // in turn. The workload's own backoff (NotBefore) keeps it from spinning.
 func (s *Server) handleBusyRefusal(node domain.NodeID, status domain.WorkloadStatus) {
 	s.Registry.holdOffBusy(node, time.Now().Add(busyHoldOff))
+	s.grants.drop(status.ID) // the next attempt gets a fresh token
 	attempts := s.requeueAttempts(status.ID)
 	rec, ok := s.Workloads.requeue(status.ID, time.Now().UTC(), attempts)
 	if !ok {

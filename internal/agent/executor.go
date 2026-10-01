@@ -36,6 +36,9 @@ type Executor struct {
 	// loop is sequential), so this should never be consulted — it exists
 	// as a safety net rather than a mechanism the normal path relies on.
 	canceledBeforeStart map[domain.WorkloadID]bool
+	// workRoot holds one working directory per running workload that
+	// declares files (files.go). Empty disables file workloads.
+	workRoot string
 }
 
 type runningWorkload struct {
@@ -70,6 +73,13 @@ func (e *Executor) Slots() int { return e.slots }
 // capability-agnostic: every workload, whatever it invokes, takes one of
 // the executor's slots.
 func (e *Executor) Start(ctx context.Context, wl domain.Workload, onStatus func(domain.WorkloadStatus)) error {
+	return e.StartWithFiles(ctx, wl, nil, onStatus)
+}
+
+// StartWithFiles is Start for an assignment that may declare input/output
+// files, moved with xfer (files.go). For a workload without files it is
+// exactly Start.
+func (e *Executor) StartWithFiles(ctx context.Context, wl domain.Workload, xfer ArtifactTransfer, onStatus func(domain.WorkloadStatus)) error {
 	e.mu.Lock()
 	if e.canceledBeforeStart[wl.ID] {
 		delete(e.canceledBeforeStart, wl.ID)
@@ -106,18 +116,32 @@ func (e *Executor) Start(ctx context.Context, wl domain.Workload, onStatus func(
 		return nil
 	}
 
+	if wl.HasFiles() && capability != domain.CapabilitySystemExecute {
+		e.mu.Unlock()
+		onStatus(domain.WorkloadStatus{
+			ID: wl.ID, Target: wl.Target, State: domain.WorkloadFailed,
+			Error: fmt.Sprintf("capability %q can't take input or output files", capability),
+		})
+		return nil
+	}
+
 	runCtx, cancel := context.WithCancel(ctx)
 	e.running[wl.ID] = &runningWorkload{id: wl.ID, cancel: cancel}
 	e.mu.Unlock()
 
-	switch capability {
-	case domain.CapabilitySystemExecute:
+	switch {
+	case wl.HasFiles():
+		go e.runWithFiles(runCtx, cancel, wl, xfer, onStatus)
+	case capability == domain.CapabilitySystemExecute:
 		e.startExecute(runCtx, cancel, wl, onStatus)
-	case domain.CapabilityFilesystemRead:
+	case capability == domain.CapabilityFilesystemRead:
 		e.startFilesystemRead(runCtx, cancel, wl, onStatus)
 	}
 	return nil
 }
+
+// SetWorkRoot sets where working directories for file workloads go.
+func (e *Executor) SetWorkRoot(dir string) { e.workRoot = dir }
 
 // resolveCommandPath resolves a bare command name (no path separator) to
 // an absolute path ourselves on non-Windows, rather than letting

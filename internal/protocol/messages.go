@@ -74,6 +74,10 @@ type CommandResultPayload struct {
 // WorkloadAssignPayload dispatches a workload for execution to a node.
 type WorkloadAssignPayload struct {
 	Workload domain.Workload `json:"workload"`
+	// ArtifactToken authorizes this one assignment's file transfers (only
+	// set when the workload declares files). It is deliberately not part
+	// of domain.Workload, so it is never persisted or shown by the API.
+	ArtifactToken string `json:"artifactToken,omitempty"`
 }
 
 // WorkloadStatusPayload reports a workload's current or final status. Sent

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"home-harness/internal/artifacts"
 	"home-harness/internal/domain"
 	"home-harness/internal/eventbus"
 	"home-harness/internal/identity"
@@ -53,6 +54,11 @@ type Config struct {
 	// Empty disables operator authentication — only for tests and
 	// embedding; cmd/manager always loads or creates one.
 	OperatorToken string
+	// Artifacts stores workload input/output files (artifacts.go); nil
+	// disables workload files. ArtifactRetention is how long an unused
+	// artifact is kept (default 7 days).
+	Artifacts         *artifacts.Store
+	ArtifactRetention time.Duration
 }
 
 // PersistentStore is the subset of persistent storage the manager needs:
@@ -115,6 +121,9 @@ type Server struct {
 	pendingMu sync.Mutex
 	pending   map[string]pendingCommand
 
+	// grants authorizes agents' workload file transfers (artifacts.go).
+	grants *grantTable
+
 	// agents is the loaded agent-build catalog (agentcatalog.go), built
 	// once at startup from cfg.AgentBinaries — never nil.
 	agents *agentCatalog
@@ -154,6 +163,7 @@ func NewServer(transport domain.Transport, store PersistentStore, cfg Config) *S
 		auditLog:     newAuditRecorder(),
 		dispatchKick: make(chan struct{}, 1),
 		requeues:     make(map[domain.WorkloadID]int),
+		grants:       newGrantTable(),
 	}
 
 	if cfg.OperatorToken == "" {
@@ -275,19 +285,50 @@ var ErrNoEligibleNode = errors.New("manager: no node satisfies the workload's re
 // the reconciliation loop (reconcile.go) will re-run it after it stops,
 // per RestartPolicy.WantsRestartAfter.
 func (s *Server) SubmitWorkload(ctx context.Context, target domain.NodeID, command string, args []string, capability domain.CapabilityName, params map[string]string, req domain.ResourceRequirements, restartPolicy domain.RestartPolicy) (domain.Workload, error) {
-	if capability == "" {
-		capability = domain.CapabilitySystemExecute
+	return s.Submit(ctx, WorkloadSpec{Target: target, Command: command, Args: args, Capability: capability, Params: params, Requirements: req, RestartPolicy: restartPolicy})
+}
+
+// WorkloadSpec is everything one submission asks for. Inputs name stored
+// artifacts (Name + SHA256; the size is filled in from the store).
+type WorkloadSpec struct {
+	Target        domain.NodeID
+	Command       string
+	Args          []string
+	Capability    domain.CapabilityName
+	Params        map[string]string
+	Requirements  domain.ResourceRequirements
+	RestartPolicy domain.RestartPolicy
+	Inputs        []domain.ArtifactRef
+	Outputs       []string
+}
+
+// ErrInvalidWorkload is a submission that can never be valid as given
+// (bad file names, unknown input artifact, files on a capability that
+// can't take them).
+var ErrInvalidWorkload = errors.New("manager: invalid workload")
+
+// Submit is SubmitWorkload taking a full WorkloadSpec.
+func (s *Server) Submit(ctx context.Context, spec WorkloadSpec) (domain.Workload, error) {
+	if spec.Capability == "" {
+		spec.Capability = domain.CapabilitySystemExecute
 	}
+	if err := s.prepareFiles(&spec); err != nil {
+		return domain.Workload{}, err
+	}
+	target, command, args, capability, params, req, restartPolicy := spec.Target, spec.Command, spec.Args, spec.Capability, spec.Params, spec.Requirements, spec.RestartPolicy
 	pinned := target != ""
 	id, err := newRandomID()
 	if err != nil {
 		return domain.Workload{}, err
 	}
+	newWorkload := func(target domain.NodeID) domain.Workload {
+		return domain.Workload{ID: domain.WorkloadID(id), Target: target, Pinned: pinned, Command: command, Args: args, Capability: capability, Params: params, Requirements: req, RestartPolicy: restartPolicy, Inputs: spec.Inputs, Outputs: spec.Outputs}
+	}
 	s.placeMu.Lock()
-	rec, resolved, err := s.resolveWorkloadTarget(target, capability, req)
+	rec, resolved, err := s.resolveWorkloadTarget(target, capability, req, requiredFeatures(newWorkload(""))...)
 	if errors.Is(err, errNoRoom) {
 		// Some ready node could run it, just not right now: queue it.
-		w := domain.Workload{ID: domain.WorkloadID(id), Target: target, Pinned: pinned, Command: command, Args: args, Capability: capability, Params: params, Requirements: req, RestartPolicy: restartPolicy}
+		w := newWorkload(target)
 		wrec := s.Workloads.enqueue(w, time.Now().UTC())
 		s.placeMu.Unlock()
 		s.persistWorkloadRecord(wrec)
@@ -301,14 +342,14 @@ func (s *Server) SubmitWorkload(ctx context.Context, target domain.NodeID, comma
 	}
 	target = resolved
 
-	w := domain.Workload{ID: domain.WorkloadID(id), Target: target, Pinned: pinned, Command: command, Args: args, Capability: capability, Params: params, Requirements: req, RestartPolicy: restartPolicy}
+	w := newWorkload(target)
 	status := domain.WorkloadStatus{ID: w.ID, Target: target, State: domain.WorkloadPending}
 
 	wrec := s.Workloads.Put(w, status)
 	s.placeMu.Unlock()
 	s.persistWorkloadRecord(wrec)
 
-	s.send(ctx, rec.Conn, protocol.MsgWorkloadAssign, domain.ManagerNodeID, target, protocol.WorkloadAssignPayload{Workload: w})
+	s.assign(ctx, rec.Conn, w)
 	log.Printf("workload.assigned: %s to %s", w.ID, target)
 	s.publish(domain.EventWorkloadAssigned, target, map[string]any{"workloadId": string(w.ID), "command": command, "capability": string(capability)})
 
@@ -323,13 +364,13 @@ func (s *Server) SubmitWorkload(ctx context.Context, target domain.NodeID, comma
 // selectNode (v2's resource-aware placement, v1.md §22); with an empty req
 // this keeps v1's eligible set unchanged, only its ordering becomes
 // deterministic instead of arbitrary map order.
-func (s *Server) resolveWorkloadTarget(target domain.NodeID, capability domain.CapabilityName, req domain.ResourceRequirements) (*NodeRecord, domain.NodeID, error) {
+func (s *Server) resolveWorkloadTarget(target domain.NodeID, capability domain.CapabilityName, req domain.ResourceRequirements, features ...string) (*NodeRecord, domain.NodeID, error) {
 	if target != "" {
 		rec, ok := s.Registry.Get(target)
 		if !ok || rec.Conn == nil || rec.State != domain.NodeReady {
 			return nil, "", ErrNodeNotConnected
 		}
-		if ok, reason := couldEverFit(rec, capability, req); !ok {
+		if ok, reason := couldEverFit(rec, capability, req, features...); !ok {
 			return nil, "", fmt.Errorf("%w (%s: %s)", ErrNoEligibleNode, target, reason)
 		}
 		if ok, reason := nodeFits(rec, capability, req); !ok {
@@ -358,7 +399,7 @@ func (s *Server) resolveWorkloadTarget(target domain.NodeID, capability domain.C
 	usage := make(map[domain.NodeID]nodeUsage)
 	for _, rec := range candidates {
 		id := rec.Node.Identity.NodeID
-		if ok, reason := couldEverFit(rec, capability, req); !ok {
+		if ok, reason := couldEverFit(rec, capability, req, features...); !ok {
 			never = append(never, fmt.Sprintf("%s: %s", id, reason))
 			continue
 		}
@@ -828,6 +869,7 @@ func (s *Server) handleWorkloadStatus(nodeID domain.NodeID, env *protocol.Envelo
 		return
 	}
 
+	s.settleOutputs(current.Workload, &payload.Status)
 	wrec, _ := s.Workloads.UpdateStatus(payload.Status)
 	s.persistWorkloadRecord(wrec)
 	switch payload.Status.State {

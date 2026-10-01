@@ -58,9 +58,14 @@ func nodeFits(rec *NodeRecord, capability domain.CapabilityName, req domain.Reso
 // what is running right now, so a busy node failing them means "queue",
 // not "reject". A node that declares no total memory falls back to its
 // live free memory, as before.
-func couldEverFit(rec *NodeRecord, capability domain.CapabilityName, req domain.ResourceRequirements) (bool, string) {
+func couldEverFit(rec *NodeRecord, capability domain.CapabilityName, req domain.ResourceRequirements, features ...string) (bool, string) {
 	if !rec.HasCapability(capability) {
 		return false, fmt.Sprintf("does not declare capability %q", capability)
+	}
+	for _, f := range features {
+		if !rec.hasAgentFeature(f) {
+			return false, fmt.Sprintf("agent too old: lacks %q (update it)", f)
+		}
 	}
 	if req.MinCPUCores > 0 {
 		cores, ok := domain.StaticCapacity(rec.Resources, domain.ResourceCPUCores)

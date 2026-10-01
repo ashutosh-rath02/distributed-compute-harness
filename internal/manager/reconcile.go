@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"home-harness/internal/domain"
-	"home-harness/internal/protocol"
 )
 
 // defaultReconcileInterval is used when Config.ReconcileInterval is unset
@@ -45,13 +44,19 @@ const restartHealthyRunThreshold = 5 * time.Minute
 func (s *Server) reconcileWorkloads(ctx context.Context) {
 	ticker := time.NewTicker(s.cfg.ReconcileInterval)
 	defer ticker.Stop()
+	gc := time.NewTicker(time.Hour)
+	defer gc.Stop()
+	s.collectArtifacts()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-gc.C:
+			s.collectArtifacts()
 		case <-ticker.C:
 			s.reconcileOnce(ctx)
 			s.dispatchQueued(ctx) // also catches requeue backoffs expiring
+			s.sweepGrants()
 		case <-s.dispatchKick:
 			s.dispatchQueued(ctx)
 		}
@@ -91,7 +96,7 @@ func (s *Server) restartWorkload(ctx context.Context, rec WorkloadRecord) {
 		restartTarget = rec.Workload.Target
 	}
 	s.placeMu.Lock()
-	targetRec, resolvedTarget, err := s.resolveWorkloadTarget(restartTarget, rec.Workload.EffectiveCapability(), rec.Workload.Requirements)
+	targetRec, resolvedTarget, err := s.resolveWorkloadTarget(restartTarget, rec.Workload.EffectiveCapability(), rec.Workload.Requirements, requiredFeatures(rec.Workload)...)
 	if err != nil {
 		s.placeMu.Unlock()
 		// No eligible node right now (e.g. right after a manager restart,
@@ -111,7 +116,7 @@ func (s *Server) restartWorkload(ctx context.Context, rec WorkloadRecord) {
 	newRec, _ = s.Workloads.Get(newRec.Workload.ID) // re-fetch to persist the NextRestartAt just set
 	s.persistWorkloadRecord(newRec)
 
-	s.send(ctx, targetRec.Conn, protocol.MsgWorkloadAssign, domain.ManagerNodeID, resolvedTarget, protocol.WorkloadAssignPayload{Workload: newRec.Workload})
+	s.assign(ctx, targetRec.Conn, newRec.Workload)
 	log.Printf("workload.restarted: %s on %s (attempt %d)", newRec.Workload.ID, resolvedTarget, newRec.Restart.Count)
 	s.publish(domain.EventWorkloadAssigned, resolvedTarget, map[string]any{
 		"workloadId":   string(newRec.Workload.ID),

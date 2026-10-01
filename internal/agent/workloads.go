@@ -30,7 +30,17 @@ func (a *Agent) handleWorkloadAssign(ctx context.Context, conn domain.Conn, env 
 		return
 	}
 
-	err := a.executor.Start(ctx, wl, func(status domain.WorkloadStatus) {
+	var xfer ArtifactTransfer
+	if wl.HasFiles() {
+		var terr error
+		if xfer, terr = a.artifactTransfer(wl.ID, payload.ArtifactToken); terr != nil {
+			a.sendWorkloadStatus(ctx, conn, domain.WorkloadStatus{
+				ID: wl.ID, Target: wl.Target, State: domain.WorkloadFailed, Error: "workload files: " + terr.Error(),
+			})
+			return
+		}
+	}
+	err := a.executor.StartWithFiles(ctx, wl, xfer, func(status domain.WorkloadStatus) {
 		a.sendWorkloadStatus(ctx, conn, status)
 	})
 	if err != nil {

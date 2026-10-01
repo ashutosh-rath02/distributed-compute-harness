@@ -47,6 +47,8 @@
     border-radius: 6px; border: 1px solid color-mix(in srgb, CanvasText 25%, transparent);
     background: Field; color: FieldText;
   }
+  #fileArgs { min-height: 60px; margin-top: 4px; }
+  button.download { margin-top: 6px; padding: 4px 10px; font-size: 0.8rem; }
   .error { color: #f85149; font-size: 0.85rem; margin-top: 10px; }
   .chip { display: inline-block; font-size: 0.72rem; padding: 1px 7px; margin: 2px 4px 0 0; border-radius: 9px; background: color-mix(in srgb, #2f81f7 18%, transparent); }
   .note { display: block; font-size: 0.76rem; color: #d29922; margin-top: 3px; }
@@ -132,6 +134,24 @@
     <p class="hint">For CPU pulse, open Windows Task Manager &gt; Performance &gt; CPU before dispatching.</p>
     <div id="taskError" class="error"></div>
     <div id="taskProgress" class="task-state"></div>
+  </div>
+
+  <h2>Run a task with files</h2>
+  <div class="card">
+    <label for="fileTarget">Compute node</label>
+    <select id="fileTarget"><option value="">Auto-select</option></select>
+    <label for="fileCommand">Program</label>
+    <input id="fileCommand" placeholder="powershell, python, sh ..." autocomplete="off">
+    <label for="fileArgs">Arguments, one per line (not a shell: no quoting needed)</label>
+    <textarea id="fileArgs" rows="3" placeholder="-NoProfile&#10;-File&#10;job.ps1"></textarea>
+    <label for="fileInputs">Input files (placed in the task's working folder)</label>
+    <input id="fileInputs" type="file" multiple>
+    <label for="fileOutputs">Output files the task must create, comma-separated</label>
+    <input id="fileOutputs" placeholder="result.txt, out/report.csv" autocomplete="off">
+    <button id="runFiles">Upload and run</button>
+    <p class="hint">The program runs inside its own folder holding the inputs, so run scripts through their interpreter. Outputs come back here to download.</p>
+    <div id="fileError" class="error"></div>
+    <div id="fileProgress" class="task-state"></div>
   </div>
 
   <h2>Recent workloads</h2>
@@ -426,13 +446,15 @@
   }
 
   function renderTargetOptions(nodes) {
-    const select = document.getElementById("taskTarget");
-    const previous = select.value;
-    select.innerHTML = '<option value="">Auto-select by requirements</option>'
-      + nodes.map((n) => '<option value="' + escapeHtml(n.nodeId) + '"'
-        + (n.state !== "READY" ? " disabled" : "") + ">"
-        + escapeHtml(n.name || n.nodeId) + " (" + escapeHtml(n.state) + ")</option>").join("");
-    if ([...select.options].some((o) => o.value === previous && !o.disabled)) select.value = previous;
+    for (const id of ["taskTarget", "fileTarget"]) {
+      const select = document.getElementById(id);
+      const previous = select.value;
+      select.innerHTML = '<option value="">Auto-select by requirements</option>'
+        + nodes.map((n) => '<option value="' + escapeHtml(n.nodeId) + '"'
+          + (n.state !== "READY" ? " disabled" : "") + ">"
+          + escapeHtml(n.alias || n.name || n.nodeId) + " (" + escapeHtml(n.state) + ")</option>").join("");
+      if ([...select.options].some((o) => o.value === previous && !o.disabled)) select.value = previous;
+    }
   }
 
   async function refreshWorkloads() {
@@ -463,11 +485,50 @@
           + escapeHtml(w.target || "-") + '</td><td><span class="' + stateClass(w.state) + '">'
           + escapeHtml(w.state) + "</span></td><td><div class=\"output\">"
           + escapeHtml((w.stdout || w.stderr || w.error || (w.exitCode == null ? "-" : "exit " + w.exitCode)).trim())
-          + "</div></td></tr>").join("")
+          + "</div>" + outputButtons(w) + "</td></tr>").join("")
         + "</tbody></table>";
     } catch (e) {
       document.getElementById("workloads").innerHTML = '<p class="error">Failed to load workloads.</p>';
     }
+  }
+
+  // Download buttons for a workload's delivered output files.
+  function outputButtons(w) {
+    return (w.outputFiles || []).map((o) =>
+      '<button class="download" data-sha="' + escapeHtml(o.sha256) + '" data-name="' + escapeHtml(o.name) + '">Download '
+        + escapeHtml(o.name) + " (" + escapeHtml(fmtBytes(o.size)) + ")</button>").join(" ");
+  }
+
+  // Outputs come from agents and this page holds the operator credential:
+  // fetch with the session header, force an opaque type, and only ever
+  // save the blob — never open or navigate to it (a blob: URL would
+  // inherit this page's origin).
+  async function downloadArtifact(sha, name) {
+    const resp = await api("/artifacts/" + encodeURIComponent(sha) + "?name=" + encodeURIComponent(name));
+    if (!resp.ok) throw new Error((await resp.text()).trim() || resp.statusText);
+    const blob = new Blob([await resp.arrayBuffer()], {type: "application/octet-stream"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name.split("/").pop();
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  }
+
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest && event.target.closest("button.download");
+    if (!button) return;
+    downloadArtifact(button.dataset.sha, button.dataset.name).catch((e) => alert("Download failed: " + e));
+  });
+
+  // A file name the manager accepts (letters, digits, . _ -), from
+  // whatever the picked file is called.
+  function safeFileName(name) {
+    const cleaned = name.replace(/[^A-Za-z0-9._-]/g, "_").replace(/\.+$/, "");
+    return (cleaned || "file").slice(0, 64);
   }
 
   function updateSummary() {
@@ -618,6 +679,49 @@
         progress.textContent = status.state + (status.target ? " on " + status.target : "")
           + (status.stdout ? "\nOutput: " + status.stdout.trim() : "")
           + (status.stderr ? "\nError output: " + status.stderr.trim() : "");
+        if (["COMPLETED", "FAILED", "CANCELED"].includes(status.state)) break;
+      }
+      refreshWorkloads();
+    } catch (e) {
+      error.textContent = String(e);
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  document.getElementById("runFiles").addEventListener("click", async () => {
+    const button = document.getElementById("runFiles");
+    const error = document.getElementById("fileError");
+    const progress = document.getElementById("fileProgress");
+    error.textContent = "";
+    const command = document.getElementById("fileCommand").value.trim();
+    if (!command) { error.textContent = "Enter the program to run."; return; }
+    const args = document.getElementById("fileArgs").value.split("\n").map((s) => s.trim()).filter((s) => s);
+    const outputs = document.getElementById("fileOutputs").value.split(",").map((s) => s.trim()).filter((s) => s);
+    const files = Array.from(document.getElementById("fileInputs").files || []);
+    button.disabled = true;
+    try {
+      const inputs = [];
+      for (const f of files) {
+        progress.textContent = "Uploading " + f.name + "...";
+        const resp = await api("/artifacts", {method: "POST", headers: {"Content-Type": "application/octet-stream"}, body: f});
+        const text = await resp.text();
+        if (!resp.ok) throw new Error(f.name + ": " + (text.trim() || resp.statusText));
+        inputs.push({name: safeFileName(f.name), sha256: JSON.parse(text).sha256});
+      }
+      const request = {target: document.getElementById("fileTarget").value, command, args, inputs, outputs};
+      const resp = await api("/workloads", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(request)});
+      const text = await resp.text();
+      if (!resp.ok) throw new Error(text.trim() || resp.statusText);
+      const workload = JSON.parse(text);
+      progress.textContent = workload.state + " (" + workload.id + ")";
+      for (let attempt = 0; attempt < 600; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        const status = await (await api("/workloads/" + encodeURIComponent(workload.id))).json();
+        progress.textContent = status.state + (status.target ? " on " + status.target : "")
+          + (status.error ? "\nError: " + status.error : "")
+          + (status.stdout ? "\nOutput: " + status.stdout.trim() : "")
+          + ((status.outputFiles || []).length ? "\nFiles ready below in Recent workloads." : "");
         if (["COMPLETED", "FAILED", "CANCELED"].includes(status.state)) break;
       }
       refreshWorkloads();

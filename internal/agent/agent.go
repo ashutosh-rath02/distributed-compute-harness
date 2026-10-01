@@ -38,6 +38,10 @@ type Config struct {
 	Discoverer   domain.Discoverer
 	PairingToken string
 	IdentityDir  string
+	// WorkDir holds the working directories of workloads that declare
+	// files (cmd/agent's -work-dir). Empty uses defaultWorkRoot. Never
+	// put it inside IdentityDir.
+	WorkDir      string
 	Name         string
 	AgentVersion string
 
@@ -158,7 +162,14 @@ func New(transport domain.Transport, cfg Config) (*Agent, error) {
 	if cfg.WorkloadSlots < 1 {
 		cfg.WorkloadSlots = defaultSlots()
 	}
+	if cfg.WorkDir == "" {
+		cfg.WorkDir = defaultWorkRoot(id.NodeID)
+	}
+	if within(cfg.WorkDir, cfg.IdentityDir) {
+		return nil, fmt.Errorf("agent: -work-dir %s must not be inside the identity directory %s", cfg.WorkDir, cfg.IdentityDir)
+	}
 	a := &Agent{cfg: cfg, transport: transport, identity: id, startedAt: time.Now(), executor: NewExecutorWithSlots(cfg.WorkloadSlots), binaryHash: binaryHash}
+	a.executor.SetWorkRoot(cfg.WorkDir)
 	switch cfg.HostFingerprint {
 	case "":
 		a.hostFingerprint, a.hostFingerprintSource = sysinfo.HostFingerprint(context.Background())
@@ -192,6 +203,10 @@ func (a *Agent) getCurrentManagerAddr() string {
 // (capped at MaxReconnectBackoff) instead of hammering an unreachable
 // manager at a fixed rate forever.
 func (a *Agent) Run(ctx context.Context) error {
+	// Left over from a crash or kill. Here, not in New: cmd/agent builds
+	// the Agent before taking the instance lock, and a standby copy must
+	// not clear the running one's directories.
+	cleanWorkRoot(a.cfg.WorkDir)
 	backoff := a.cfg.ReconnectBackoff
 	resetThreshold := 3 * a.cfg.HeartbeatInterval
 
@@ -327,7 +342,7 @@ func (a *Agent) buildManifest(ctx context.Context) domain.Manifest {
 		Capabilities: capabilities,
 		// Lets the manager tell this build apart from agents that can only
 		// download the legacy /agent-binary route (manager/selfupdate.go).
-		AgentFeatures: []string{domain.FeatureSelfUpdatePath},
+		AgentFeatures: []string{domain.FeatureSelfUpdatePath, domain.FeatureArtifacts},
 		// The manager reserves this many concurrent workloads for us.
 		WorkloadSlots: a.executor.Slots(),
 	}

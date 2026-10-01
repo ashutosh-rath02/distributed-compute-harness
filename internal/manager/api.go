@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -95,6 +96,10 @@ func (s *Server) toNodeView(rec *NodeRecord, relations map[domain.NodeID]hostRel
 //	GET  /workloads                 list all known workloads
 //	GET  /workloads/{id}             one workload's request + status
 //	POST /workloads/{id}/cancel      request cancellation of a running workload
+//	POST /artifacts                  store a file (raw body; optional X-Artifact-SHA256) for workload inputs (artifacts.go)
+//	GET  /artifacts                  list stored files and store usage
+//	GET  /artifacts/{sha}[?name=]    download a stored file (always as an attachment)
+//	DELETE /artifacts/{sha}          delete a stored file no live workload needs
 //
 // It is a thin adapter over Registry/SendCommand/Events — the manager's
 // core logic has no HTTP dependency of its own.
@@ -133,6 +138,10 @@ func (s *Server) NewHTTPHandler() http.Handler {
 	mux.HandleFunc("POST /login", s.apiLogin)
 	mux.HandleFunc("PUT /nodes/{id}/meta", s.apiPutNodeMeta)
 	mux.HandleFunc("GET /audit", s.apiListAudit)
+	mux.HandleFunc("POST /artifacts", s.apiPostArtifact)
+	mux.HandleFunc("GET /artifacts", s.apiListArtifacts)
+	mux.HandleFunc("GET /artifacts/{sha}", s.apiGetArtifact)
+	mux.HandleFunc("DELETE /artifacts/{sha}", s.apiDeleteArtifact)
 	// Host check and CSRF protection first (apiguard.go), then operator
 	// authentication (operatorauth.go) — browser defenses and the
 	// credential check are independent layers.
@@ -328,6 +337,12 @@ type workloadView struct {
 	Error         string                      `json:"error,omitempty"`
 	StartedAt     time.Time                   `json:"startedAt,omitempty"`
 	FinishedAt    time.Time                   `json:"finishedAt,omitempty"`
+	// Inputs and Outputs are the files the workload declared (as
+	// submitted); OutputFiles are the outputs it actually delivered,
+	// downloadable from GET /artifacts/{sha}.
+	Inputs      []domain.ArtifactRef `json:"inputs,omitempty"`
+	Outputs     []string             `json:"outputs,omitempty"`
+	OutputFiles []domain.ArtifactRef `json:"outputFiles,omitempty"`
 }
 
 // exitCode returns a pointer to the process's actual exit code, or nil if
@@ -373,6 +388,9 @@ func toWorkloadView(rec WorkloadRecord) workloadView {
 		Error:               rec.Status.Error,
 		StartedAt:           rec.Status.StartedAt,
 		FinishedAt:          rec.Status.FinishedAt,
+		Inputs:              rec.Workload.Inputs,
+		Outputs:             rec.Workload.Outputs,
+		OutputFiles:         rec.Status.Outputs,
 	}
 	// NextRestartAt is only meaningful while the reconciler would actually
 	// act on it — once a workload leaves restart eligibility (e.g. CANCELED
@@ -399,11 +417,18 @@ type workloadRequest struct {
 	Params        map[string]string           `json:"params,omitempty"`
 	Requirements  domain.ResourceRequirements `json:"requirements,omitempty"`
 	RestartPolicy string                      `json:"restartPolicy,omitempty"`
+	// Inputs name stored artifacts (POST /artifacts) to place in the
+	// workload's working directory; Outputs are files it must leave there.
+	Inputs []struct {
+		Name   string `json:"name"`
+		SHA256 string `json:"sha256"`
+	} `json:"inputs,omitempty"`
+	Outputs []string `json:"outputs,omitempty"`
 }
 
 func (s *Server) apiPostWorkload(w http.ResponseWriter, r *http.Request) {
 	var req workloadRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -422,9 +447,18 @@ func (s *Server) apiPostWorkload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	wl, err := s.SubmitWorkload(r.Context(), req.Target, req.Command, req.Args, domain.CapabilityName(req.Capability), req.Params, req.Requirements, restartPolicy)
+	spec := WorkloadSpec{
+		Target: req.Target, Command: req.Command, Args: req.Args, Capability: domain.CapabilityName(req.Capability),
+		Params: req.Params, Requirements: req.Requirements, RestartPolicy: restartPolicy, Outputs: req.Outputs,
+	}
+	for _, in := range req.Inputs {
+		spec.Inputs = append(spec.Inputs, domain.ArtifactRef{Name: in.Name, SHA256: in.SHA256})
+	}
+	wl, err := s.Submit(r.Context(), spec)
 	if err != nil {
 		switch {
+		case errors.Is(err, ErrInvalidWorkload):
+			http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		case errors.Is(err, ErrNodeNotConnected), errors.Is(err, ErrNoReadyNode), errors.Is(err, ErrNoEligibleNode):
 			http.Error(w, err.Error(), http.StatusConflict)
 		default:
@@ -436,6 +470,7 @@ func (s *Server) apiPostWorkload(w http.ResponseWriter, r *http.Request) {
 	// secrets, and truncating them wouldn't remove those.
 	s.audit(domain.AuditSecurity, "workload.submitted", wl.Target, actorFrom(r.Context()), map[string]any{
 		"workloadId": string(wl.ID), "command": wl.Command, "capability": string(wl.EffectiveCapability()), "args": len(wl.Args),
+		"inputs": len(wl.Inputs), "outputs": len(wl.Outputs),
 	})
 	// The workload plus its state: QUEUED when every eligible node is full
 	// right now (it starts as soon as one has room), else PENDING.
