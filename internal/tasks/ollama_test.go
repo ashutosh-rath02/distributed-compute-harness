@@ -25,6 +25,7 @@ type fakeOllama struct {
 	chunks  []string
 	delay   time.Duration
 	prompts []string
+	sent    []string // the model names generate requests named
 }
 
 func (f *fakeOllama) setModels(m ...string) { f.mu.Lock(); f.models = m; f.mu.Unlock() }
@@ -52,6 +53,7 @@ func (f *fakeOllama) server(t *testing.T) *httptest.Server {
 			json.NewDecoder(r.Body).Decode(&req)
 			f.mu.Lock()
 			f.prompts = append(f.prompts, req.Prompt)
+			f.sent = append(f.sent, req.Model)
 			f.mu.Unlock()
 			known := false
 			for _, m := range models {
@@ -137,7 +139,7 @@ func TestGenerateReportsAMissingModelAndHonorsCancel(t *testing.T) {
 	srv := f.server(t)
 	h, _ := NewRegistry(Options{OllamaURL: srv.URL}).Lookup("llm.generate")
 	env, _, _ := generateEnv(t, map[string]string{"model": "nope", "prompt": "x"}, nil)
-	if err := h.Run(context.Background(), env); err == nil || !strings.Contains(err.Error(), `model "nope" not found`) {
+	if err := h.Run(context.Background(), env); err == nil || !strings.Contains(err.Error(), `"nope" isn't on this device`) {
 		t.Fatalf("missing model: %v", err)
 	}
 	env, stdout, _ := generateEnv(t, map[string]string{"model": "m", "prompt": "x"}, nil)
@@ -153,7 +155,7 @@ func TestGenerateReportsAMissingModelAndHonorsCancel(t *testing.T) {
 func TestOllamaAvailabilityAndModelAttributes(t *testing.T) {
 	f := &fakeOllama{}
 	srv := f.server(t)
-	reg := NewRegistry(Options{OllamaURL: srv.URL})
+	reg := NewRegistry(Options{OllamaURL: srv.URL, tagsTTL: -1})
 	names := func() []string {
 		var out []string
 		for _, c := range reg.Capabilities(context.Background()) {
@@ -205,5 +207,20 @@ func TestNormalizeOllamaURL(t *testing.T) {
 	t.Setenv("OLLAMA_HOST", "0.0.0.0:9999")
 	if got := NormalizeOllamaURL(""); got != "http://127.0.0.1:9999" {
 		t.Fatalf("from OLLAMA_HOST: %q", got)
+	}
+}
+
+// Placement matches normalized names; Ollama must get the name exactly
+// as it listed it.
+func TestGenerateSendsTheListedModelName(t *testing.T) {
+	f := &fakeOllama{models: []string{"HF.co/Org/Repo:Q4"}, chunks: []string{"ok"}}
+	srv := f.server(t)
+	h, _ := NewRegistry(Options{OllamaURL: srv.URL}).Lookup("llm.generate")
+	env, _, _ := generateEnv(t, map[string]string{"model": "hf.co/org/repo:q4", "prompt": "x"}, nil)
+	if err := h.Run(context.Background(), env); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.sent) != 1 || f.sent[0] != "HF.co/Org/Repo:Q4" {
+		t.Fatalf("sent %v, want the listed name", f.sent)
 	}
 }

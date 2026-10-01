@@ -11,6 +11,7 @@ import (
 	"context"
 	"io"
 	"sort"
+	"time"
 
 	"home-harness/internal/catalog"
 	"home-harness/internal/domain"
@@ -50,6 +51,8 @@ type Options struct {
 	// OllamaURL is where this device's Ollama listens (the device owner's
 	// setting, never the manager's). Empty means the default local one.
 	OllamaURL string
+
+	tagsTTL time.Duration // how long Ollama's model list is reused (tests shorten it)
 }
 
 // Registry is one agent's set of handlers.
@@ -77,6 +80,9 @@ func Builtins() *Registry { return &Registry{handlers: builtinHandlers()} }
 func NewRegistry(opts Options) *Registry {
 	r := Builtins()
 	o := newOllama(opts.OllamaURL)
+	if opts.tagsTTL != 0 {
+		o.ttl = opts.tagsTTL
+	}
 	r.handlers["llm.generate"] = ollamaGenerate{o}
 	r.handlers["llm.inventory"] = ollamaInventory{o}
 	return r

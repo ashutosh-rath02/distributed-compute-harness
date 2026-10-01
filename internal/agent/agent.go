@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"home-harness/internal/domain"
@@ -144,6 +145,7 @@ type Agent struct {
 	// advertised is what the manager was last told this agent can run.
 	advMu      sync.Mutex
 	advertised []domain.Capability
+	probeLoops atomic.Int32 // running capability probes: one per live connection
 }
 
 // New loads (or generates, on first run) the agent's identity and returns
@@ -289,9 +291,14 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 	log.Printf("agent %s: registered with manager", a.identity.NodeID)
 
 	errCh := make(chan error, 2)
+	// connCtx ends with this connection, so loops that would otherwise
+	// only stop at agent shutdown (the capability probe) don't pile up,
+	// one per reconnect.
+	connCtx, stop := context.WithCancel(ctx)
+	defer stop()
 	go a.heartbeatLoop(ctx, conn, errCh)
 	go a.receiveLoop(ctx, conn, errCh)
-	go a.capabilityLoop(ctx, conn)
+	go a.capabilityLoop(connCtx, conn)
 
 	select {
 	case err := <-errCh:
@@ -502,6 +509,8 @@ func (a *Agent) capabilityLoop(ctx context.Context, conn domain.Conn) {
 	if a.cfg.CapabilityProbeInterval < 0 {
 		return
 	}
+	a.probeLoops.Add(1)
+	defer a.probeLoops.Add(-1)
 	tick := time.NewTicker(a.cfg.CapabilityProbeInterval)
 	defer tick.Stop()
 	for {

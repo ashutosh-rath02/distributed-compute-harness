@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"home-harness/internal/catalog"
@@ -33,10 +34,19 @@ const MaxContextBytes = 32 << 10
 type ollama struct {
 	base   string
 	client *http.Client
+
+	// One model-list lookup serves a whole probe (Available, Attributes)
+	// and the runs right after it: fewer requests, no chance of a probe
+	// seeing the list in one call and not in the next.
+	ttl       time.Duration
+	mu        sync.Mutex
+	cachedAt  time.Time
+	cached    []ollamaModel
+	cachedErr error
 }
 
 func newOllama(raw string) *ollama {
-	return &ollama{base: NormalizeOllamaURL(raw), client: &http.Client{}}
+	return &ollama{base: NormalizeOllamaURL(raw), client: &http.Client{}, ttl: 3 * time.Second}
 }
 
 // NormalizeOllamaURL turns what people put in OLLAMA_HOST into a URL to
@@ -80,6 +90,21 @@ type ollamaModel struct {
 }
 
 func (o *ollama) tags(ctx context.Context) ([]ollamaModel, error) {
+	o.mu.Lock()
+	if !o.cachedAt.IsZero() && time.Since(o.cachedAt) < o.ttl {
+		models, err := o.cached, o.cachedErr
+		o.mu.Unlock()
+		return models, err
+	}
+	o.mu.Unlock()
+	models, err := o.fetchTags(ctx)
+	o.mu.Lock()
+	o.cached, o.cachedErr, o.cachedAt = models, err, time.Now()
+	o.mu.Unlock()
+	return models, err
+}
+
+func (o *ollama) fetchTags(ctx context.Context) ([]ollamaModel, error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, o.base+"/api/tags", nil)
@@ -166,8 +191,24 @@ func (g ollamaGenerate) Run(ctx context.Context, env Env) error {
 	if v, _ := strconv.Atoi(env.Params["seed"]); v > 0 {
 		options["seed"] = v
 	}
+	// Placement matched the normalized name; Ollama gets the exact name it
+	// listed (its own case and tag).
+	model := env.Params["model"]
+	if models, err := g.o.tags(ctx); err == nil {
+		want := catalog.NormalizeModel(model)
+		found := false
+		for _, m := range models {
+			if catalog.NormalizeModel(m.Name) == want {
+				model, found = m.Name, true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("model %q isn't on this device any more", env.Params["model"])
+		}
+	}
 	body, _ := json.Marshal(map[string]any{
-		"model": env.Params["model"], "prompt": prompt, "system": env.Params["system"], "stream": true, "options": options,
+		"model": model, "prompt": prompt, "system": env.Params["system"], "stream": true, "options": options,
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, g.o.base+"/api/generate", bytes.NewReader(body))
 	if err != nil {
