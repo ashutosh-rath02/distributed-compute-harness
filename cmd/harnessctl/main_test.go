@@ -1,7 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
@@ -119,5 +124,35 @@ func TestParseTypedAllowsFlagsAfterParameters(t *testing.T) {
 	}
 	if strings.Join(pos, " ") != "image.resize width=800 format=png" || *in != "a.jpg" || *rt != "archive.zip" {
 		t.Fatalf("pos %v in %q reduce-type %q", pos, *in, *rt)
+	}
+}
+
+// map's own -type switches to typed parameters; a raw command's own
+// "-type f" (find) must stay part of that command.
+func TestMapKeepsARawCommandsFlagsAndParsesTypedJobs(t *testing.T) {
+	var bodies []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var b map[string]any
+		json.NewDecoder(r.Body).Decode(&b)
+		bodies = append(bodies, b)
+		w.WriteHeader(http.StatusAccepted)
+		io.WriteString(w, `{"id":"j"}`)
+	}))
+	defer srv.Close()
+	c := newAPIClient(srv.URL, "")
+	if err := cmdMap(c, []string{"-count", "1", "find", ".", "-type", "f"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmdMap(c, []string{"-type", "cpu.burn", "-count", "2", "seconds=3", "-attempts", "2"}); err != nil {
+		t.Fatal(err)
+	}
+	raw := bodies[0]["tasks"].([]any)[0].(map[string]any)
+	if raw["command"] != "find" || fmt.Sprint(raw["args"]) != "[. -type f]" || raw["capability"] != nil {
+		t.Fatalf("raw task %v", raw)
+	}
+	typed := bodies[1]["tasks"].([]any)
+	first := typed[0].(map[string]any)
+	if len(typed) != 2 || first["capability"] != "cpu.burn" || first["params"].(map[string]any)["seconds"] != "3" || bodies[1]["maxAttempts"] != float64(2) {
+		t.Fatalf("typed job %v", bodies[1])
 	}
 }

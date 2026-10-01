@@ -189,6 +189,10 @@ func TestPolicyGatesRawCommandsAndSaysHowToEnable(t *testing.T) {
 	if code, out := postWorkload(t, m.api, map[string]any{"capability": "system.identity"}); code != http.StatusAccepted {
 		t.Fatalf("typed task under the default policy: %d %v", code, out)
 	}
+	// A misspelt type is not something policy could enable: say so.
+	if code, out := postWorkload(t, m.api, map[string]any{"capability": "image.resise"}); code != http.StatusBadRequest || !strings.Contains(out["raw"].(string), "harnessctl tasks") {
+		t.Fatalf("unknown type: %d %v", code, out)
+	}
 	p.Types[domain.CapabilitySystemExecute] = domain.TypePolicy{Enabled: true}
 	putPolicy(t, m.api, p)
 	code, out := postWorkload(t, m.api, map[string]any{"command": cmd, "args": args})

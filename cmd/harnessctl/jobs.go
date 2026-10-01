@@ -40,24 +40,19 @@ func cmdMap(c *apiClient, args []string) error {
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: harnessctl map [-each FILE|GLOB ... | -count N] [-shared FILE ...] [-out NAME ...] [-attempts N] [-reduce \"cmd args\" [-reduce-out NAME ...]] <cmd> [args, with {in} or {i}]")
 	}
-	// A raw command keeps everything after it as its own arguments (which
-	// may look like flags); a typed job takes key=value parameters, so
-	// flags may come after them too.
-	typed := false
-	for _, a := range args {
-		typed = typed || a == "-type" || a == "--type" || strings.HasPrefix(a, "-type=") || strings.HasPrefix(a, "--type=")
+	// A raw command keeps everything after it as its own arguments, even
+	// ones that look like flags ("find . -type f"); only when map's own
+	// -type was given (before the parameters) are later words key=value
+	// parameters, with flags allowed among them.
+	if err := fs.Parse(args); err != nil {
+		return err
 	}
-	var pos []string
-	if typed {
+	pos := fs.Args()
+	if *typ != "" {
 		var err error
-		if pos, err = parseTyped(fs, args); err != nil {
+		if pos, err = parseTyped(fs, pos); err != nil {
 			return err
 		}
-	} else {
-		if err := fs.Parse(args); err != nil {
-			return err
-		}
-		pos = fs.Args()
 	}
 	if len(pos) < 1 && *typ == "" {
 		fs.Usage()

@@ -78,6 +78,9 @@ func (s *Server) checkPolicy(capability domain.CapabilityName) error {
 	if s.policyFor(capability).Enabled {
 		return nil
 	}
+	if _, known := catalog.Lookup(capability); !known && !catalog.IsRaw(capability) {
+		return fmt.Errorf("%w: %q is not a task type this manager knows — see \"harnessctl tasks\"", ErrInvalidWorkload, capability)
+	}
 	if catalog.IsRaw(capability) {
 		return fmt.Errorf("%w: raw %s is off; it is an advanced opt-in — turn it on with \"harnessctl policy type %s on\" (optionally only for labelled devices: \"harnessctl policy type %s labels raw=ok\"), or in the dashboard's Policy section", ErrPolicy, capability, capability, capability)
 	}
