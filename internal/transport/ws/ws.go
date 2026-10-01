@@ -63,7 +63,7 @@ func (t *Transport) Dial(ctx context.Context, addr string) (domain.Conn, error) 
 	if err != nil {
 		return nil, fmt.Errorf("ws: dial %s: %w", addr, err)
 	}
-	return &conn{ws: c, remote: addr}, nil
+	return &conn{ws: Limit(c), remote: addr}, nil
 }
 
 // Handle registers an additional plain HTTP handler at pattern, served on
@@ -114,7 +114,7 @@ func (t *Transport) ListenOn(ctx context.Context, ln net.Listener) <-chan domain
 			return
 		}
 		select {
-		case conns <- &conn{ws: c, remote: r.RemoteAddr}:
+		case conns <- &conn{ws: Limit(c), remote: r.RemoteAddr}:
 		case <-ctx.Done():
 			c.Close(websocket.StatusGoingAway, "server shutting down")
 		}
@@ -131,6 +131,21 @@ func (t *Transport) ListenOn(ctx context.Context, ln net.Listener) <-chan domain
 	go server.Serve(ln)
 
 	return conns
+}
+
+// MaxMessageBytes bounds one protocol message on any harness connection.
+// The library default (32 KiB) is smaller than legitimate messages: a
+// workload status carries up to 64 KiB each of stdout and stderr
+// (JSON-escaped, so larger), and a job's reduce assignment can name 256
+// input files. A message over the limit ends the connection, so this
+// must stay comfortably above the largest one either side can send.
+const MaxMessageBytes = 4 << 20
+
+// Limit applies MaxMessageBytes to c (every Dial and Accept site, in this
+// package and transport/relay).
+func Limit(c *websocket.Conn) *websocket.Conn {
+	c.SetReadLimit(MaxMessageBytes)
+	return c
 }
 
 // conn adapts a nhooyr.io/websocket connection to domain.Conn, framing each

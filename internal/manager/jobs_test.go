@@ -149,3 +149,36 @@ func TestJobArtifactsStayLiveWhileTheJobRuns(t *testing.T) {
 		t.Fatalf("a finished job keeps artifacts live: %v", live)
 	}
 }
+
+// A big job fans out over several passes, not all in one.
+func TestAdvanceJobsSubmitsAtMostABudgetPerPass(t *testing.T) {
+	r := NewRegistry()
+	readyNode(t, r, "n1", 4)
+	s := newReconcileTestServer(r, NewWorkloadRegistry())
+	s.grants, s.jobs, s.dispatchKick = newGrantTable(), newJobTable(), make(chan struct{}, 1)
+	tasks := make([]domain.TaskSpec, maxAttemptsPerPass+50)
+	for i := range tasks {
+		tasks[i] = domain.TaskSpec{Command: "x"}
+	}
+	s.jobs.put(domain.Job{ID: "big", State: domain.JobRunning, MaxAttempts: 1, Tasks: tasks})
+	attempts := func() int {
+		n := 0
+		for _, as := range s.Workloads.byJob()["big"] {
+			n += len(as)
+		}
+		return n
+	}
+	s.advanceJobs(t.Context())
+	if got := attempts(); got != maxAttemptsPerPass {
+		t.Fatalf("first pass submitted %d attempts, want %d", got, maxAttemptsPerPass)
+	}
+	select {
+	case <-s.dispatchKick:
+	default:
+		t.Fatal("a pass that stopped early must kick the next one")
+	}
+	s.advanceJobs(t.Context())
+	if got := attempts(); got != len(tasks) {
+		t.Fatalf("after two passes: %d attempts, want %d", got, len(tasks))
+	}
+}

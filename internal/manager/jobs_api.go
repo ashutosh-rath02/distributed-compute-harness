@@ -76,8 +76,9 @@ func (s *Server) apiPostJob(w http.ResponseWriter, r *http.Request) {
 func (s *Server) apiListJobs(w http.ResponseWriter, r *http.Request) {
 	jobs := s.jobs.list()
 	out := make([]jobView, 0, len(jobs))
+	all := s.Workloads.byJob() // one scan for the whole list
 	for _, j := range jobs {
-		out = append(out, s.toJobView(j, false))
+		out = append(out, s.jobView(j, all[j.ID], false))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -119,6 +120,7 @@ type jobTaskView struct {
 	Attempts int                  `json:"attempts"`
 	Workload domain.WorkloadID    `json:"workload,omitempty"`
 	Node     domain.NodeID        `json:"node,omitempty"`
+	NodeName string               `json:"nodeName,omitempty"` // the operator's alias, else the agent's name
 	Outputs  []domain.ArtifactRef `json:"outputs,omitempty"`
 	Error    string               `json:"error,omitempty"`
 	Waiting  string               `json:"waiting,omitempty"`
@@ -140,13 +142,30 @@ type jobView struct {
 }
 
 func (s *Server) toJobView(job domain.Job, withTasks bool) jobView {
+	return s.jobView(job, s.Workloads.byJob()[job.ID], withTasks)
+}
+
+func (s *Server) nodeDisplayName(id domain.NodeID) string {
+	if id == "" {
+		return ""
+	}
+	if alias := s.meta.get(id).Alias; alias != "" {
+		return alias
+	}
+	if rec, ok := s.Registry.Get(id); ok {
+		return rec.Node.Name
+	}
+	return ""
+}
+
+func (s *Server) jobView(job domain.Job, byTask map[string][]WorkloadRecord, withTasks bool) jobView {
 	v := jobView{ID: job.ID, Name: job.Name, State: job.State, Error: job.Error, MaxAttempts: job.MaxAttempts, CreatedAt: job.CreatedAt, FinishedAt: job.FinishedAt}
-	byTask := s.Workloads.byJob()[job.ID]
 	view := func(key, name string) jobTaskView {
 		tp := deriveTask(byTask[key], job.MaxAttempts)
 		tv := jobTaskView{Key: key, Name: name, State: tp.state, Attempts: tp.attempts, Outputs: tp.outputs, Error: tp.err}
 		if tp.current != nil {
 			tv.Workload, tv.Node = tp.current.Workload.ID, tp.current.Workload.Target
+			tv.NodeName = s.nodeDisplayName(tv.Node)
 		}
 		if tp.state == taskWaiting && job.State == domain.JobRunning {
 			tv.Waiting = s.jobs.waitingReason(job.ID, key)
@@ -175,7 +194,7 @@ func (s *Server) toJobView(job domain.Job, withTasks bool) jobView {
 	if job.Reduce != nil {
 		rv := view(domain.ReduceTask, job.Reduce.Name)
 		if len(byTask[domain.ReduceTask]) == 0 && job.State == domain.JobRunning {
-			rv.State = "PENDING-TASKS"
+			rv.State = "PENDING_TASKS"
 		}
 		v.Reduce = &rv
 		v.Outputs = rv.Outputs

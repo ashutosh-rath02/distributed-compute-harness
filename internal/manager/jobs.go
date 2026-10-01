@@ -35,6 +35,11 @@ import (
 // a task that reliably takes its device down can't retry forever.
 const maxNodeLostRetries = 5
 
+// maxAttemptsPerPass bounds how many attempts one pass submits, so a
+// 1000-task job doesn't hold the reconcile goroutine (and its fsyncs) for
+// the whole fan-out at once; the pass kicks the next one to continue.
+const maxAttemptsPerPass = 100
+
 type jobTable struct {
 	mu   sync.Mutex
 	jobs map[domain.JobID]*domain.Job
@@ -348,10 +353,11 @@ func (s *Server) advanceJobs(ctx context.Context) {
 		return
 	}
 	attempts := s.Workloads.byJob()
+	budget := maxAttemptsPerPass
 	for _, job := range jobs {
 		switch job.State {
 		case domain.JobRunning:
-			s.advanceJob(ctx, job, attempts[job.ID])
+			s.advanceJob(ctx, job, attempts[job.ID], &budget)
 		case domain.JobCanceled:
 			s.jobs.mu.Lock()
 			pending := s.jobs.sweep[job.ID]
@@ -363,9 +369,12 @@ func (s *Server) advanceJobs(ctx context.Context) {
 			}
 		}
 	}
+	if budget <= 0 {
+		s.kickDispatch() // more to submit: continue right after this pass
+	}
 }
 
-func (s *Server) advanceJob(ctx context.Context, job domain.Job, byTask map[string][]WorkloadRecord) {
+func (s *Server) advanceJob(ctx context.Context, job domain.Job, byTask map[string][]WorkloadRecord, budget *int) {
 	active, failed, canceled := 0, 0, 0
 	var outputs [][]domain.ArtifactRef
 	for i := range job.Tasks {
@@ -373,7 +382,10 @@ func (s *Server) advanceJob(ctx context.Context, job domain.Job, byTask map[stri
 		tp := deriveTask(byTask[key], job.MaxAttempts)
 		switch tp.state {
 		case taskWaiting:
-			s.submitAttempt(ctx, job, key, job.Tasks[i], nil, tp)
+			if *budget > 0 {
+				*budget--
+				s.submitAttempt(ctx, job, key, job.Tasks[i], nil, tp)
+			}
 			active++
 		case taskActive:
 			active++
@@ -405,7 +417,10 @@ func (s *Server) advanceJob(ctx context.Context, job domain.Job, byTask map[stri
 				parts = append(parts, domain.ArtifactRef{Name: domain.ReducePartName(domain.TaskKey(i), o.Name), SHA256: o.SHA256, Size: o.Size})
 			}
 		}
-		s.submitAttempt(ctx, job, domain.ReduceTask, *job.Reduce, parts, rp)
+		if *budget > 0 {
+			*budget--
+			s.submitAttempt(ctx, job, domain.ReduceTask, *job.Reduce, parts, rp)
+		}
 	case taskDone:
 		s.finishJob(job, domain.JobCompleted, "")
 	case taskFailed, taskCanceled:

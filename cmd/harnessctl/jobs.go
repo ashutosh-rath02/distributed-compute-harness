@@ -137,6 +137,7 @@ type jobTaskView struct {
 	Attempts int                  `json:"attempts"`
 	Workload string               `json:"workload"`
 	Node     string               `json:"node"`
+	NodeName string               `json:"nodeName"`
 	Outputs  []domain.ArtifactRef `json:"outputs"`
 	Error    string               `json:"error"`
 	Waiting  string               `json:"waiting"`
@@ -181,7 +182,11 @@ func printTask(t jobTaskView) {
 	if len(t.Outputs) > 0 {
 		files = fmt.Sprintf("%d file(s)", len(t.Outputs))
 	}
-	fmt.Printf("  %-7s %-20s %-10s %-8d %-26s %-10s %s\n", t.Key, truncate(t.Name, 20), t.State, t.Attempts, t.Node, files, detail)
+	node := t.NodeName
+	if node == "" {
+		node = t.Node
+	}
+	fmt.Printf("  %-7s %-20s %-10s %-8d %-26s %-10s %s\n", t.Key, truncate(t.Name, 20), t.State, t.Attempts, truncate(node, 26), files, detail)
 }
 
 func (c *apiClient) cmdJob(id string) error {

@@ -140,7 +140,7 @@ func (t *Transport) Dial(ctx context.Context, addr string) (domain.Conn, error) 
 		dialConn.Close()
 		return nil, fmt.Errorf("relay: ws handshake: %w", err)
 	}
-	return &conn{ws: wsConn, remote: raw.RemoteAddr().String()}, nil
+	return &conn{ws: ws.Limit(wsConn), remote: raw.RemoteAddr().String()}, nil
 }
 
 // conn adapts a nhooyr.io/websocket connection to domain.Conn — the same

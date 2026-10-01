@@ -621,7 +621,7 @@
         const c = j.counts || {};
         const rows = (j.tasks || []).concat(j.reduce ? [j.reduce] : []).map((t) =>
           "<tr><td>" + escapeHtml(t.key) + "</td><td>" + escapeHtml(t.name || "") + '</td><td><span class="' + stateClass(t.state) + '">'
-          + escapeHtml(t.state) + "</span></td><td>" + escapeHtml(String(t.attempts || 0)) + "</td><td>" + escapeHtml(t.node || "-")
+          + escapeHtml(t.state) + "</span></td><td>" + escapeHtml(String(t.attempts || 0)) + "</td><td>" + escapeHtml(t.nodeName || t.node || "-")
           + '</td><td><div class="output">' + escapeHtml(t.error || t.waiting || "") + "</div>" + fileButtons(t.outputs) + "</td></tr>").join("");
         return '<details class="card job" data-job="' + escapeHtml(j.id) + '"' + (openJobs.has(j.id) ? " open" : "") + "><summary>"
           + escapeHtml(j.name || j.id) + ' <span class="' + stateClass(j.state) + '">' + escapeHtml(j.state) + "</span> "
