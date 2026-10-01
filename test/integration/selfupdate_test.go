@@ -39,8 +39,12 @@ func registerRawNodeWithBinaryHash(t *testing.T, addr, name, binaryHash string) 
 
 	manifest := domain.Manifest{
 		SchemaVersion: domain.ManifestSchemaVersion,
-		Node:          domain.Node{Identity: id.Identity, Name: name, BinaryHash: binaryHash},
-		Capabilities:  []domain.Capability{{Name: domain.CapabilitySystemExecute}},
+		Node: domain.Node{Identity: id.Identity, Name: name, BinaryHash: binaryHash,
+			Platform: domain.Platform{OS: "windows", Architecture: "amd64"}},
+		Capabilities: []domain.Capability{{Name: domain.CapabilitySystemExecute}},
+		// Behaves like a current agent build, which follows the
+		// SELF_UPDATE command's per-platform path.
+		AgentFeatures: []string{domain.FeatureSelfUpdatePath},
 	}
 	signature := id.Sign(protocol.RegisterSignedData(pairingToken, id.NodeID))
 	env, err := protocol.NewEnvelope(protocol.MsgRegister, id.NodeID, domain.ManagerNodeID,
@@ -87,15 +91,24 @@ func startManagerWithAgentBinary(t *testing.T, addr, binaryPath string) *manager
 		Addr:             addr,
 		PairingToken:     pairingToken,
 		HeartbeatTimeout: 2 * time.Second,
-		AgentBinaryPath:  binaryPath,
+		AgentBinaries:    dummyWindowsBuild(binaryPath),
 	})
 	transport.Handle("/agent-binary", srv.AgentBinaryHandler())
+	transport.Handle("GET /agent-binaries/{os}/{arch}", srv.AgentBinariesHandler())
 	go func() {
 		if err := srv.Run(ctx); err != nil && err != context.Canceled {
 			t.Logf("manager exited: %v", err)
 		}
 	}()
 	return srv
+}
+
+// dummyWindowsBuild declares a dummy-content test binary as the catalog's
+// windows/amd64 build. Its content has no executable header to detect,
+// so the platform is stated explicitly — as an operator would with
+// -agent-binary os/arch=path.
+func dummyWindowsBuild(path string) []manager.AgentBinary {
+	return []manager.AgentBinary{{OS: "windows", Arch: "amd64", Path: path}}
 }
 
 func writeDummyAgentBinary(t *testing.T, content []byte) (path, hash string) {
@@ -210,8 +223,8 @@ func TestSelfUpdateCommandDispatchedWithCorrectHash(t *testing.T) {
 	})
 
 	rec, _ := srv.Registry.Get(nodeID)
-	if !srv.NeedsUpdate(rec) {
-		t.Fatal("expected NeedsUpdate true for a node with a stale BinaryHash")
+	if status := srv.UpdateStatusFor(rec); status != manager.UpdateAvailable {
+		t.Fatalf("expected an update available for a node with a stale BinaryHash, got %s", status)
 	}
 
 	// Reply to the incoming SELF_UPDATE COMMAND exactly as a real agent's
@@ -240,7 +253,8 @@ func TestSelfUpdateCommandDispatchedWithCorrectHash(t *testing.T) {
 			replyDone <- io.EOF // wrong command name, fail the test below
 			return
 		}
-		if payload.Command.Args["sha256"] != wantHash {
+		// The path names the node's own platform's catalog route.
+		if payload.Command.Args["sha256"] != wantHash || payload.Command.Args["path"] != "/agent-binaries/windows/amd64" {
 			replyDone <- io.EOF
 			return
 		}

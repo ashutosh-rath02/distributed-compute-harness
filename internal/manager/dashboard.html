@@ -177,17 +177,19 @@
     return v.toFixed(1) + " " + units[i];
   }
 
-  let currentBinary = { sha256: "", os: "", architecture: "" };
+  // Join platforms the form offers, and the agent build each installs
+  // (mirrors joinscript.TargetPlatform).
+  const joinPlatforms = { windows: ["windows", "amd64", "Windows"], android: ["linux", "arm64", "Android (Termux)"] };
   let currentNodes = [];
 
   async function refreshNodes() {
     try {
-      const [nodesResp, hashResp] = await Promise.all([
+      const [nodesResp, buildsResp] = await Promise.all([
         fetch("/nodes"),
-        fetch("/agent-binary/hash"),
+        fetch("/agent-binaries"),
       ]);
       const nodes = await nodesResp.json();
-      currentBinary = await hashResp.json();
+      renderPlatformOptions((await buildsResp.json()) || []);
       currentNodes = nodes || [];
       renderNodes(currentNodes);
       renderTargetOptions(currentNodes);
@@ -211,15 +213,10 @@
       return;
     }
     const rows = nodes.map((n) => {
-      // Only compare hashes for a node whose own platform matches what's
-      // currently being served — a Linux node's hash can never equal a
-      // served Windows binary's (or vice versa), regardless of whether
-      // that node is actually up to date, so a cross-platform mismatch
-      // must not be shown as "(outdated)".
-      const samePlatform = currentBinary.os && n.platform
-        && n.platform.os === currentBinary.os && n.platform.architecture === currentBinary.architecture;
-      const outdated = samePlatform && n.binaryHash && n.binaryHash !== currentBinary.sha256
-        ? '<span class="outdated">(outdated)</span>' : "";
+      // updateStatus is the manager's own platform-aware verdict, the
+      // same one POST /nodes/{id}/update acts on.
+      const outdated = n.updateStatus === "available" ? '<span class="outdated">(outdated)</span>'
+        : n.updateStatus === "reinstall-required" ? '<span class="outdated">(reinstall needed)</span>' : "";
       const cpu = n.metrics && n.metrics.cpuPercent != null ? n.metrics.cpuPercent.toFixed(1) + "%" : "-";
       const mem = n.metrics ? fmtBytes(n.metrics.memoryAvailableBytes) : "-";
       // linux/arm64 today always means an Android/Termux node (v5 part
@@ -293,6 +290,22 @@
     }
     refreshRevoked();
   });
+
+  // Disable "Add a device" platforms this manager has no agent build for,
+  // instead of letting an invitation fail (or install the wrong build).
+  function renderPlatformOptions(builds) {
+    const select = document.getElementById("platform");
+    for (const option of select.options) {
+      const [os, arch, label] = joinPlatforms[option.value] || [];
+      const loaded = builds.some((b) => b.os === os && b.architecture === arch);
+      option.disabled = !loaded;
+      option.textContent = label + (loaded ? "" : " (no agent build loaded)");
+    }
+    if (select.selectedOptions[0] && select.selectedOptions[0].disabled) {
+      const firstEnabled = [...select.options].find((o) => !o.disabled);
+      if (firstEnabled) select.value = firstEnabled.value;
+    }
+  }
 
   function renderTargetOptions(nodes) {
     const select = document.getElementById("taskTarget");

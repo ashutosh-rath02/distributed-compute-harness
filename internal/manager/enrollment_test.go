@@ -45,7 +45,7 @@ func TestEnrollmentAPIAndPublicBootstrapDoNotExposePermanentToken(t *testing.T) 
 	}
 	s := NewServer(nil, nil, Config{
 		PairingToken: "permanent-secret", Fingerprint: "fingerprint",
-		AgentBinaryPath: binaryPath, EnrollmentTTL: time.Minute,
+		AgentBinaries: []AgentBinary{{OS: "windows", Arch: "amd64", Path: binaryPath}}, EnrollmentTTL: time.Minute,
 	})
 	api := httptest.NewServer(s.NewHTTPHandler())
 	defer api.Close()
@@ -94,7 +94,7 @@ func TestEnrollmentAPIAndPublicBootstrapDoNotExposePermanentToken(t *testing.T) 
 
 func TestCreateEnrollmentRejectsShellLikeAddress(t *testing.T) {
 	s := NewServer(nil, nil, Config{})
-	s.agentBinaryHash = "hash"
+	s.agents = &agentCatalog{builds: []agentBuild{windowsBuild}}
 	api := httptest.NewServer(s.NewHTTPHandler())
 	defer api.Close()
 	body := []byte(`{"addr":"phone;whoami:7420","platform":"windows"}`)
@@ -110,7 +110,7 @@ func TestCreateEnrollmentRejectsShellLikeAddress(t *testing.T) {
 
 func TestCreateEnrollmentRejectsWrongBinaryPlatform(t *testing.T) {
 	s := NewServer(nil, nil, Config{})
-	s.agentBinaryHash, s.agentBinaryOS, s.agentBinaryArch = "hash", "windows", "amd64"
+	s.agents = &agentCatalog{builds: []agentBuild{windowsBuild}}
 	api := httptest.NewServer(s.NewHTTPHandler())
 	defer api.Close()
 	body := []byte(`{"addr":"192.168.1.10:7420","platform":"android"}`)

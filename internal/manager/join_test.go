@@ -2,41 +2,43 @@ package manager
 
 import "testing"
 
-func TestJoinInfoSecureWithAgentBinaryConfigured(t *testing.T) {
+func TestJoinInfoListsTheCatalog(t *testing.T) {
 	s := &Server{
-		cfg:             Config{Fingerprint: "abc123", PairingToken: "shhh"},
-		agentBinaryHash: "deadbeef",
+		cfg:    Config{Fingerprint: "abc123", PairingToken: "shhh"},
+		agents: &agentCatalog{builds: []agentBuild{windowsBuild, androidBuild}},
 	}
 	info := s.JoinInfo()
-	if info.Fingerprint != "abc123" {
-		t.Errorf("Fingerprint = %q, want %q", info.Fingerprint, "abc123")
+	if info.Fingerprint != "abc123" || info.PairingToken != "shhh" || info.Insecure {
+		t.Fatalf("unexpected credentials in JoinInfo: %+v", info)
 	}
-	if info.PairingToken != "shhh" {
-		t.Errorf("PairingToken = %q, want %q", info.PairingToken, "shhh")
-	}
-	if info.Insecure {
-		t.Error("expected Insecure false when a Fingerprint is configured")
-	}
-	if !info.AgentBinaryAvailable {
-		t.Error("expected AgentBinaryAvailable true when agentBinaryHash is set")
-	}
-	if info.AgentBinarySHA256 != "deadbeef" {
-		t.Errorf("AgentBinarySHA256 = %q, want %q", info.AgentBinarySHA256, "deadbeef")
+	if len(info.AgentBinaries) != 2 || info.AgentBinaries[1].OS != "linux" || info.AgentBinaries[1].SHA256 != "android-hash" ||
+		info.AgentBinaries[1].Path != "/agent-binaries/linux/arm64" {
+		t.Fatalf("expected both catalog builds in JoinInfo, got %+v", info.AgentBinaries)
 	}
 }
 
 func TestJoinInfoInsecureWhenFingerprintEmpty(t *testing.T) {
-	s := &Server{cfg: Config{PairingToken: "shhh"}}
+	s := &Server{cfg: Config{PairingToken: "shhh"}, agents: &agentCatalog{}}
 	info := s.JoinInfo()
 	if !info.Insecure {
 		t.Error("expected Insecure true when Fingerprint is empty")
 	}
+	if info.AgentBinaries == nil || len(info.AgentBinaries) != 0 {
+		t.Errorf("expected an empty (not null) agentBinaries list, got %#v", info.AgentBinaries)
+	}
 }
 
-func TestJoinInfoAgentBinaryUnavailableWhenNotConfigured(t *testing.T) {
-	s := &Server{cfg: Config{Fingerprint: "abc123", PairingToken: "shhh"}}
-	info := s.JoinInfo()
-	if info.AgentBinaryAvailable {
-		t.Error("expected AgentBinaryAvailable false when agentBinaryHash is empty")
+// scriptInfo must hand each onboarding platform its own build — and none
+// at all when that platform has no build loaded, never another
+// platform's (an Android script verifying a Windows hash would install an
+// agent that can't run).
+func TestScriptInfoPicksThePlatformsOwnBuild(t *testing.T) {
+	s := &Server{agents: &agentCatalog{builds: []agentBuild{windowsBuild}}}
+	win := s.scriptInfo("windows")
+	if !win.AgentBinaryAvailable || win.AgentBinarySHA256 != "windows-hash" || win.AgentBinaryPath != "/agent-binaries/windows/amd64" {
+		t.Fatalf("windows: got %+v", win)
+	}
+	if android := s.scriptInfo("android"); android.AgentBinaryAvailable || android.AgentBinarySHA256 != "" {
+		t.Fatalf("android with only a Windows build loaded must have no binary, got %+v", android)
 	}
 }

@@ -56,7 +56,7 @@ func testInternetEnrollmentThroughPublicRelay(t *testing.T, secure bool) {
 	}
 	srv := manager.NewServer(managerTransport, nil, manager.Config{
 		Addr: rawListener.Addr().String(), PairingToken: pairingToken,
-		HeartbeatTimeout: 2 * time.Second, AgentBinaryPath: binaryPath,
+		HeartbeatTimeout: 2 * time.Second, AgentBinaries: dummyWindowsBuild(binaryPath),
 		RelayAddr: rawListener.Addr().String(), RelayToken: privateSession,
 		RelayPublicURL:      public.URL,
 		Fingerprint:         fingerprint,

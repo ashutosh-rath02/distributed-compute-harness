@@ -13,4 +13,25 @@ type Manifest struct {
 	Node          Node         `json:"node"`
 	Resources     []Resource   `json:"resources"`
 	Capabilities  []Capability `json:"capabilities"`
+	// AgentFeatures lists agent-protocol behaviors this agent build
+	// supports, so the manager can treat a mixed-version fleet correctly
+	// instead of assuming every agent is current. Absent (an older agent)
+	// means none: the manager must fall back to legacy behavior. Distinct
+	// from Capabilities, which are workload types a node can execute.
+	AgentFeatures []string `json:"agentFeatures,omitempty"`
+}
+
+// FeatureSelfUpdatePath means the agent downloads a self-update from the
+// path the SELF_UPDATE command names (a per-platform catalog entry),
+// rather than always from the legacy single /agent-binary route.
+const FeatureSelfUpdatePath = "self-update.path"
+
+// HasAgentFeature reports whether m advertises feature.
+func (m Manifest) HasAgentFeature(feature string) bool {
+	for _, f := range m.AgentFeatures {
+		if f == feature {
+			return true
+		}
+	}
+	return false
 }

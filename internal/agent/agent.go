@@ -77,12 +77,14 @@ type Config struct {
 	// already calls to build the main WS transport — not a new trust
 	// mechanism, just reused for a second connection.
 	ManagerFingerprint string
-	// SelfUpdateHTTPClient/SelfUpdateURL optionally override the direct
-	// manager download path. The relay composition root supplies these so
-	// self-update can open a separate relay-mediated HTTP connection while
-	// the agent core remains independent of any concrete transport.
+	// SelfUpdateHTTPClient/SelfUpdateBaseURL optionally override the
+	// direct manager download origin (scheme://current-manager-addr). The
+	// relay composition root supplies these so self-update can open a
+	// separate relay-mediated HTTP connection while the agent core remains
+	// independent of any concrete transport. The path is appended per
+	// SELF_UPDATE command (see selfUpdatePath).
 	SelfUpdateHTTPClient *http.Client
-	SelfUpdateURL        string
+	SelfUpdateBaseURL    string
 }
 
 const defaultAgentVersion = "0.1.0"
@@ -299,6 +301,9 @@ func (a *Agent) buildManifest(ctx context.Context) domain.Manifest {
 		},
 		Resources:    resources,
 		Capabilities: capabilities,
+		// Lets the manager tell this build apart from agents that can only
+		// download the legacy /agent-binary route (manager/selfupdate.go).
+		AgentFeatures: []string{domain.FeatureSelfUpdatePath},
 	}
 }
 

@@ -22,9 +22,13 @@ type nodeView struct {
 	State        domain.NodeState    `json:"state"`
 	LastSeen     time.Time           `json:"lastSeen"`
 	Metrics      domain.RuntimeState `json:"metrics"`
+	// UpdateStatus is computed here, platform-aware (selfupdate.go), so
+	// the dashboard and harnessctl show the same verdict POST
+	// /nodes/{id}/update acts on instead of each re-deriving it.
+	UpdateStatus UpdateStatus `json:"updateStatus"`
 }
 
-func toNodeView(rec *NodeRecord) nodeView {
+func (s *Server) toNodeView(rec *NodeRecord) nodeView {
 	return nodeView{
 		NodeID:       rec.Node.Identity.NodeID,
 		Name:         rec.Node.Name,
@@ -35,6 +39,7 @@ func toNodeView(rec *NodeRecord) nodeView {
 		State:        rec.State,
 		LastSeen:     rec.LastSeen,
 		Metrics:      rec.LastMetrics,
+		UpdateStatus: s.UpdateStatusFor(rec),
 	}
 }
 
@@ -54,7 +59,8 @@ func toNodeView(rec *NodeRecord) nodeView {
 //	GET  /revocations                list revoked node identities
 //	DELETE /revocations/{id}         lift a revocation; the node must then be admitted afresh
 //	POST /nodes/{id}/update          push a self-update if the node isn't already current
-//	GET  /agent-binary/hash          the manager's currently-served agent binary hash
+//	GET  /agent-binaries             the loaded agent-build catalog: [{os, architecture, sha256, path}]
+//	GET  /agent-binary/hash          the legacy primary build's hash/platform (older clients)
 //	GET  /join-info                  what a new node needs to onboard (fingerprint, pairing token, ...)
 //	GET  /join-script                the ready-to-paste onboarding script for ?addr=&platform=
 //	POST /enrollments                create a short-lived LAN or public-relay QR/link invitation
@@ -88,6 +94,7 @@ func (s *Server) NewHTTPHandler() http.Handler {
 	mux.HandleFunc("POST /nodes/{id}/revoke", s.apiRevokeNode)
 	mux.HandleFunc("GET /revocations", s.apiListRevocations)
 	mux.HandleFunc("DELETE /revocations/{id}", s.apiUnrevokeNode)
+	mux.HandleFunc("GET /agent-binaries", s.apiListAgentBinaries)
 	mux.HandleFunc("GET /agent-binary/hash", s.apiGetAgentBinaryHash)
 	mux.HandleFunc("GET /join-info", s.apiGetJoinInfo)
 	mux.HandleFunc("GET /join-script", s.apiGetJoinScript)
@@ -105,7 +112,7 @@ func (s *Server) apiListNodes(w http.ResponseWriter, r *http.Request) {
 	recs := s.Registry.List()
 	views := make([]nodeView, 0, len(recs))
 	for _, rec := range recs {
-		views = append(views, toNodeView(rec))
+		views = append(views, s.toNodeView(rec))
 	}
 	writeJSON(w, http.StatusOK, views)
 }
@@ -116,7 +123,7 @@ func (s *Server) apiGetNode(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "node not found", http.StatusNotFound)
 		return
 	}
-	writeJSON(w, http.StatusOK, toNodeView(rec))
+	writeJSON(w, http.StatusOK, s.toNodeView(rec))
 }
 
 func (s *Server) apiGetNodeResources(w http.ResponseWriter, r *http.Request) {
@@ -177,13 +184,12 @@ func (s *Server) apiPostCommand(w http.ResponseWriter, r *http.Request) {
 }
 
 // apiPostUpdate triggers a self-update (internal/agent/selfupdate.go) on
-// one node, short-circuiting if it's already running the binary this
-// manager currently serves — reuses SendCommand's exact dispatch/wait/
-// timeout machinery via domain.CommandSelfUpdate, so a 200 here means "the
-// agent acknowledged and started," not "the update finished": completion
-// is only observable via the node going OFFLINE and reconnecting with a
-// new BinaryHash (GET /nodes/{id} or the outdated marker harnessctl nodes
-// shows via GET /agent-binary/hash).
+// one node — only when updateTarget says the node's own platform has a
+// different build it can actually fetch. It reuses SendCommand's exact
+// dispatch/wait/timeout machinery via domain.CommandSelfUpdate, so a 200
+// here means "the agent acknowledged and started," not "the update
+// finished": completion is only observable via the node going OFFLINE and
+// reconnecting with a new BinaryHash (its updateStatus turns "current").
 func (s *Server) apiPostUpdate(w http.ResponseWriter, r *http.Request) {
 	nodeID := domain.NodeID(r.PathValue("id"))
 
@@ -192,16 +198,32 @@ func (s *Server) apiPostUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "node not found", http.StatusNotFound)
 		return
 	}
-	if s.agentBinaryHash == "" {
+	if s.agents.empty() {
 		http.Error(w, "manager: self-update disabled (-agent-binary not set)", http.StatusConflict)
 		return
 	}
-	if !s.NeedsUpdate(rec) {
+	status, build := s.updateTarget(rec)
+	switch status {
+	case UpdateCurrent:
 		writeJSON(w, http.StatusOK, map[string]string{"status": "already-up-to-date"})
+		return
+	case UpdateUnknown:
+		if rec.Node.BinaryHash == "" {
+			http.Error(w, "node has not reported its agent binary hash, so there is nothing to compare an update against", http.StatusConflict)
+		} else {
+			http.Error(w, fmt.Sprintf("no agent build for %s/%s is loaded — restart the manager with an -agent-binary for that platform", rec.Node.Platform.OS, rec.Node.Platform.Architecture), http.StatusConflict)
+		}
+		return
+	case UpdateReinstallRequired:
+		http.Error(w, "this agent predates per-platform updates and can only download another platform's build; reinstall it once (e.g. with a fresh invitation), after which it updates normally", http.StatusConflict)
 		return
 	}
 
-	result, err := s.SendCommand(r.Context(), nodeID, domain.CommandSelfUpdate, map[string]string{"sha256": s.agentBinaryHash}, defaultCommandTimeout)
+	// "path" names the per-platform catalog route; an agent from before
+	// per-platform updates ignores it and fetches /agent-binary, which
+	// updateTarget only allows when that serves this same build.
+	result, err := s.SendCommand(r.Context(), nodeID, domain.CommandSelfUpdate,
+		map[string]string{"sha256": build.SHA256, "path": build.downloadPath()}, defaultCommandTimeout)
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrNodeNotConnected):
@@ -214,13 +236,15 @@ func (s *Server) apiPostUpdate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
-// apiGetAgentBinaryHash returns the manager's currently-served agent
-// binary hash (empty string if self-update is disabled) plus its
-// best-effort detected platform — harnessctl and the web dashboard use
-// this once per node listing to flag any node whose last-reported
-// BinaryHash differs *and* whose platform actually matches what's being
-// served (a cross-platform mismatch is expected, not staleness — see
-// binaryplatform.go), without needing a comparison endpoint per node.
+// apiListAgentBinaries returns the loaded agent-build catalog.
+func (s *Server) apiListAgentBinaries(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.agents.views())
+}
+
+// apiGetAgentBinaryHash returns the legacy primary build's hash (empty if
+// no builds are loaded) and platform. Kept for clients that predate the
+// catalog; current clients read GET /agent-binaries, and node listings
+// carry a server-computed updateStatus.
 func (s *Server) apiGetAgentBinaryHash(w http.ResponseWriter, r *http.Request) {
 	goos, arch := s.AgentBinaryPlatform()
 	writeJSON(w, http.StatusOK, map[string]string{

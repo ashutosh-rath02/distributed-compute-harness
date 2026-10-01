@@ -37,7 +37,7 @@ func (a *Agent) handleCommand(ctx context.Context, conn domain.Conn, env *protoc
 			errCh <- fmt.Errorf("send COMMAND_RESULT: %w", err)
 			return
 		}
-		go a.performSelfUpdate(payload.Command.Args["sha256"])
+		go a.performSelfUpdate(payload.Command.Args["sha256"], payload.Command.Args["path"])
 		return
 	}
 

@@ -53,7 +53,7 @@ func joinInfoServer(t *testing.T, body string) *apiClient {
 // or surfaces exactly what Build returns.
 
 func TestCmdJoinPrintsBuildsOutputOnSuccess(t *testing.T) {
-	c := joinInfoServer(t, `{"fingerprint":"abc123","pairingToken":"secret-token","insecure":false,"agentBinaryAvailable":true,"agentBinarySha256":"deadbeef"}`)
+	c := joinInfoServer(t, `{"fingerprint":"abc123","pairingToken":"secret-token","insecure":false,"agentBinaries":[{"os":"windows","architecture":"amd64","sha256":"deadbeef","path":"/agent-binaries/windows/amd64"}]}`)
 
 	out := captureStdout(t, func() {
 		if err := c.cmdJoin(joinscript.ModeLAN, "192.168.10.11:7420", "windows"); err != nil {
@@ -70,7 +70,7 @@ func TestCmdJoinPrintsBuildsOutputOnSuccess(t *testing.T) {
 }
 
 func TestCmdJoinSurfacesBuildValidationErrors(t *testing.T) {
-	c := joinInfoServer(t, `{"fingerprint":"abc123","pairingToken":"secret-token","insecure":false,"agentBinaryAvailable":false}`)
+	c := joinInfoServer(t, `{"fingerprint":"abc123","pairingToken":"secret-token","insecure":false,"agentBinaries":[]}`)
 
 	if err := c.cmdJoin(joinscript.ModeLAN, "192.168.10.11:7420", "windows"); err == nil {
 		t.Fatal("expected cmdJoin to surface joinscript.Build's agent-binary-unavailable error")
@@ -84,7 +84,7 @@ func TestCmdJoinSurfacesBuildValidationErrors(t *testing.T) {
 }
 
 func TestCmdJoinRemoteUsesRelayInfo(t *testing.T) {
-	c := joinInfoServer(t, `{"fingerprint":"abc123","pairingToken":"pair-secret","agentBinaryAvailable":true,"agentBinarySha256":"deadbeef","relayAvailable":true,"relayAddr":"relay.example.com:8420","relayToken":"relay-secret"}`)
+	c := joinInfoServer(t, `{"fingerprint":"abc123","pairingToken":"pair-secret","agentBinaries":[{"os":"windows","architecture":"amd64","sha256":"deadbeef","path":"/agent-binaries/windows/amd64"}],"relayAvailable":true,"relayAddr":"relay.example.com:8420","relayToken":"relay-secret"}`)
 	out := captureStdout(t, func() {
 		if err := c.cmdJoin(joinscript.ModeRemote, "", "windows"); err != nil {
 			t.Fatalf("cmdJoin remote: %v", err)
@@ -94,5 +94,29 @@ func TestCmdJoinRemoteUsesRelayInfo(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected remote output to contain %q, got:\n%s", want, out)
 		}
+	}
+}
+
+// harnessctl must pick the build for the platform it's onboarding — with
+// only a Windows build loaded, an Android join is an error, never a Termux
+// script that downloads (and, its own hash check passing, installs) the
+// Windows binary.
+func TestCmdJoinUsesOnlyTheTargetPlatformsBuild(t *testing.T) {
+	c := joinInfoServer(t, `{"fingerprint":"abc123","pairingToken":"secret-token","agentBinaries":[`+
+		`{"os":"windows","architecture":"amd64","sha256":"aaaa","path":"/agent-binaries/windows/amd64"},`+
+		`{"os":"linux","architecture":"arm64","sha256":"bbbb","path":"/agent-binaries/linux/arm64"}]}`)
+	out := captureStdout(t, func() {
+		if err := c.cmdJoin(joinscript.ModeLAN, "192.168.10.11:7420", "android"); err != nil {
+			t.Fatalf("cmdJoin android: %v", err)
+		}
+	})
+	if !strings.Contains(out, "bbbb") || !strings.Contains(out, "/agent-binaries/linux/arm64") || strings.Contains(out, "aaaa") {
+		t.Errorf("expected the android script to use only the linux/arm64 build, got:\n%s", out)
+	}
+
+	windowsOnly := joinInfoServer(t, `{"fingerprint":"abc123","pairingToken":"secret-token","agentBinaries":[`+
+		`{"os":"windows","architecture":"amd64","sha256":"aaaa","path":"/agent-binaries/windows/amd64"}]}`)
+	if err := windowsOnly.cmdJoin(joinscript.ModeLAN, "192.168.10.11:7420", "android"); err == nil {
+		t.Fatal("expected an android join to fail when only a Windows build is loaded")
 	}
 }

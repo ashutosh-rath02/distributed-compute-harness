@@ -31,6 +31,20 @@ type Info struct {
 	BootstrapURL         string
 }
 
+// TargetPlatform maps an onboarding platform name to the GOOS/GOARCH of
+// the agent build it installs — the one place that mapping lives, so the
+// manager's catalog lookup, invitations, and harnessctl agree. Android
+// agents run under Termux as ordinary GOOS=linux binaries.
+func TargetPlatform(platform string) (goos, arch string, ok bool) {
+	switch platform {
+	case "windows":
+		return "windows", "amd64", true
+	case "android":
+		return "linux", "arm64", true
+	}
+	return "", "", false
+}
+
 type Mode string
 
 const (

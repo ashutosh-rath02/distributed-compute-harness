@@ -13,14 +13,18 @@ import (
 )
 
 type joinInfoView struct {
-	Fingerprint          string `json:"fingerprint"`
-	PairingToken         string `json:"pairingToken"`
-	Insecure             bool   `json:"insecure"`
-	AgentBinaryAvailable bool   `json:"agentBinaryAvailable"`
-	AgentBinarySHA256    string `json:"agentBinarySha256"`
-	RelayAvailable       bool   `json:"relayAvailable"`
-	RelayAddr            string `json:"relayAddr"`
-	RelayToken           string `json:"relayToken"`
+	Fingerprint   string `json:"fingerprint"`
+	PairingToken  string `json:"pairingToken"`
+	Insecure      bool   `json:"insecure"`
+	AgentBinaries []struct {
+		OS           string `json:"os"`
+		Architecture string `json:"architecture"`
+		SHA256       string `json:"sha256"`
+		Path         string `json:"path"`
+	} `json:"agentBinaries"`
+	RelayAvailable bool   `json:"relayAvailable"`
+	RelayAddr      string `json:"relayAddr"`
+	RelayToken     string `json:"relayToken"`
 }
 
 // TestJoinInfoEndpointReturnsConfiguredValues proves GET /join-info (the
@@ -38,7 +42,7 @@ func TestJoinInfoEndpointReturnsConfiguredValues(t *testing.T) {
 		Addr:             addr,
 		PairingToken:     pairingToken,
 		HeartbeatTimeout: 2 * time.Second,
-		AgentBinaryPath:  binaryPath,
+		AgentBinaries:    dummyWindowsBuild(binaryPath),
 		Fingerprint:      "test-fingerprint",
 		RelayAddr:        "relay.example.com:8420",
 		RelayToken:       "relay-secret",
@@ -65,11 +69,9 @@ func TestJoinInfoEndpointReturnsConfiguredValues(t *testing.T) {
 	if info.Insecure {
 		t.Error("expected Insecure false when Fingerprint is configured")
 	}
-	if !info.AgentBinaryAvailable {
-		t.Error("expected AgentBinaryAvailable true when -agent-binary is configured")
-	}
-	if info.AgentBinarySHA256 != wantHash {
-		t.Errorf("AgentBinarySHA256 = %q, want %q", info.AgentBinarySHA256, wantHash)
+	if len(info.AgentBinaries) != 1 || info.AgentBinaries[0].SHA256 != wantHash ||
+		info.AgentBinaries[0].OS != "windows" || info.AgentBinaries[0].Path != "/agent-binaries/windows/amd64" {
+		t.Errorf("expected the configured windows/amd64 build in agentBinaries, got %+v", info.AgentBinaries)
 	}
 	if !info.RelayAvailable || info.RelayAddr != "relay.example.com:8420" || info.RelayToken != "relay-secret" {
 		t.Errorf("unexpected relay join info: available=%v addr=%q token=%q", info.RelayAvailable, info.RelayAddr, info.RelayToken)
@@ -105,8 +107,8 @@ func TestJoinInfoInsecureWithoutAgentBinary(t *testing.T) {
 	if !info.Insecure {
 		t.Error("expected Insecure true when no Fingerprint is configured")
 	}
-	if info.AgentBinaryAvailable {
-		t.Error("expected AgentBinaryAvailable false when -agent-binary is unset")
+	if len(info.AgentBinaries) != 0 {
+		t.Errorf("expected no agent builds when -agent-binary is unset, got %+v", info.AgentBinaries)
 	}
 	if info.RelayAvailable || info.RelayAddr != "" || info.RelayToken != "" {
 		t.Errorf("expected relay details to be absent when relay is disabled, got %+v", info)

@@ -2,24 +2,20 @@ package manager
 
 import (
 	"debug/elf"
+	"debug/macho"
 	"debug/pe"
 )
 
-// detectBinaryPlatform best-effort identifies the OS/architecture a
-// binary at path was built for, by reading its file header — stdlib
-// debug/pe and debug/elf, no new dependency. Returns ("", "") if the file
-// can't be opened or its format isn't one of the two this project
-// actually builds for (Windows/amd64 agent.exe, Linux/arm64 for Termux).
+// detectBinaryPlatform best-effort identifies the GOOS/GOARCH a binary at
+// path was built for, by reading its file header — stdlib debug/pe,
+// debug/elf, and debug/macho, no new dependency. Returns ("", "") if the
+// file can't be opened or isn't a recognized executable format, and an
+// empty arch for a recognized format on an unrecognized CPU.
 //
-// This exists so the "(outdated)" marker (cmd/harnessctl's `nodes`
-// listing, the web dashboard) can be platform-aware: comparing a Linux
-// node's binary hash against a currently-served Windows binary's hash
-// always differs, regardless of whether that Linux node is actually
-// up to date — without knowing what platform is being served, every
-// cross-platform node would incorrectly show as outdated forever. Rather
-// than adding an -agent-binary-platform flag (one more thing an operator
-// has to remember to set correctly), this reads it directly from the
-// file itself.
+// It keys the agent catalog (agentcatalog.go), so the platform an operator
+// gets is read from the file itself rather than from a flag they could get
+// wrong. Android/Termux agents are GOOS=linux builds, so they detect (and
+// report themselves) as linux/arm64.
 func detectBinaryPlatform(path string) (goos, arch string) {
 	if f, err := pe.Open(path); err == nil {
 		defer f.Close()
@@ -40,6 +36,16 @@ func detectBinaryPlatform(path string) (goos, arch string) {
 			return "linux", "amd64"
 		}
 		return "linux", ""
+	}
+	if f, err := macho.Open(path); err == nil {
+		defer f.Close()
+		switch f.Cpu {
+		case macho.CpuArm64:
+			return "darwin", "arm64"
+		case macho.CpuAmd64:
+			return "darwin", "amd64"
+		}
+		return "darwin", ""
 	}
 	return "", ""
 }

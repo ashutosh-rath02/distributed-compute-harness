@@ -24,7 +24,7 @@ func TestOneTimeEnrollmentAdmitsOneIdentityAndAllowsItsReconnect(t *testing.T) {
 	transport := ws.New()
 	srv := manager.NewServer(transport, nil, manager.Config{
 		Addr: addr, PairingToken: pairingToken, HeartbeatTimeout: 2 * time.Second,
-		AgentBinaryPath: binaryPath, EnrollmentTTL: time.Minute,
+		AgentBinaries: dummyWindowsBuild(binaryPath), EnrollmentTTL: time.Minute,
 	})
 	transport.Handle("/enroll/", srv.EnrollmentHandler())
 	go srv.Run(ctx)

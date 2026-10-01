@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"home-harness/internal/mtls"
@@ -75,31 +76,57 @@ func (a *Agent) selfUpdateScheme() string {
 // step's own failure handling. Called from a goroutine spawned by
 // handleCommand only after the SELF_UPDATE command's ack has already been
 // sent — see commands.go.
-func (a *Agent) performSelfUpdate(expectedSHA256 string) {
+func (a *Agent) performSelfUpdate(expectedSHA256, path string) {
 	exePath, err := os.Executable()
 	if err != nil {
 		log.Printf("agent %s: self-update: could not determine own executable path: %v", a.identity.NodeID, err)
 		return
 	}
-	a.performSelfUpdateAt(exePath, expectedSHA256)
+	a.performSelfUpdateAt(exePath, expectedSHA256, path)
+}
+
+// selfUpdatePath validates the download path a SELF_UPDATE command names.
+// Empty (a manager predating per-platform builds) means the legacy single
+// route. Otherwise only the catalog's own routes are accepted: the hash
+// check is what guarantees the bytes, but there is no reason to let a
+// command steer this request anywhere else on the manager's listener.
+func selfUpdatePath(path string) (string, error) {
+	if path == "" {
+		return "/agent-binary", nil
+	}
+	if path == "/agent-binary" {
+		return path, nil
+	}
+	rest, ok := strings.CutPrefix(path, "/agent-binaries/")
+	if !ok || strings.ContainsAny(rest, "?#%\\") || strings.Contains(rest, "..") || strings.Count(rest, "/") != 1 ||
+		strings.HasPrefix(rest, "/") || strings.HasSuffix(rest, "/") {
+		return "", fmt.Errorf("refusing unexpected self-update path %q", path)
+	}
+	return path, nil
 }
 
 // performSelfUpdateAt is performSelfUpdate with the executable path
 // injected, so tests can exercise the full download/verify/swap flow
 // against a throwaway temp file standing in for the running binary,
 // without ever touching the actual test binary on disk.
-func (a *Agent) performSelfUpdateAt(exePath, expectedSHA256 string) {
+func (a *Agent) performSelfUpdateAt(exePath, expectedSHA256, path string) {
+	path, err := selfUpdatePath(path)
+	if err != nil {
+		log.Printf("agent %s: self-update: %v", a.identity.NodeID, err)
+		return
+	}
 	client := a.cfg.SelfUpdateHTTPClient
-	url := a.cfg.SelfUpdateURL
-	if client == nil || url == "" {
+	base := a.cfg.SelfUpdateBaseURL
+	if client == nil || base == "" {
 		addr := a.getCurrentManagerAddr()
 		if addr == "" {
 			log.Printf("agent %s: self-update: no known manager address, aborting", a.identity.NodeID)
 			return
 		}
 		client = a.selfUpdateHTTPClient()
-		url = fmt.Sprintf("%s://%s/agent-binary", a.selfUpdateScheme(), addr)
+		base = fmt.Sprintf("%s://%s", a.selfUpdateScheme(), addr)
 	}
+	url := base + path
 	downloadPath := exePath + selfUpdateDownloadSuffix
 
 	if err := downloadFile(client, url, downloadPath); err != nil {

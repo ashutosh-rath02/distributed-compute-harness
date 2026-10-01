@@ -19,13 +19,26 @@ type NodeRecord struct {
 	Node         domain.Node
 	Resources    []domain.Resource
 	Capabilities []domain.Capability
-	State        domain.NodeState
-	LastSeen     time.Time
-	Conn         domain.Conn
+	// AgentFeatures is the manifest's agent-protocol feature list (see
+	// domain.Manifest.AgentFeatures); empty for an agent predating it.
+	AgentFeatures []string
+	State         domain.NodeState
+	LastSeen      time.Time
+	Conn          domain.Conn
 	// LastMetrics is the most recently reported live CPU/memory figures
 	// from a HEARTBEAT, distinct from the static Resources declared at
 	// registration (v1.md §13's runtime vs persistent state split).
 	LastMetrics domain.RuntimeState
+}
+
+// hasAgentFeature reports whether rec's last manifest advertised feature.
+func (rec *NodeRecord) hasAgentFeature(feature string) bool {
+	for _, f := range rec.AgentFeatures {
+		if f == feature {
+			return true
+		}
+	}
+	return false
 }
 
 // HasCapability reports whether rec's last-known manifest declares name.
@@ -59,12 +72,13 @@ func (r *Registry) Upsert(manifest domain.Manifest, conn domain.Conn) (rec *Node
 	existing, ok := r.nodes[id]
 	if !ok {
 		rec := &NodeRecord{
-			Node:         manifest.Node,
-			Resources:    manifest.Resources,
-			Capabilities: manifest.Capabilities,
-			State:        domain.NodeConnected,
-			LastSeen:     time.Now(),
-			Conn:         conn,
+			Node:          manifest.Node,
+			Resources:     manifest.Resources,
+			Capabilities:  manifest.Capabilities,
+			AgentFeatures: manifest.AgentFeatures,
+			State:         domain.NodeConnected,
+			LastSeen:      time.Now(),
+			Conn:          conn,
 		}
 		r.nodes[id] = rec
 		return rec, true
@@ -72,6 +86,7 @@ func (r *Registry) Upsert(manifest domain.Manifest, conn domain.Conn) (rec *Node
 	existing.Node = manifest.Node
 	existing.Resources = manifest.Resources
 	existing.Capabilities = manifest.Capabilities
+	existing.AgentFeatures = manifest.AgentFeatures
 	existing.Conn = conn
 	existing.LastSeen = time.Now()
 	// A reconnect (new process, new connection) invalidates any previous
@@ -202,10 +217,11 @@ func (r *Registry) Seed(manifest domain.Manifest) {
 		return
 	}
 	r.nodes[id] = &NodeRecord{
-		Node:         manifest.Node,
-		Resources:    manifest.Resources,
-		Capabilities: manifest.Capabilities,
-		State:        domain.NodeOffline,
+		Node:          manifest.Node,
+		Resources:     manifest.Resources,
+		Capabilities:  manifest.Capabilities,
+		AgentFeatures: manifest.AgentFeatures,
+		State:         domain.NodeOffline,
 	}
 }
 

@@ -27,14 +27,13 @@ type Config struct {
 	// and restart-backoff resolution are different concerns. Defaults to
 	// 5s (see cmd/manager's -reconcile-interval flag).
 	ReconcileInterval time.Duration
-	// AgentBinaryPath, if set, is the agent executable the manager serves
-	// at /agent-binary (registered on the transport's own listener — see
-	// cmd/manager/main.go) and hashes once at startup for self-update's
-	// "does this node need updating" decision (selfupdate.go). Empty
-	// disables self-update entirely rather than erroring — a manager
-	// restarted without this flag simply can't push updates until it's
-	// set again.
-	AgentBinaryPath string
+	// AgentBinaries is the agent-build catalog (agentcatalog.go): at most
+	// one executable per platform, served at /agent-binaries/{os}/{arch}
+	// on the agent transports and hashed once at startup for onboarding
+	// and self-update. Empty disables both rather than erroring — a
+	// manager started without -agent-binary simply can't hand out or push
+	// agent binaries until restarted with one.
+	AgentBinaries []AgentBinary
 	// Fingerprint is the manager's own TLS fingerprint (mtls.Fingerprint),
 	// the same value cmd/manager/main.go already logs on startup for an
 	// operator to copy into -manager-fingerprint by hand. Stored here too so
@@ -96,18 +95,9 @@ type Server struct {
 	pendingMu sync.Mutex
 	pending   map[string]pendingCommand
 
-	// agentBinaryHash is cfg.AgentBinaryPath's SHA-256, computed once at
-	// startup (see NewServer) — empty if AgentBinaryPath is unset or
-	// unreadable, in which case NeedsUpdate always reports false.
-	agentBinaryHash string
-	// agentBinaryOS/agentBinaryArch are cfg.AgentBinaryPath's own platform,
-	// best-effort detected from its file header (binaryplatform.go) — both
-	// empty if undetectable. Lets node-listing "(outdated)" markers
-	// (cmd/harnessctl, the web dashboard) skip nodes whose platform
-	// doesn't match what's actually being served, rather than always
-	// flagging them (a Linux node's hash can never equal a served Windows
-	// binary's hash, regardless of whether it's actually current).
-	agentBinaryOS, agentBinaryArch string
+	// agents is the loaded agent-build catalog (agentcatalog.go), built
+	// once at startup from cfg.AgentBinaries — never nil.
+	agents *agentCatalog
 }
 
 // pendingCommand tracks who a dispatched command was sent to, so its
@@ -142,13 +132,16 @@ func NewServer(transport domain.Transport, store PersistentStore, cfg Config) *S
 		revocations: newRevocationList(),
 	}
 
-	if cfg.AgentBinaryPath == "" {
-		log.Println("manager: self-update disabled: -agent-binary not set")
-	} else if hash, err := hashFile(cfg.AgentBinaryPath); err != nil {
-		log.Printf("manager: self-update disabled: could not hash -agent-binary %q: %v", cfg.AgentBinaryPath, err)
+	s.agents = &agentCatalog{}
+	if len(cfg.AgentBinaries) == 0 {
+		log.Println("manager: self-update and binary onboarding disabled: -agent-binary not set")
+	} else if catalog, err := BuildAgentCatalog(cfg.AgentBinaries); err != nil {
+		log.Printf("manager: self-update and binary onboarding disabled: %v", err)
 	} else {
-		s.agentBinaryHash = hash
-		s.agentBinaryOS, s.agentBinaryArch = detectBinaryPlatform(cfg.AgentBinaryPath)
+		s.agents = catalog
+		for _, b := range catalog.builds {
+			log.Printf("manager: serving agent build %s (%s)", b.platform(), b.Path)
+		}
 	}
 
 	return s

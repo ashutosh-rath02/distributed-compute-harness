@@ -108,10 +108,6 @@ type enrollmentView struct {
 }
 
 func (s *Server) apiCreateEnrollment(w http.ResponseWriter, r *http.Request) {
-	if s.agentBinaryHash == "" {
-		http.Error(w, "manager has no agent binary configured", http.StatusConflict)
-		return
-	}
 	var req createEnrollmentRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
@@ -128,13 +124,13 @@ func (s *Server) apiCreateEnrollment(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "platform must be windows or android", http.StatusBadRequest)
 		return
 	}
-	if s.agentBinaryOS != "" {
-		matches := req.Platform == "windows" && s.agentBinaryOS == "windows" ||
-			req.Platform == "android" && s.agentBinaryOS == "linux" && s.agentBinaryArch == "arm64"
-		if !matches {
-			http.Error(w, fmt.Sprintf("configured agent binary is for %s/%s, not %s", s.agentBinaryOS, s.agentBinaryArch, req.Platform), http.StatusConflict)
-			return
-		}
+	// An invitation installs exactly the catalog build for its platform,
+	// so refuse one this manager has no build for rather than hand out a
+	// link that can only fail (or, worse, install another platform's).
+	if _, ok := s.joinBuild(req.Platform); !ok {
+		goos, arch, _ := joinscript.TargetPlatform(req.Platform)
+		http.Error(w, fmt.Sprintf("no agent build for %s (%s/%s) is loaded — restart the manager with an -agent-binary for it", req.Platform, goos, arch), http.StatusConflict)
+		return
 	}
 	var base string
 	if req.Mode == joinscript.ModeRemote {
@@ -236,17 +232,24 @@ func (s *Server) EnrollmentHandler() http.HandlerFunc {
 		}
 		switch parts[1] {
 		case "agent-binary":
-			s.AgentBinaryHandler()(w, r)
+			build, ok := s.joinBuild(e.Platform)
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+			logAgentDownload(r, build)
+			http.ServeFile(w, r, build.Path)
 		case "setup":
 			publicURL, err := url.Parse(e.PublicURL)
 			if err != nil || publicURL.Host == "" {
 				http.Error(w, "invalid enrollment URL", http.StatusInternalServerError)
 				return
 			}
+			build, ok := s.joinBuild(e.Platform)
 			info := joinscript.Info{
 				Fingerprint: s.cfg.Fingerprint, PairingToken: e.Token,
-				Insecure: s.cfg.Fingerprint == "", AgentBinaryAvailable: true,
-				AgentBinarySHA256: s.agentBinaryHash, AgentBinaryPath: basePath + "/agent-binary",
+				Insecure: s.cfg.Fingerprint == "", AgentBinaryAvailable: ok,
+				AgentBinarySHA256: build.SHA256, AgentBinaryPath: basePath + "/agent-binary",
 			}
 			var script string
 			if e.Mode == joinscript.ModeRemote {

@@ -26,7 +26,7 @@ func startTestManagerWithDashboard(t *testing.T, addr string, cfg manager.Config
 	transport := ws.New()
 	cfg.Addr = addr
 	srv := manager.NewServer(transport, nil, cfg)
-	if cfg.AgentBinaryPath != "" {
+	if len(cfg.AgentBinaries) > 0 {
 		transport.Handle("/agent-binary", srv.AgentBinaryHandler())
 	}
 	go func() {
@@ -77,14 +77,20 @@ func TestDashboardServesHTML(t *testing.T) {
 
 // TestJoinScriptEndpointReturnsGeneratedScript proves GET /join-script
 // produces the same script cmd/harnessctl's `join` command would, via the
-// real HTTP API — both call the shared internal/joinscript.Build.
+// real HTTP API — both call the shared internal/joinscript.Build — and
+// that with several builds loaded, each platform's script downloads and
+// verifies its own build.
 func TestJoinScriptEndpointReturnsGeneratedScript(t *testing.T) {
-	binaryPath, wantHash := writeDummyAgentBinary(t, []byte("content"))
+	windowsPath, windowsHash := writeDummyAgentBinary(t, []byte("windows build"))
+	androidPath, wantHash := writeDummyAgentBinary(t, []byte("android build"))
 	_, apiSrv := startTestManagerWithDashboard(t, "127.0.0.1:19311", manager.Config{
 		PairingToken:     pairingToken,
 		HeartbeatTimeout: 2 * time.Second,
-		AgentBinaryPath:  binaryPath,
-		Fingerprint:      "test-fingerprint",
+		AgentBinaries: []manager.AgentBinary{
+			{OS: "windows", Arch: "amd64", Path: windowsPath},
+			{OS: "linux", Arch: "arm64", Path: androidPath},
+		},
+		Fingerprint: "test-fingerprint",
 	})
 
 	resp, err := http.Get(apiSrv.URL + "/join-script?addr=192.168.10.11:7420&platform=android")
@@ -104,11 +110,46 @@ func TestJoinScriptEndpointReturnsGeneratedScript(t *testing.T) {
 		"test-fingerprint",
 		pairingToken,
 		strings.ToLower(wantHash),
+		"https://192.168.10.11:7420/agent-binaries/linux/arm64",
 		"termux-wake-lock",
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("expected generated script to contain %q, got:\n%s", want, script)
 		}
+	}
+	if strings.Contains(strings.ToLower(script), strings.ToLower(windowsHash)) {
+		t.Errorf("android script must not reference the Windows build's hash, got:\n%s", script)
+	}
+
+	resp, err = http.Get(apiSrv.URL + "/join-script?addr=192.168.10.11:7420&platform=windows")
+	if err != nil {
+		t.Fatalf("GET /join-script windows: %v", err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !strings.Contains(string(body), strings.ToUpper(windowsHash)) || !strings.Contains(string(body), "/agent-binaries/windows/amd64") {
+		t.Errorf("expected the windows script to use the Windows build, got:\n%s", body)
+	}
+}
+
+// An Android script on a manager with only a Windows build must be refused
+// outright: generating one would download the Windows binary and verify it
+// against its own (matching) hash, installing an agent that can't run.
+func TestJoinScriptRefusesPlatformWithoutBuild(t *testing.T) {
+	binaryPath, _ := writeDummyAgentBinary(t, []byte("windows only"))
+	_, apiSrv := startTestManagerWithDashboard(t, "127.0.0.1:19504", manager.Config{
+		PairingToken:     pairingToken,
+		HeartbeatTimeout: 2 * time.Second,
+		AgentBinaries:    dummyWindowsBuild(binaryPath),
+		Fingerprint:      "test-fingerprint",
+	})
+	resp, err := http.Get(apiSrv.URL + "/join-script?addr=192.168.10.11:7420&platform=android")
+	if err != nil {
+		t.Fatalf("GET /join-script: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for a platform with no build loaded, got %d", resp.StatusCode)
 	}
 }
 
@@ -142,7 +183,7 @@ func TestJoinScriptEndpointReturnsRemoteRelayScript(t *testing.T) {
 	binaryPath, _ := writeDummyAgentBinary(t, []byte("content"))
 	_, apiSrv := startTestManagerWithDashboard(t, "127.0.0.1:19313", manager.Config{
 		PairingToken: pairingToken, HeartbeatTimeout: 2 * time.Second,
-		AgentBinaryPath: binaryPath, Fingerprint: "test-fingerprint",
+		AgentBinaries: dummyWindowsBuild(binaryPath), Fingerprint: "test-fingerprint",
 		RelayAddr: "relay.example.com:8420", RelayToken: "relay-secret",
 	})
 

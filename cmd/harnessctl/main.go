@@ -306,6 +306,10 @@ type nodeView struct {
 	State        domain.NodeState    `json:"state"`
 	LastSeen     time.Time           `json:"lastSeen"`
 	Metrics      domain.RuntimeState `json:"metrics"`
+	// UpdateStatus is the manager's own platform-aware verdict
+	// (internal/manager/selfupdate.go): current, available,
+	// reinstall-required, or unknown.
+	UpdateStatus string `json:"updateStatus"`
 }
 
 func (c *apiClient) cmdNodes() error {
@@ -318,23 +322,6 @@ func (c *apiClient) cmdNodes() error {
 		return nil
 	}
 
-	// Self-update outdated marker: one extra request for the manager's
-	// currently-served hash (+ its detected platform), compared against
-	// each listed node's own — closes the "no fleet-wide version
-	// visibility" gap without a per-node comparison endpoint. hashResp.OS
-	// stays "" (marker never shown at all) if self-update is disabled,
-	// the request fails, or the served binary's format wasn't
-	// recognized. A node whose own platform doesn't match hashResp's is
-	// skipped too — its hash can never equal a different platform's
-	// binary regardless of whether it's actually current (e.g. an
-	// Android node compared against a currently-served Windows build).
-	var hashResp struct {
-		SHA256       string `json:"sha256"`
-		OS           string `json:"os"`
-		Architecture string `json:"architecture"`
-	}
-	_ = c.get("/agent-binary/hash", &hashResp)
-
 	fmt.Printf("%-24s %-20s %-12s %-8s %-14s %s\n", "NODE ID", "NAME", "STATE", "CPU%", "LAST SEEN", "AGENT")
 	for _, n := range nodes {
 		lastSeen := "-"
@@ -342,9 +329,11 @@ func (c *apiClient) cmdNodes() error {
 			lastSeen = time.Since(n.LastSeen).Round(time.Second).String() + " ago"
 		}
 		agent := n.AgentVersion
-		samePlatform := hashResp.OS != "" && n.Platform.OS == hashResp.OS && n.Platform.Architecture == hashResp.Architecture
-		if samePlatform && n.BinaryHash != "" && n.BinaryHash != hashResp.SHA256 {
+		switch n.UpdateStatus {
+		case "available":
 			agent += " (outdated)"
+		case "reinstall-required":
+			agent += " (reinstall needed)"
 		}
 		fmt.Printf("%-24s %-20s %-12s %-8.1f %-14s %s\n",
 			n.NodeID, truncate(n.Name, 20), n.State, n.Metrics.CPUPercent, lastSeen, agent)
@@ -575,14 +564,18 @@ func (c *apiClient) cmdCancelWorkload(id string) error {
 // harnessctl duplicates the manager's small API view structs rather than
 // importing internal/manager, matching this file's existing nodeView.
 type joinInfoView struct {
-	Fingerprint          string `json:"fingerprint"`
-	PairingToken         string `json:"pairingToken"`
-	Insecure             bool   `json:"insecure"`
-	AgentBinaryAvailable bool   `json:"agentBinaryAvailable"`
-	AgentBinarySHA256    string `json:"agentBinarySha256"`
-	RelayAvailable       bool   `json:"relayAvailable"`
-	RelayAddr            string `json:"relayAddr"`
-	RelayToken           string `json:"relayToken"`
+	Fingerprint   string `json:"fingerprint"`
+	PairingToken  string `json:"pairingToken"`
+	Insecure      bool   `json:"insecure"`
+	AgentBinaries []struct {
+		OS           string `json:"os"`
+		Architecture string `json:"architecture"`
+		SHA256       string `json:"sha256"`
+		Path         string `json:"path"`
+	} `json:"agentBinaries"`
+	RelayAvailable bool   `json:"relayAvailable"`
+	RelayAddr      string `json:"relayAddr"`
+	RelayToken     string `json:"relayToken"`
 }
 
 // cmdJoin prints a ready-to-run onboarding block for the new machine (v5
@@ -600,16 +593,26 @@ func (c *apiClient) cmdJoin(mode joinscript.Mode, addr, platform string) error {
 	if err := c.get("/join-info", &info); err != nil {
 		return err
 	}
-	script, err := joinscript.BuildMode(mode, addr, platform, joinscript.Info{
-		Fingerprint:          info.Fingerprint,
-		PairingToken:         info.PairingToken,
-		Insecure:             info.Insecure,
-		AgentBinaryAvailable: info.AgentBinaryAvailable,
-		AgentBinarySHA256:    info.AgentBinarySHA256,
-		RelayAvailable:       info.RelayAvailable,
-		RelayAddr:            info.RelayAddr,
-		RelayToken:           info.RelayToken,
-	})
+	// Pick the catalog build for the target platform — never a single
+	// "the" binary, which could belong to another platform.
+	scriptInfo := joinscript.Info{
+		Fingerprint:    info.Fingerprint,
+		PairingToken:   info.PairingToken,
+		Insecure:       info.Insecure,
+		RelayAvailable: info.RelayAvailable,
+		RelayAddr:      info.RelayAddr,
+		RelayToken:     info.RelayToken,
+	}
+	if goos, arch, ok := joinscript.TargetPlatform(platform); ok {
+		for _, b := range info.AgentBinaries {
+			if b.OS == goos && b.Architecture == arch {
+				scriptInfo.AgentBinaryAvailable = true
+				scriptInfo.AgentBinarySHA256 = b.SHA256
+				scriptInfo.AgentBinaryPath = b.Path
+			}
+		}
+	}
+	script, err := joinscript.BuildMode(mode, addr, platform, scriptInfo)
 	if err != nil {
 		return err
 	}

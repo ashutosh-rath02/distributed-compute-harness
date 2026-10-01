@@ -52,13 +52,13 @@ func main() {
 		relayTransport := relay.NewTLSClient(*relayToken, mtls.PinnedClientConfig(*managerFingerprint))
 		transport = relayTransport
 		selfUpdateHTTPClient = relayTransport.HTTPClient(*relayAddr)
-		selfUpdateURL = "http://manager/agent-binary"
+		selfUpdateURL = "http://manager"
 	case *relayAddr != "":
 		log.Println("agent: running with -insecure: plaintext transport, manager identity not verified")
 		relayTransport := relay.NewClient(*relayToken)
 		transport = relayTransport
 		selfUpdateHTTPClient = relayTransport.HTTPClient(*relayAddr)
-		selfUpdateURL = "http://manager/agent-binary"
+		selfUpdateURL = "http://manager"
 	case !*insecure:
 		if *managerFingerprint == "" {
 			log.Fatal("agent: -manager-fingerprint is required unless -insecure is set (get it from the manager's startup log)")
@@ -91,7 +91,7 @@ func main() {
 		Insecure:             *insecure,
 		ManagerFingerprint:   *managerFingerprint,
 		SelfUpdateHTTPClient: selfUpdateHTTPClient,
-		SelfUpdateURL:        selfUpdateURL,
+		SelfUpdateBaseURL:    selfUpdateURL,
 	})
 	if err != nil {
 		log.Fatalf("agent: %v", err)

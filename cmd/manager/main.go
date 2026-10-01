@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -36,7 +37,9 @@ func main() {
 	pairingToken := flag.String("pairing-token", "", "shared secret agents must present to register (required)")
 	heartbeatTimeout := flag.Duration("heartbeat-timeout", 15*time.Second, "how long without a heartbeat before a node is marked offline")
 	reconcileInterval := flag.Duration("reconcile-interval", 5*time.Second, "how often to check for workloads that need restarting (RestartPolicy on-failure/always)")
-	agentBinaryPath := flag.String("agent-binary", "", "path to the agent executable to serve for self-update (POST /nodes/{id}/update); self-update disabled if unset")
+	var agentBinaries agentBinaryFlags
+	checkAgentBinaries := flag.Bool("check-agent-binaries", false, "only validate the -agent-binary set (platform detection, conflicts, duplicates), print it, and exit 0 if usable or 1 if not — lets an installer vet a new set before stopping a running manager")
+	flag.Var(&agentBinaries, "agent-binary", "agent executable to serve for onboarding and self-update; repeat once per platform (e.g. a Windows agent.exe and a linux/arm64 build for Android). Each value is a path, whose platform is read from the file, or os/arch=path to state it explicitly. Onboarding downloads and self-update are disabled if unset")
 	disableDiscovery := flag.Bool("disable-discovery", false, "disable the LAN multicast discovery beacon")
 	insecure := flag.Bool("insecure", false, "disable TLS: agents connect over plaintext ws:// with no manager authentication (dev/local use only). POST /workloads still returns 202 and dispatches ASSIGN, but an agent run with its own -insecure will refuse to execute it (see cmd/agent's -insecure) rather than run arbitrary code for a manager it can't verify")
 	relayAddr := flag.String("relay-addr", "", "address of a relay server (cmd/relay) to also accept connections through, for agents that aren't on this manager's LAN; disabled if unset")
@@ -44,6 +47,17 @@ func main() {
 	relayPublicURL := flag.String("relay-public-url", "", "browser-trusted HTTPS base URL exposed by the relay for internet enrollment links (e.g. https://relay.example.com:8443)")
 	relayEnrollmentToken := flag.String("relay-enrollment-token", "", "secret authorizing this manager to publish internet enrollment links (required with -relay-public-url)")
 	flag.Parse()
+
+	if *checkAgentBinaries {
+		catalog, err := manager.BuildAgentCatalog(agentBinaries)
+		if err != nil {
+			log.Fatalf("manager: -agent-binary: %v", err)
+		}
+		for _, line := range catalog.Describe() {
+			fmt.Println(line)
+		}
+		return
+	}
 
 	if *pairingToken == "" {
 		log.Fatal("manager: -pairing-token is required")
@@ -62,6 +76,13 @@ func main() {
 		if err != nil || u.Scheme != "https" || u.Host == "" || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
 			log.Fatal("manager: -relay-public-url must be a browser-trusted HTTPS origin, e.g. https://relay.example.com:8443")
 		}
+	}
+
+	// Validated up front, before any disk I/O, like the flags above: a
+	// manager that silently came up without the builds an operator asked
+	// for would fail much later, at the first invitation or update.
+	if _, err := manager.BuildAgentCatalog(agentBinaries); err != nil {
+		log.Fatalf("manager: -agent-binary: %v", err)
 	}
 
 	store, err := persistent.Open(*dbPath)
@@ -113,7 +134,7 @@ func main() {
 		PairingToken:        *pairingToken,
 		HeartbeatTimeout:    *heartbeatTimeout,
 		ReconcileInterval:   *reconcileInterval,
-		AgentBinaryPath:     *agentBinaryPath,
+		AgentBinaries:       agentBinaries,
 		Fingerprint:         fingerprint,
 		RelayAddr:           *relayAddr,
 		RelayToken:          *relayToken,
@@ -123,10 +144,15 @@ func main() {
 	// Registered before Run (which calls transport.Listen) — puts the
 	// download on the exact address/port agents already dial, no new port
 	// or firewall rule needed for self-update (internal/agent/selfupdate.go).
+	// /agent-binary is the legacy single route agents predating the
+	// catalog still download from; /agent-binaries/{os}/{arch} serves each
+	// platform's build.
 	transport.Handle("/agent-binary", srv.AgentBinaryHandler())
+	transport.Handle("GET /agent-binaries/{os}/{arch}", srv.AgentBinariesHandler())
 	transport.Handle("/enroll/", srv.EnrollmentHandler())
 	if relayTransport != nil {
 		relayTransport.Handle("/agent-binary", srv.AgentBinaryHandler())
+		relayTransport.Handle("GET /agent-binaries/{os}/{arch}", srv.AgentBinariesHandler())
 		relayTransport.Handle("/enroll/", srv.EnrollmentHandler())
 	}
 
@@ -163,6 +189,26 @@ func main() {
 	if err := srv.Run(ctx); err != nil && ctx.Err() == nil {
 		log.Fatalf("manager: %v", err)
 	}
+}
+
+// agentBinaryFlags collects repeated -agent-binary values.
+type agentBinaryFlags []manager.AgentBinary
+
+func (f *agentBinaryFlags) String() string {
+	parts := make([]string, 0, len(*f))
+	for _, b := range *f {
+		parts = append(parts, b.Path)
+	}
+	return strings.Join(parts, ",")
+}
+
+func (f *agentBinaryFlags) Set(value string) error {
+	b, err := manager.ParseAgentBinaryFlag(value)
+	if err != nil {
+		return err
+	}
+	*f = append(*f, b)
+	return nil
 }
 
 func portOf(addr string) (int, error) {

@@ -171,7 +171,7 @@ func TestPerformSelfUpdateAtFullFlow(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	a.performSelfUpdateAt(exePath, wantHash)
+	a.performSelfUpdateAt(exePath, wantHash, "")
 
 	got, err := os.ReadFile(exePath)
 	if err != nil {
@@ -228,7 +228,7 @@ func TestPerformSelfUpdateAtHashMismatchLeavesBinaryUntouched(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	a.performSelfUpdateAt(exePath, "0000000000000000000000000000000000000000000000000000000000000000")
+	a.performSelfUpdateAt(exePath, "0000000000000000000000000000000000000000000000000000000000000000", "")
 
 	got, err := os.ReadFile(exePath)
 	if err != nil {
@@ -258,7 +258,9 @@ func TestPerformSelfUpdateAtThroughRelay(t *testing.T) {
 	sum := sha256.Sum256(newContent)
 	wantHash := hex.EncodeToString(sum[:])
 	serverTransport := relaytransport.New("self-update-test")
-	serverTransport.Handle("/agent-binary", func(w http.ResponseWriter, r *http.Request) { w.Write(newContent) })
+	// Served only at the per-platform path, so the update proves the
+	// command's path (not the legacy route) was followed through the relay.
+	serverTransport.Handle("/agent-binaries/linux/arm64", func(w http.ResponseWriter, r *http.Request) { w.Write(newContent) })
 	if _, err := serverTransport.Listen(ctx, relayListener.Addr().String()); err != nil {
 		t.Fatalf("manager relay listen: %v", err)
 	}
@@ -266,7 +268,7 @@ func TestPerformSelfUpdateAtThroughRelay(t *testing.T) {
 
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		resp, probeErr := client.Get("http://manager/agent-binary")
+		resp, probeErr := client.Get("http://manager/agent-binaries/linux/arm64")
 		if probeErr == nil {
 			resp.Body.Close()
 			break
@@ -279,13 +281,13 @@ func TestPerformSelfUpdateAtThroughRelay(t *testing.T) {
 
 	a := newTestAgent(t)
 	a.cfg.SelfUpdateHTTPClient = client
-	a.cfg.SelfUpdateURL = "http://manager/agent-binary"
+	a.cfg.SelfUpdateBaseURL = "http://manager"
 	calls := withStubRelaunch(t)
 	exePath := filepath.Join(t.TempDir(), "agent.exe")
 	if err := os.WriteFile(exePath, []byte("old content"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	a.performSelfUpdateAt(exePath, wantHash)
+	a.performSelfUpdateAt(exePath, wantHash, "/agent-binaries/linux/arm64")
 
 	got, err := os.ReadFile(exePath)
 	if err != nil {
@@ -309,5 +311,56 @@ func TestApplySelfUpdateFailsClosedWhenCurrentBinaryMissing(t *testing.T) {
 	}
 	if _, err := os.Stat(downloadPath); !os.IsNotExist(err) {
 		t.Fatalf("expected the .download file to be cleaned up on this failure path, stat err: %v", err)
+	}
+}
+
+func TestSelfUpdatePath(t *testing.T) {
+	for in, want := range map[string]string{
+		"":                            "/agent-binary", // manager predating per-platform builds
+		"/agent-binary":               "/agent-binary",
+		"/agent-binaries/linux/arm64": "/agent-binaries/linux/arm64",
+	} {
+		if got, err := selfUpdatePath(in); err != nil || got != want {
+			t.Errorf("selfUpdatePath(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	for _, bad := range []string{
+		"https://elsewhere.example/agent", "//elsewhere.example/agent", "/enroll/token/agent-binary",
+		"/agent-binaries/linux", "/agent-binaries/linux/arm64/extra", "/agent-binaries/../join-info",
+		"/agent-binaries/linux/arm64?x=1", "/agent-binaries//arm64", "/agent-binaries/linux/",
+		"/agent-binaries/linux/%2e%2e", "agent-binaries/linux/arm64",
+	} {
+		if _, err := selfUpdatePath(bad); err == nil {
+			t.Errorf("selfUpdatePath(%q): expected a refusal", bad)
+		}
+	}
+}
+
+// TestPerformSelfUpdateAtFollowsCommandPath proves the direct path joins
+// the manager's own origin with the command's per-platform path.
+func TestPerformSelfUpdateAtFollowsCommandPath(t *testing.T) {
+	newContent := []byte("per-platform build")
+	sum := sha256.Sum256(newContent)
+	wantHash := hex.EncodeToString(sum[:])
+	mux := http.NewServeMux()
+	mux.HandleFunc("/agent-binaries/windows/amd64", func(w http.ResponseWriter, r *http.Request) { w.Write(newContent) })
+	mux.HandleFunc("/agent-binary", func(w http.ResponseWriter, r *http.Request) {
+		t.Error("legacy route fetched although the command named a per-platform path")
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	a := newTestAgent(t)
+	a.cfg.Insecure = true
+	a.setCurrentManagerAddr(strings.TrimPrefix(server.URL, "http://"))
+	calls := withStubRelaunch(t)
+	exePath := filepath.Join(t.TempDir(), "agent.exe")
+	if err := os.WriteFile(exePath, []byte("old content"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	a.performSelfUpdateAt(exePath, wantHash, "/agent-binaries/windows/amd64")
+
+	if got, _ := os.ReadFile(exePath); string(got) != string(newContent) || len(*calls) != 1 {
+		t.Fatalf("expected the per-platform build swapped in and relaunched, got %q (relaunches=%d)", got, len(*calls))
 	}
 }
