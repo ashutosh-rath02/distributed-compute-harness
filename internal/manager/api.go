@@ -67,7 +67,9 @@ func toNodeView(rec *NodeRecord) nodeView {
 // text): POST /workloads inherits that default and it is now load-bearing
 // in a way it wasn't for the harmless v0 command set — widening -api-addr
 // exposes unauthenticated arbitrary code execution on every registered
-// node, not just PING/ECHO.
+// node, not just PING/ECHO. Loopback alone does not keep out a browser on
+// this machine, so every route is also wrapped in guardOperatorAPI
+// (apiguard.go) against cross-site requests and DNS rebinding.
 func (s *Server) NewHTTPHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /nodes", s.apiListNodes)
@@ -88,7 +90,7 @@ func (s *Server) NewHTTPHandler() http.Handler {
 	mux.HandleFunc("GET /workloads", s.apiListWorkloads)
 	mux.HandleFunc("GET /workloads/{id}", s.apiGetWorkload)
 	mux.HandleFunc("POST /workloads/{id}/cancel", s.apiCancelWorkload)
-	return mux
+	return guardOperatorAPI(mux)
 }
 
 func (s *Server) apiListNodes(w http.ResponseWriter, r *http.Request) {
