@@ -261,3 +261,65 @@ func TestWithin(t *testing.T) {
 		t.Fatal("within matched a sibling")
 	}
 }
+
+func waitFinal(t *testing.T, e *Executor, wl domain.Workload) domain.WorkloadStatus {
+	t.Helper()
+	done := make(chan domain.WorkloadStatus, 1)
+	if err := e.Start(context.Background(), wl, func(s domain.WorkloadStatus) {
+		if s.State != domain.WorkloadRunning {
+			done <- s
+		}
+	}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	select {
+	case s := <-done:
+		return s
+	case <-time.After(20 * time.Second):
+		t.Fatal("timed out")
+		return domain.WorkloadStatus{}
+	}
+}
+
+func TestTypedTaskRunsItsBuiltinHandler(t *testing.T) {
+	e := NewExecutor()
+	st := waitFinal(t, e, domain.Workload{ID: "t1", Capability: "cpu.burn", Params: map[string]string{"seconds": "1", "threads": "1"}})
+	if st.State != domain.WorkloadCompleted || !strings.Contains(st.Stdout, "busy for 1s") {
+		t.Fatalf("cpu.burn: %s %q %s", st.State, st.Stdout, st.Error)
+	}
+}
+
+// The agent re-validates a typed assignment against its own catalog: a
+// manager on another version can't make it misread one.
+func TestTypedAssignmentNotMatchingThisAgentsCatalogIsRefused(t *testing.T) {
+	e := NewExecutor()
+	for name, wl := range map[string]domain.Workload{
+		"unknown param":     {ID: "a", Capability: "system.identity", Params: map[string]string{"verbose": "true"}},
+		"non-canonical":     {ID: "b", Capability: "cpu.burn", Params: map[string]string{"seconds": "01", "threads": "0"}},
+		"missing defaults":  {ID: "c", Capability: "cpu.burn", Params: map[string]string{"seconds": "1"}},
+		"different outputs": {ID: "d", Capability: "file.hash", Params: map[string]string{"algorithm": "sha256"}, Inputs: []domain.ArtifactRef{{Name: "x", SHA256: strings.Repeat("0", 64)}}, Outputs: []string{"other.txt"}},
+	} {
+		if st := waitFinal(t, e, wl); st.State != domain.WorkloadFailed || !strings.Contains(st.Error, "doesn't match this agent's") {
+			t.Errorf("%s: %s %q", name, st.State, st.Error)
+		}
+	}
+}
+
+func TestDisabledCapabilityIsRefused(t *testing.T) {
+	e := NewExecutor()
+	e.SetDisabled([]domain.CapabilityName{domain.CapabilitySystemExecute})
+	if st := waitFinal(t, e, echoWorkload("x", "hi")); st.State != domain.WorkloadFailed || !strings.Contains(st.Error, "disabled on this device") {
+		t.Fatalf("disabled raw command: %s %q", st.State, st.Error)
+	}
+}
+
+func TestTimeoutFailsARawCommandDistinctFromCancel(t *testing.T) {
+	e := NewExecutor()
+	wl := sleepWorkload("slow", "30")
+	wl.TimeoutSeconds = 1
+	start := time.Now()
+	st := waitFinal(t, e, wl)
+	if st.State != domain.WorkloadFailed || st.Error != "timed out after 1s" || time.Since(start) > 10*time.Second {
+		t.Fatalf("timeout: %s %q after %v", st.State, st.Error, time.Since(start))
+	}
+}

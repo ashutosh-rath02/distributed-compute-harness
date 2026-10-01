@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"home-harness/internal/artifacts"
+	"home-harness/internal/catalog"
 	"home-harness/internal/domain"
 	"home-harness/internal/protocol"
 )
@@ -203,8 +204,9 @@ func (s *Server) prepareFiles(spec *WorkloadSpec) error {
 	if len(spec.Inputs) == 0 && len(spec.Outputs) == 0 {
 		return nil
 	}
-	if spec.Capability != domain.CapabilitySystemExecute {
-		return fmt.Errorf("%w: only %s workloads can take input or output files", ErrInvalidWorkload, domain.CapabilitySystemExecute)
+	t, typed := catalog.Lookup(spec.Capability)
+	if spec.Capability != domain.CapabilitySystemExecute && !typed {
+		return fmt.Errorf("%w: only %s and catalog task types can take input or output files", ErrInvalidWorkload, domain.CapabilitySystemExecute)
 	}
 	if s.cfg.Artifacts == nil {
 		return fmt.Errorf("%w: this manager has no artifact store", ErrInvalidWorkload)
@@ -222,15 +224,60 @@ func (s *Server) prepareFiles(spec *WorkloadSpec) error {
 		inputs[i] = domain.ArtifactRef{Name: in.Name, SHA256: in.SHA256, Size: info.Size}
 	}
 	spec.Inputs = inputs
+	if typed && t.OutputAtMostInputs {
+		// An archive is about as big as its inputs: refuse now what the
+		// attempt's upload budget couldn't take after the work is done.
+		var total int64 = 64 << 10
+		for _, in := range inputs {
+			total += in.Size
+		}
+		if total > s.cfg.Artifacts.MaxBytes() {
+			return fmt.Errorf("%w: %s output would be about %d bytes, over the %d-byte file limit (-artifact-max-size)", ErrInvalidWorkload, spec.Capability, total, s.cfg.Artifacts.MaxBytes())
+		}
+	}
+	return nil
+}
+
+// compileTyped turns a submission of a catalog task type into its
+// canonical form: validated parameters with defaults, the outputs the
+// type produces, and the type's default resource requirements where the
+// submission asks for less. A typed task names no program and no outputs
+// of its own.
+func compileTyped(capability *domain.CapabilityName, command *string, args *[]string, params *map[string]string, inputs []domain.ArtifactRef, outputs *[]string, req *domain.ResourceRequirements) error {
+	t, ok := catalog.Lookup(*capability)
+	if !ok {
+		return nil
+	}
+	if *command != "" || len(*args) > 0 {
+		return fmt.Errorf("%w: %s is a typed task: give parameters, not a command", ErrInvalidWorkload, t.Name)
+	}
+	if len(*outputs) > 0 {
+		return fmt.Errorf("%w: %s names its own outputs", ErrInvalidWorkload, t.Name)
+	}
+	canon, outs, err := t.Compile(*params, inputs)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidWorkload, err)
+	}
+	*params, *outputs = canon, outs
+	if req.MinMemoryBytes < t.Requirements.MinMemoryBytes {
+		req.MinMemoryBytes = t.Requirements.MinMemoryBytes
+	}
+	if req.MinCPUCores < t.Requirements.MinCPUCores {
+		req.MinCPUCores = t.Requirements.MinCPUCores
+	}
 	return nil
 }
 
 // requiredFeatures is what an agent must advertise to run w.
 func requiredFeatures(w domain.Workload) []string {
+	var out []string
 	if w.HasFiles() {
-		return []string{domain.FeatureArtifacts}
+		out = append(out, domain.FeatureArtifacts)
 	}
-	return nil
+	if w.TimeoutSeconds > 0 {
+		out = append(out, domain.FeatureTimeout)
+	}
+	return out
 }
 
 // settleOutputs replaces an agent's claimed outputs with the verified

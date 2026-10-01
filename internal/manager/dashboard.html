@@ -119,6 +119,30 @@
     <div id="audit"></div>
   </details>
 
+  <h2>Run a task</h2>
+  <div class="card">
+    <p class="hint">Typed tasks are built into every agent and run the same on every device, inside their own folder with only the files you give them.</p>
+    <label for="typedType">Task</label>
+    <select id="typedType"></select>
+    <p id="typedDescription" class="hint"></p>
+    <label for="typedTarget">Compute node</label>
+    <select id="typedTarget"><option value="">Auto-select</option></select>
+    <div id="typedParams"></div>
+    <div id="typedFilesBox">
+      <label for="typedFiles" id="typedFilesLabel">Input files</label>
+      <input id="typedFiles" type="file" multiple>
+      <label class="inline" id="typedBatchBox"><input id="typedBatch" type="checkbox"> Once per file, spread across devices (a job)</label>
+      <div id="typedReduceBox" hidden>
+        <label for="typedReduce">Then combine the results with</label>
+        <select id="typedReduce"><option value="">(nothing: download each)</option></select>
+        <div id="typedReduceParams"></div>
+      </div>
+    </div>
+    <button id="runTyped">Run</button>
+    <div id="typedError" class="error"></div>
+    <div id="typedProgress" class="task-state"></div>
+  </div>
+
   <h2>Run a visible test</h2>
   <div class="card">
     <label for="taskTarget">Compute node</label>
@@ -126,7 +150,7 @@
     <label for="taskPreset">Task</label>
     <select id="taskPreset">
       <option value="identity">Identity check (quick)</option>
-      <option value="cpu">CPU pulse (20 seconds, Windows)</option>
+      <option value="cpu">CPU pulse (20 seconds, any device)</option>
     </select>
     <label for="taskMemory">Minimum free memory</label>
     <select id="taskMemory">
@@ -135,13 +159,14 @@
       <option value="1073741824">1 GiB</option>
     </select>
     <button id="runTask">Dispatch task</button>
-    <p class="hint">For CPU pulse, open Windows Task Manager &gt; Performance &gt; CPU before dispatching.</p>
+    <p class="hint">For CPU pulse, open the device's task manager / activity monitor before dispatching.</p>
     <div id="taskError" class="error"></div>
     <div id="taskProgress" class="task-state"></div>
   </div>
 
-  <h2>Run a task with files</h2>
+  <h2>Advanced: raw command</h2>
   <div class="card">
+    <p class="hint" id="rawPolicyHint"></p>
     <label for="fileTarget">Compute node</label>
     <select id="fileTarget"><option value="">Auto-select</option></select>
     <label for="fileCommand">Program</label>
@@ -160,6 +185,14 @@
     <div id="fileError" class="error"></div>
     <div id="fileProgress" class="task-state"></div>
   </div>
+
+  <details class="card" id="policySection">
+    <summary><strong>Policy</strong>: what the fleet may run</summary>
+    <p class="hint">Raw commands and host file reads run anything on a device: they stay off unless you turn them on, ideally only for devices you label (e.g. raw=ok in Rename/labels).</p>
+    <div id="policy"></div>
+    <button id="savePolicy">Save policy</button>
+    <div id="policyError" class="error"></div>
+  </details>
 
   <h2>Jobs</h2>
   <div id="jobs"></div>
@@ -456,7 +489,7 @@
   }
 
   function renderTargetOptions(nodes) {
-    for (const id of ["taskTarget", "fileTarget"]) {
+    for (const id of ["taskTarget", "fileTarget", "typedTarget"]) {
       const select = document.getElementById(id);
       const previous = select.value;
       select.innerHTML = '<option value="">Auto-select by requirements</option>'
@@ -657,6 +690,202 @@
     refreshJobs();
   });
 
+  // ---- Typed tasks (GET /catalog) and policy (GET/PUT /policy)
+  let catalogTypes = [];
+  let rawPolicy = {};
+
+  function paramField(prefix, p) {
+    const id = prefix + "_" + p.name;
+    const label = '<label for="' + escapeHtml(id) + '">' + escapeHtml(p.title || p.name) + "</label>";
+    const attrs = ' id="' + escapeHtml(id) + '" data-param="' + escapeHtml(p.name) + '"';
+    if (p.type === "enum") {
+      return label + "<select" + attrs + ">" + p.enum.map((v) => '<option value="' + escapeHtml(v) + '"'
+        + (v === p.default ? " selected" : "") + ">" + escapeHtml(v) + "</option>").join("") + "</select>";
+    }
+    if (p.type === "bool") {
+      return '<label class="inline"><input type="checkbox"' + attrs + (p.default === "true" ? " checked" : "") + "> "
+        + escapeHtml(p.title || p.name) + "</label>";
+    }
+    const type = p.type === "int" || p.type === "number" ? "number" : "text";
+    return label + '<input type="' + type + '"' + attrs
+      + (p.min != null ? ' min="' + escapeHtml(String(p.min)) + '"' : "")
+      + (p.max != null ? ' max="' + escapeHtml(String(p.max)) + '"' : "")
+      + (p.type === "int" ? ' step="1"' : "")
+      + ' value="' + escapeHtml(p.default || "") + '">';
+  }
+
+  function readParams(container) {
+    const params = {};
+    for (const el of container.querySelectorAll("[data-param]")) {
+      params[el.dataset.param] = el.type === "checkbox" ? String(el.checked) : el.value;
+    }
+    return params;
+  }
+
+  function selectedType() {
+    return catalogTypes.find((t) => t.name === document.getElementById("typedType").value);
+  }
+
+  function renderTypedForm() {
+    const t = selectedType();
+    const box = document.getElementById("typedFilesBox");
+    if (!t) { box.hidden = true; document.getElementById("typedParams").innerHTML = ""; return; }
+    document.getElementById("typedDescription").textContent = t.description
+      + (t.nodes ? "" : " (No ready device offers it right now.)") + (t.policy.enabled ? "" : " (Disabled by policy.)");
+    document.getElementById("typedParams").innerHTML = (t.params || []).map((p) => paramField("tp", p)).join("");
+    const takesFiles = t.inputs && t.inputs.max > 0;
+    box.hidden = !takesFiles;
+    if (takesFiles) {
+      const exts = (t.inputs.extensions || []).map((e) => "." + e);
+      document.getElementById("typedFiles").accept = exts.join(",");
+      document.getElementById("typedFilesLabel").textContent = "Input files (" + t.inputs.description
+        + (exts.length ? ": " + exts.join(", ") : "") + ")";
+      document.getElementById("typedBatchBox").hidden = t.inputs.max !== 1;
+      if (t.inputs.max !== 1) document.getElementById("typedBatch").checked = false;
+    }
+    renderReduceBox();
+  }
+
+  function renderReduceBox() {
+    const batch = document.getElementById("typedBatch").checked;
+    document.getElementById("typedReduceBox").hidden = !batch;
+    const r = catalogTypes.find((t) => t.name === document.getElementById("typedReduce").value);
+    document.getElementById("typedReduceParams").innerHTML = r ? (r.params || []).map((p) => paramField("rp", p)).join("") : "";
+  }
+
+  async function refreshCatalog() {
+    try {
+      const cat = await (await api("/catalog")).json();
+      catalogTypes = cat.types || [];
+      rawPolicy = cat.raw || {};
+      const sel = document.getElementById("typedType");
+      const previous = sel.value;
+      sel.innerHTML = catalogTypes.map((t) => '<option value="' + escapeHtml(t.name) + '"' + (t.policy.enabled ? "" : " disabled") + ">"
+        + escapeHtml(t.title) + (t.policy.enabled ? "" : " (off)") + "</option>").join("");
+      if (previous && catalogTypes.some((t) => t.name === previous && t.policy.enabled)) sel.value = previous;
+      const red = document.getElementById("typedReduce");
+      const prevReduce = red.value;
+      red.innerHTML = '<option value="">(nothing: download each)</option>' + catalogTypes.filter((t) => t.reduce && t.policy.enabled)
+        .map((t) => '<option value="' + escapeHtml(t.name) + '">' + escapeHtml(t.title) + "</option>").join("");
+      if (prevReduce) red.value = prevReduce;
+      const raw = rawPolicy["system.execute"];
+      document.getElementById("rawPolicyHint").textContent = raw && raw.enabled
+        ? "Raw commands are ON" + (raw.nodeLabels && Object.keys(raw.nodeLabels).length ? " for devices labelled " + JSON.stringify(raw.nodeLabels) : " for every device") + "."
+        : "Raw commands are OFF (policy). Prefer a typed task above; to run arbitrary programs, enable system.execute in Policy below.";
+      renderTypedForm();
+      renderPolicy();
+    } catch (e) { /* signed out or manager away; the stream reconnect retries */ }
+  }
+
+  document.getElementById("typedType").addEventListener("change", renderTypedForm);
+  document.getElementById("typedBatch").addEventListener("change", renderReduceBox);
+  document.getElementById("typedReduce").addEventListener("change", renderReduceBox);
+
+  async function uploadFile(f, progress) {
+    progress.textContent = "Uploading " + f.name + "...";
+    const resp = await api("/artifacts", {method: "POST", headers: {"Content-Type": "application/octet-stream"}, body: f});
+    const text = await resp.text();
+    if (!resp.ok) throw new Error(f.name + ": " + (text.trim() || resp.statusText));
+    return {name: safeFileName(f.name), sha256: JSON.parse(text).sha256};
+  }
+
+  document.getElementById("runTyped").addEventListener("click", async () => {
+    const button = document.getElementById("runTyped");
+    const error = document.getElementById("typedError");
+    const progress = document.getElementById("typedProgress");
+    error.textContent = "";
+    const t = selectedType();
+    if (!t) { error.textContent = "Pick a task."; return; }
+    const params = readParams(document.getElementById("typedParams"));
+    const target = document.getElementById("typedTarget").value;
+    const files = Array.from(document.getElementById("typedFiles").files || []);
+    const batch = document.getElementById("typedBatch").checked && t.inputs.max === 1;
+    button.disabled = true;
+    try {
+      if (t.inputs.max > 0 && files.length < Math.max(1, t.inputs.min)) throw new Error("Pick the input file(s).");
+      const inputs = [];
+      for (const f of files) inputs.push(await uploadFile(f, progress));
+      let resp;
+      if (batch) {
+        const body = {tasks: inputs.map((input) => ({name: input.name, target, capability: t.name, params, inputs: [input]}))};
+        const reduce = document.getElementById("typedReduce").value;
+        if (reduce) body.reduce = {capability: reduce, params: readParams(document.getElementById("typedReduceParams"))};
+        resp = await api("/jobs", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+      } else {
+        resp = await api("/workloads", {method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({target, capability: t.name, params, inputs})});
+      }
+      const text = await resp.text();
+      if (!resp.ok) throw new Error(text.trim() || resp.statusText);
+      const created = JSON.parse(text);
+      if (batch) {
+        progress.textContent = "Job started: " + inputs.length + " tasks (" + created.id + "). Follow it under Jobs.";
+        refreshJobs();
+        return;
+      }
+      progress.textContent = created.state + " (" + created.id + ")";
+      for (let attempt = 0; attempt < 600; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        const status = await (await api("/workloads/" + encodeURIComponent(created.id))).json();
+        progress.textContent = status.state + (status.target ? " on " + status.target : "")
+          + (status.error ? "\nError: " + status.error : "")
+          + (status.stdout ? "\nOutput: " + status.stdout.trim() : "")
+          + ((status.outputFiles || []).length ? "\nFiles ready below in Recent workloads." : "");
+        if (["COMPLETED", "FAILED", "CANCELED"].includes(status.state)) break;
+      }
+      refreshWorkloads();
+    } catch (e) {
+      error.textContent = String(e);
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  let currentPolicy = null;
+  async function renderPolicy() {
+    try { currentPolicy = await (await api("/policy")).json(); } catch (e) { return; }
+    const names = catalogTypes.map((t) => t.name).concat(["system.execute", "filesystem.read"]);
+    const effective = (n) => {
+      const t = catalogTypes.find((x) => x.name === n);
+      return (currentPolicy.types || {})[n] || (t ? t.policy : rawPolicy[n]) || {enabled: false};
+    };
+    document.getElementById("policy").innerHTML = "<table><thead><tr><th>Capability</th><th>On</th><th>Only on nodes labelled</th><th>Max seconds</th></tr></thead><tbody>"
+      + names.map((n) => {
+        const p = effective(n);
+        const labels = Object.entries(p.nodeLabels || {}).map(([k, v]) => k + "=" + v).join(",");
+        return '<tr data-cap="' + escapeHtml(n) + '"><td>' + escapeHtml(n) + (n.indexOf(".") > 0 && (n === "system.execute" || n === "filesystem.read") ? " <em>(raw)</em>" : "")
+          + '</td><td><input type="checkbox" class="pol-on"' + (p.enabled ? " checked" : "") + '></td><td><input class="pol-labels" placeholder="raw=ok" value="'
+          + escapeHtml(labels) + '"></td><td><input type="number" min="0" class="pol-max" value="' + escapeHtml(String(p.maxRuntimeSeconds || 0)) + '"></td></tr>';
+      }).join("") + "</tbody></table>";
+  }
+
+  document.getElementById("savePolicy").addEventListener("click", async () => {
+    const error = document.getElementById("policyError");
+    error.textContent = "";
+    const types = {};
+    for (const row of document.querySelectorAll("#policy tr[data-cap]")) {
+      const labels = {};
+      for (const kv of row.querySelector(".pol-labels").value.split(",").map((s) => s.trim()).filter((s) => s)) {
+        const i = kv.indexOf("=");
+        if (i <= 0) { error.textContent = "Labels must be key=value: " + kv; return; }
+        labels[kv.slice(0, i)] = kv.slice(i + 1);
+      }
+      types[row.dataset.cap] = {enabled: row.querySelector(".pol-on").checked, nodeLabels: labels,
+        maxRuntimeSeconds: Number(row.querySelector(".pol-max").value) || 0};
+    }
+    const raw = types["system.execute"];
+    if (raw && raw.enabled && !Object.keys(raw.nodeLabels).length
+        && !confirm("Allow raw commands on EVERY device? Anyone with this dashboard could run any program on them. (Labels limit it to chosen devices.)")) return;
+    try {
+      const resp = await api("/policy", {method: "PUT", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({types, allowUnlisted: currentPolicy ? !!currentPolicy.allowUnlisted : false})});
+      if (!resp.ok) throw new Error((await resp.text()).trim() || resp.statusText);
+      refreshCatalog();
+    } catch (e) {
+      error.textContent = String(e);
+    }
+  });
+
   function handleEvent(data) {
     let type = "";
     try {
@@ -667,6 +896,7 @@
     refreshNodes();
     refreshWorkloads();
     if (type.startsWith("job.") || type.startsWith("workload.")) scheduleJobs();
+    if (type.startsWith("node.")) refreshCatalog();
     if (type === "node.revoked" || type === "node.unrevoked") refreshRevoked();
     if (document.getElementById("auditSection").open) refreshAudit();
   }
@@ -716,6 +946,7 @@
     if (signedOut) return;
     refreshWorkloads();
     refreshJobs();
+    refreshCatalog();
     refreshRevoked();
     streamEvents();
   })();
@@ -732,12 +963,10 @@
     button.disabled = true;
     const request = {target, requirements: {minMemoryBytes: memory}};
     if (preset === "cpu") {
-      request.command = "powershell.exe";
-      request.args = ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
-        '$end=[DateTime]::UtcNow.AddSeconds(20); while([DateTime]::UtcNow -lt $end){ for($n=1;$n -le 30000;$n++){[Math]::Sqrt($n) | Out-Null} }; "cpu_pulse_complete"'];
+      request.capability = "cpu.burn";
+      request.params = {seconds: "20"};
     } else {
-      request.command = "hostname.exe";
-      request.args = [];
+      request.capability = "system.identity";
     }
     try {
       const resp = await api("/workloads", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(request)});

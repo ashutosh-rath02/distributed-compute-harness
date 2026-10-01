@@ -86,6 +86,9 @@ type Workload struct {
 	Task       string   `json:"task,omitempty"`
 	Attempt    int      `json:"attempt,omitempty"`
 	AvoidNodes []NodeID `json:"avoidNodes,omitempty"`
+	// TimeoutSeconds bounds one attempt — fetch, run and upload — on the
+	// agent (FeatureTimeout); 0 = none. Set from policy at submission.
+	TimeoutSeconds int `json:"timeoutSeconds,omitempty"`
 }
 
 // EffectiveCapability returns w.Capability, or CapabilitySystemExecute if

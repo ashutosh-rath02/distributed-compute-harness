@@ -10,11 +10,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"home-harness/internal/catalog"
 	"home-harness/internal/domain"
+	"home-harness/internal/tasks"
 )
 
 // ErrExecutorFull is returned by Start when every workload slot is busy.
@@ -39,6 +42,10 @@ type Executor struct {
 	// workRoot holds one working directory per running workload that
 	// declares files (files.go). Empty disables file workloads.
 	workRoot string
+	// disabled are capabilities the device owner turned off
+	// (cmd/agent's -disable-capabilities): never advertised, and refused
+	// if assigned anyway.
+	disabled map[domain.CapabilityName]bool
 }
 
 type runningWorkload struct {
@@ -99,7 +106,34 @@ func (e *Executor) StartWithFiles(ctx context.Context, wl domain.Workload, xfer 
 	}
 
 	capability := wl.EffectiveCapability()
-	if capability != domain.CapabilitySystemExecute && capability != domain.CapabilityFilesystemRead {
+	refuse := func(msg string) error {
+		e.mu.Unlock()
+		onStatus(domain.WorkloadStatus{ID: wl.ID, Target: wl.Target, State: domain.WorkloadFailed, Error: msg})
+		return nil
+	}
+	if e.disabled[capability] {
+		return refuse(fmt.Sprintf("capability %q is disabled on this device", capability))
+	}
+	var handler tasks.Handler
+	if t, ok := catalog.Lookup(capability); ok {
+		h, ok := tasks.Lookup(capability)
+		if !ok {
+			return refuse(fmt.Sprintf("this agent has no handler for %s", capability))
+		}
+		if err := h.Available(ctx); err != nil {
+			return refuse(fmt.Sprintf("%s is unavailable on this device: %v", capability, err))
+		}
+		// The agent links the same catalog: re-validate what the manager
+		// compiled, so a version mismatch is refused rather than misread.
+		params, outputs, err := t.Compile(wl.Params, wl.Inputs)
+		if err != nil {
+			return refuse(fmt.Sprintf("assignment doesn't match this agent's %s v%s: %v", capability, t.Version, err))
+		}
+		if !sameParams(params, wl.Params) || !slices.Equal(outputs, wl.Outputs) {
+			return refuse(fmt.Sprintf("assignment doesn't match this agent's %s v%s (update the agent or the manager)", capability, t.Version))
+		}
+		handler = h
+	} else if capability != domain.CapabilitySystemExecute && capability != domain.CapabilityFilesystemRead {
 		e.mu.Unlock()
 		// Defense in depth, expected to be unreachable in the normal path:
 		// the manager already refuses to dispatch a capability a node
@@ -116,22 +150,25 @@ func (e *Executor) StartWithFiles(ctx context.Context, wl domain.Workload, xfer 
 		return nil
 	}
 
-	if wl.HasFiles() && capability != domain.CapabilitySystemExecute {
-		e.mu.Unlock()
-		onStatus(domain.WorkloadStatus{
-			ID: wl.ID, Target: wl.Target, State: domain.WorkloadFailed,
-			Error: fmt.Sprintf("capability %q can't take input or output files", capability),
-		})
-		return nil
+	if wl.HasFiles() && capability == domain.CapabilityFilesystemRead {
+		return refuse(fmt.Sprintf("capability %q can't take input or output files", capability))
 	}
 
-	runCtx, cancel := context.WithCancel(ctx)
+	var runCtx context.Context
+	var cancel context.CancelFunc
+	if wl.TimeoutSeconds > 0 {
+		runCtx, cancel = context.WithTimeout(ctx, time.Duration(wl.TimeoutSeconds)*time.Second)
+	} else {
+		runCtx, cancel = context.WithCancel(ctx)
+	}
 	e.running[wl.ID] = &runningWorkload{id: wl.ID, cancel: cancel}
 	e.mu.Unlock()
 
 	switch {
+	case handler != nil:
+		go e.runTask(runCtx, cancel, wl, xfer, onStatus, handlerRunner(handler, wl))
 	case wl.HasFiles():
-		go e.runWithFiles(runCtx, cancel, wl, xfer, onStatus)
+		go e.runTask(runCtx, cancel, wl, xfer, onStatus, execRunner(wl))
 	case capability == domain.CapabilitySystemExecute:
 		e.startExecute(runCtx, cancel, wl, onStatus)
 	case capability == domain.CapabilityFilesystemRead:
@@ -142,6 +179,36 @@ func (e *Executor) StartWithFiles(ctx context.Context, wl domain.Workload, xfer 
 
 // SetWorkRoot sets where working directories for file workloads go.
 func (e *Executor) SetWorkRoot(dir string) { e.workRoot = dir }
+
+// SetDisabled turns capabilities off on this device.
+func (e *Executor) SetDisabled(names []domain.CapabilityName) {
+	e.disabled = make(map[domain.CapabilityName]bool, len(names))
+	for _, n := range names {
+		e.disabled[n] = true
+	}
+}
+
+// Disabled reports whether the device owner turned name off.
+func (e *Executor) Disabled(name domain.CapabilityName) bool { return e.disabled[name] }
+
+func sameParams(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+// timedOut rewrites a failure caused by the workload's own deadline.
+func timedOut(runCtx context.Context, wl domain.Workload, status *domain.WorkloadStatus) {
+	if status.State == domain.WorkloadFailed && errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+		status.Error = fmt.Sprintf("timed out after %ds", wl.TimeoutSeconds)
+	}
+}
 
 // resolveCommandPath resolves a bare command name (no path separator) to
 // an absolute path ourselves on non-Windows, rather than letting
@@ -233,7 +300,7 @@ func (e *Executor) startExecute(runCtx context.Context, cancel context.CancelFun
 		default:
 			status.State = domain.WorkloadCompleted
 		}
-
+		timedOut(runCtx, wl, &status)
 		onStatus(status)
 	}()
 }
@@ -301,6 +368,7 @@ func (e *Executor) startFilesystemRead(runCtx context.Context, cancel context.Ca
 			status.Stdout = res.content
 			status.Truncated = res.truncated
 		}
+		timedOut(runCtx, wl, &status)
 		onStatus(status)
 	}()
 }

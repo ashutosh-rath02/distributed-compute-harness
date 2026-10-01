@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -34,6 +35,7 @@ func main() {
 	insecure := flag.Bool("insecure", false, "disable TLS: connect over plaintext ws:// with no manager authentication (dev/local use only; must match the manager's -insecure)")
 	relayAddr := flag.String("relay-addr", "", "relay server (cmd/relay) address to connect through, for a manager that isn't on this device's LAN; if set, -manager-addr/discovery are not used")
 	slots := flag.Int("slots", 0, "how many workloads this agent runs at once (0 = half the CPU count, at most 16)")
+	disable := flag.String("disable-capabilities", "", "comma-separated capabilities this device won't offer, e.g. system.execute,filesystem.read to allow only the sandboxed built-in task types")
 	workDir := flag.String("work-dir", "", "where workloads that take input/output files get their working directories (default: the user cache dir); never inside -identity-dir")
 	relayToken := flag.String("relay-token", "", "the manager's relay session token (required if -relay-addr is set)")
 	flag.Parse()
@@ -85,6 +87,7 @@ func main() {
 		IdentityDir:               *identityDir,
 		WorkloadSlots:             *slots,
 		WorkDir:                   *workDir,
+		DisabledCapabilities:      splitCapabilities(*disable),
 		Name:                      *name,
 		HeartbeatInterval:         *heartbeatInterval,
 		InsecureWorkloadsDisabled: *insecure,
@@ -139,4 +142,14 @@ func defaultIdentityDir() string {
 		return ".home-harness-agent"
 	}
 	return filepath.Join(dir, "home-harness", "agent")
+}
+
+func splitCapabilities(list string) []domain.CapabilityName {
+	var out []domain.CapabilityName
+	for _, f := range strings.Split(list, ",") {
+		if f = strings.TrimSpace(f); f != "" {
+			out = append(out, domain.CapabilityName(f))
+		}
+	}
+	return out
 }

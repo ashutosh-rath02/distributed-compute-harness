@@ -72,7 +72,15 @@ func startArtifactManager(t *testing.T, addr string, useTLS bool) artifactManage
 
 func startFileAgent(t *testing.T, ctx context.Context, m artifactManager, addr, name string) *agent.Agent {
 	t.Helper()
-	cfg := agent.Config{
+	return startFileAgentWithSlots(t, ctx, m, addr, name, 0)
+}
+
+// startFileAgentWithSlots fixes the slot count, for tests that need work
+// to spread (placement otherwise follows each node's free memory, which
+// two agents on one PC report slightly differently).
+func startFileAgentWithSlots(t *testing.T, ctx context.Context, m artifactManager, addr, name string, slots int) *agent.Agent {
+	t.Helper()
+	cfg := agent.Config{WorkloadSlots: slots,
 		ManagerAddr: addr, PairingToken: pairingToken, IdentityDir: filepath.Join(t.TempDir(), name), WorkDir: filepath.Join(t.TempDir(), name+"-work"),
 		Name: name, HeartbeatInterval: 100 * time.Millisecond, ReconnectBackoff: 50 * time.Millisecond, MaxReconnectBackoff: 200 * time.Millisecond, HostFingerprint: "-",
 	}

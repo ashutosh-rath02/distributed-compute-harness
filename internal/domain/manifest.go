@@ -37,6 +37,11 @@ func (m Manifest) Slots() int {
 // rather than always from the legacy single /agent-binary route.
 const FeatureSelfUpdatePath = "self-update.path"
 
+// FeatureTimeout means the agent enforces Workload.TimeoutSeconds.
+// Placement only sends a workload with a timeout to agents advertising
+// it: an older agent would silently run it without one.
+const FeatureTimeout = "timeout.v1"
+
 // HasAgentFeature reports whether m advertises feature.
 func (m Manifest) HasAgentFeature(feature string) bool {
 	for _, f := range m.AgentFeatures {

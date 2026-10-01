@@ -27,6 +27,10 @@ func cmdMap(c *apiClient, args []string) error {
 	target := fs.String("target", "", "pin every task to this node (default: spread over the fleet)")
 	minMem := fs.String("min-mem", "", "minimum available memory each task needs, e.g. 1GiB")
 	reduce := fs.String("reduce", "", `fan-in step run after every task succeeds, e.g. "python merge.py" (split on spaces); it gets each task's outputs at parts/<task>/<name>`)
+	typ := fs.String("type", "", "run this typed task type per file (see harnessctl tasks); the arguments are then its key=value parameters")
+	reduceType := fs.String("reduce-type", "", "typed fan-in step, e.g. archive.zip")
+	var reduceParams fileList
+	fs.Var(&reduceParams, "reduce-param", "key=value parameter of the -reduce-type step, repeatable")
 	var each, shared, outs, reduceOuts, reduceShared fileList
 	fs.Var(&each, "each", "input file or glob; one task per file, which lands in its working directory under its base name ({in} in the args), repeatable")
 	fs.Var(&shared, "shared", "file every task gets (e.g. the script it runs), repeatable")
@@ -36,12 +40,28 @@ func cmdMap(c *apiClient, args []string) error {
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: harnessctl map [-each FILE|GLOB ... | -count N] [-shared FILE ...] [-out NAME ...] [-attempts N] [-reduce \"cmd args\" [-reduce-out NAME ...]] <cmd> [args, with {in} or {i}]")
 	}
-	if err := fs.Parse(args); err != nil {
-		return err
+	// A raw command keeps everything after it as its own arguments (which
+	// may look like flags); a typed job takes key=value parameters, so
+	// flags may come after them too.
+	typed := false
+	for _, a := range args {
+		typed = typed || a == "-type" || a == "--type" || strings.HasPrefix(a, "-type=") || strings.HasPrefix(a, "--type=")
 	}
-	if fs.NArg() < 1 {
+	var pos []string
+	if typed {
+		var err error
+		if pos, err = parseTyped(fs, args); err != nil {
+			return err
+		}
+	} else {
+		if err := fs.Parse(args); err != nil {
+			return err
+		}
+		pos = fs.Args()
+	}
+	if len(pos) < 1 && *typ == "" {
 		fs.Usage()
-		return errors.New("missing the command to run")
+		return errors.New("missing the command to run (or -type)")
 	}
 	var files []string
 	for _, pattern := range each {
@@ -70,12 +90,26 @@ func cmdMap(c *apiClient, args []string) error {
 		return err
 	}
 	task := func(label string, inputs []map[string]string, replace func(string) string) map[string]any {
-		argv := make([]string, 0, fs.NArg()-1)
-		for _, a := range fs.Args()[1:] {
+		if *typ != "" {
+			params := map[string]string{}
+			for _, kv := range pos {
+				k, v, ok := strings.Cut(kv, "=")
+				if !ok {
+					continue // reported below
+				}
+				params[k] = replace(v)
+			}
+			return map[string]any{
+				"name": label, "target": *target, "capability": *typ, "params": params,
+				"inputs": append(append([]map[string]string{}, sharedIn...), inputs...), "requirements": req,
+			}
+		}
+		argv := make([]string, 0, len(pos)-1)
+		for _, a := range pos[1:] {
 			argv = append(argv, replace(a))
 		}
 		return map[string]any{
-			"name": label, "target": *target, "command": fs.Arg(0), "args": argv,
+			"name": label, "target": *target, "command": pos[0], "args": argv,
 			"inputs": append(append([]map[string]string{}, sharedIn...), inputs...), "outputs": outs, "requirements": req,
 		}
 	}
@@ -102,8 +136,25 @@ func cmdMap(c *apiClient, args []string) error {
 			}))
 		}
 	}
+	if *typ != "" {
+		for _, kv := range pos {
+			if !strings.Contains(kv, "=") {
+				return fmt.Errorf("with -type, arguments are key=value parameters: %q isn't", kv)
+			}
+		}
+	}
 	body := map[string]any{"name": *name, "tasks": tasks, "maxAttempts": *attempts}
-	if *reduce != "" {
+	if *reduceType != "" {
+		params, err := parseParams(reduceParams)
+		if err != nil {
+			return err
+		}
+		rin, err := c.resolveInputs(reduceShared)
+		if err != nil {
+			return err
+		}
+		body["reduce"] = map[string]any{"capability": *reduceType, "params": params, "inputs": rin}
+	} else if *reduce != "" {
 		argv := strings.Fields(*reduce)
 		rin, err := c.resolveInputs(reduceShared)
 		if err != nil {

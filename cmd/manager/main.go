@@ -48,6 +48,7 @@ func main() {
 	relayToken := flag.String("relay-token", "", "shared secret identifying this manager's session at the relay (required if -relay-addr is set; same care as -pairing-token: long, random, not reused)")
 	relayPublicURL := flag.String("relay-public-url", "", "browser-trusted HTTPS base URL exposed by the relay for internet enrollment links (e.g. https://relay.example.com:8443)")
 	relayEnrollmentToken := flag.String("relay-enrollment-token", "", "secret authorizing this manager to publish internet enrollment links (required with -relay-public-url)")
+	allowRaw := flag.Bool("allow-raw-commands", false, "on first start (no policy stored yet), allow raw commands (system.execute) and host file reads (filesystem.read) on every device; otherwise only the sandboxed typed task types run until enabled with \"harnessctl policy\"")
 	artifactDir := flag.String("artifact-dir", "harness-artifacts", "directory holding workload input/output files (content-addressed); \"\" disables workload files")
 	artifactMax := flag.String("artifact-max-size", "256MiB", "largest single workload file accepted (upload or output)")
 	artifactTotal := flag.String("artifact-store-size", "4GiB", "most space all stored workload files may use; uploads beyond it are refused")
@@ -175,6 +176,7 @@ func main() {
 		OperatorToken:       operatorToken,
 		Artifacts:           artifactStore,
 		ArtifactRetention:   *artifactRetention,
+		InitialPolicy:       initialPolicy(*allowRaw),
 	})
 	// Registered before Run (which calls transport.Listen) — puts the
 	// download on the exact address/port agents already dial, no new port
@@ -272,4 +274,15 @@ func parseSize(v string) (int64, error) {
 		return 0, fmt.Errorf("size %q out of range", v)
 	}
 	return int64(n), nil
+}
+
+// initialPolicy is the policy a manager starts with when none is stored.
+func initialPolicy(allowRaw bool) *domain.Policy {
+	p := domain.DefaultPolicy()
+	if allowRaw {
+		for _, name := range []domain.CapabilityName{domain.CapabilitySystemExecute, domain.CapabilityFilesystemRead} {
+			p.Types[name] = domain.TypePolicy{Enabled: true}
+		}
+	}
+	return &p
 }

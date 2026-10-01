@@ -21,6 +21,7 @@ var workloadsBucket = []byte("workloads")
 var revokedBucket = []byte("revoked")
 var nodeMetaBucket = []byte("node-meta")
 var jobsBucket = []byte("jobs")
+var settingsBucket = []byte("settings")
 
 // auditBuckets maps each audit log to its own bucket, so each is capped
 // independently (see AppendAudit).
@@ -50,7 +51,7 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("persistent: open %q: %w", path, err)
 	}
 	err = db.Update(func(tx *bbolt.Tx) error {
-		for _, name := range [][]byte{nodesBucket, workloadsBucket, revokedBucket, nodeMetaBucket, jobsBucket, auditBuckets[domain.AuditSecurity], auditBuckets[domain.AuditAdmissions], auditBuckets[domain.AuditNoise]} {
+		for _, name := range [][]byte{nodesBucket, workloadsBucket, revokedBucket, nodeMetaBucket, jobsBucket, settingsBucket, auditBuckets[domain.AuditSecurity], auditBuckets[domain.AuditAdmissions], auditBuckets[domain.AuditNoise]} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -367,4 +368,30 @@ func (s *Store) ListJobs() ([]domain.Job, error) {
 		})
 	})
 	return out, err
+}
+
+var policyKey = []byte("policy")
+
+// GetPolicy returns the stored policy, if one was ever saved.
+func (s *Store) GetPolicy() (domain.Policy, bool, error) {
+	var p domain.Policy
+	found := false
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		data := tx.Bucket(settingsBucket).Get(policyKey)
+		if data == nil {
+			return nil
+		}
+		found = true
+		return json.Unmarshal(data, &p)
+	})
+	return p, found, err
+}
+
+// PutPolicy stores the policy.
+func (s *Store) PutPolicy(p domain.Policy) error {
+	data, err := json.Marshal(p)
+	if err != nil {
+		return fmt.Errorf("persistent: marshal policy: %w", err)
+	}
+	return s.db.Update(func(tx *bbolt.Tx) error { return tx.Bucket(settingsBucket).Put(policyKey, data) })
 }

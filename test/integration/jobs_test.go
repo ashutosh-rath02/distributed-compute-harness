@@ -104,8 +104,8 @@ func TestMapJobSpreadsAcrossNodesAndReduces(t *testing.T) {
 	m := startArtifactManager(t, addr, false)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
-	a := startFileAgent(t, ctx, m, addr, "job-agent-a")
-	b := startFileAgent(t, ctx, m, addr, "job-agent-b")
+	a := startFileAgentWithSlots(t, ctx, m, addr, "job-agent-a", 2) // 6 tasks, 2 slots each: must spread
+	b := startFileAgentWithSlots(t, ctx, m, addr, "job-agent-b", 2)
 	waitFor(t, 5*time.Second, func() bool {
 		ra, okA := m.srv.Registry.Get(a.NodeID())
 		rb, okB := m.srv.Registry.Get(b.NodeID())

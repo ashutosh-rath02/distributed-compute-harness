@@ -89,6 +89,17 @@ func (s *Server) restartWorkload(ctx context.Context, rec WorkloadRecord) {
 		return
 	}
 
+	// Policy may have changed since it was submitted: a type that is now
+	// disabled is not brought back (CANCELED is never restarted).
+	if err := s.checkPolicy(rec.Workload.EffectiveCapability()); err != nil {
+		if blocked, ok := s.Workloads.blockRestart(rec.Workload.ID, err.Error()); ok {
+			s.persistWorkloadRecord(blocked)
+			log.Printf("workload.canceled: %s (restart %v)", blocked.Workload.ID, err)
+			s.publish(domain.EventWorkloadCanceled, blocked.Workload.Target, map[string]any{"workloadId": string(blocked.Workload.ID), "reason": "blocked by policy"})
+		}
+		return
+	}
+
 	// A Pinned workload stays on its exact node across restarts (v2's
 	// "explicit target is never silently overridden" precedent); an
 	// originally-auto-placed one is free to land anywhere currently

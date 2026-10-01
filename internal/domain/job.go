@@ -28,9 +28,13 @@ const (
 // TaskSpec is one unit of work in a job: what a single workload
 // submission would carry. Name is only a display label.
 type TaskSpec struct {
-	Name         string               `json:"name,omitempty"`
-	Target       NodeID               `json:"target,omitempty"`
-	Command      string               `json:"command"`
+	Name   string `json:"name,omitempty"`
+	Target NodeID `json:"target,omitempty"`
+	// Capability is a catalog task type with its Params (outputs then come
+	// from the type), or empty for a raw command.
+	Capability   CapabilityName       `json:"capability,omitempty"`
+	Params       map[string]string    `json:"params,omitempty"`
+	Command      string               `json:"command,omitempty"`
 	Args         []string             `json:"args,omitempty"`
 	Inputs       []ArtifactRef        `json:"inputs,omitempty"`
 	Outputs      []string             `json:"outputs,omitempty"`

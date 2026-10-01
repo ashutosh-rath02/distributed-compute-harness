@@ -108,7 +108,7 @@ func (a *Agent) getSystemInfo(ctx context.Context, cmdID string) domain.CommandR
 // and the manager's registry gets the refreshed values via the pushed
 // update regardless of whether anyone is still waiting on the result.
 func (a *Agent) refreshResources(ctx context.Context, conn domain.Conn, cmdID string) domain.CommandResult {
-	resources, capabilities, err := sysinfo.Manifest(ctx)
+	resources, capabilities, err := a.capabilities(ctx)
 	if err != nil {
 		return domain.CommandResult{CommandID: cmdID, Success: false, Error: err.Error()}
 	}

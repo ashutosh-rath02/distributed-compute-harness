@@ -100,6 +100,8 @@ func (s *Server) toNodeView(rec *NodeRecord, relations map[domain.NodeID]hostRel
 //	GET  /artifacts                  list stored files and store usage
 //	GET  /artifacts/{sha}[?name=]    download a stored file (always as an attachment)
 //	DELETE /artifacts/{sha}          delete a stored file no live workload needs
+//	GET  /catalog                    the typed task types, their schemas, policy, and how many nodes offer each (policy.go)
+//	GET  /policy, PUT /policy        what the fleet may run: per-type enable, node labels, max runtime
 //	POST /jobs                       submit a batch job: {"tasks":[...],"reduce":{...},"maxAttempts":3} (jobs.go)
 //	GET  /jobs                       list jobs with progress counts
 //	GET  /jobs/{id}                  one job: every task's state, attempts, node, outputs
@@ -146,6 +148,9 @@ func (s *Server) NewHTTPHandler() http.Handler {
 	mux.HandleFunc("GET /artifacts", s.apiListArtifacts)
 	mux.HandleFunc("GET /artifacts/{sha}", s.apiGetArtifact)
 	mux.HandleFunc("DELETE /artifacts/{sha}", s.apiDeleteArtifact)
+	mux.HandleFunc("GET /catalog", s.apiGetCatalog)
+	mux.HandleFunc("GET /policy", s.apiGetPolicy)
+	mux.HandleFunc("PUT /policy", s.apiPutPolicy)
 	mux.HandleFunc("POST /jobs", s.apiPostJob)
 	mux.HandleFunc("GET /jobs", s.apiListJobs)
 	mux.HandleFunc("GET /jobs/{id}", s.apiGetJob)
@@ -467,6 +472,8 @@ func (s *Server) apiPostWorkload(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, ErrInvalidWorkload):
 			http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		case errors.Is(err, ErrPolicy):
+			http.Error(w, err.Error(), http.StatusForbidden)
 		case errors.Is(err, ErrNodeNotConnected), errors.Is(err, ErrNoReadyNode), errors.Is(err, ErrNoEligibleNode):
 			http.Error(w, err.Error(), http.StatusConflict)
 		default:

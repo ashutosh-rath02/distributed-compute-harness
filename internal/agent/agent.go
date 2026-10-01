@@ -18,6 +18,7 @@ import (
 	"home-harness/internal/identity"
 	"home-harness/internal/protocol"
 	"home-harness/internal/sysinfo"
+	"home-harness/internal/tasks"
 )
 
 // metricsSampleInterval is how long CollectMetrics blocks per heartbeat to
@@ -38,6 +39,11 @@ type Config struct {
 	Discoverer   domain.Discoverer
 	PairingToken string
 	IdentityDir  string
+	// DisabledCapabilities are capabilities the device owner turned off
+	// (cmd/agent's -disable-capabilities): never advertised, refused if
+	// assigned. E.g. system.execute,filesystem.read leaves only the
+	// sandboxed built-in task types.
+	DisabledCapabilities []domain.CapabilityName
 	// WorkDir holds the working directories of workloads that declare
 	// files (cmd/agent's -work-dir). Empty uses defaultWorkRoot. Never
 	// put it inside IdentityDir.
@@ -170,6 +176,7 @@ func New(transport domain.Transport, cfg Config) (*Agent, error) {
 	}
 	a := &Agent{cfg: cfg, transport: transport, identity: id, startedAt: time.Now(), executor: NewExecutorWithSlots(cfg.WorkloadSlots), binaryHash: binaryHash}
 	a.executor.SetWorkRoot(cfg.WorkDir)
+	a.executor.SetDisabled(cfg.DisabledCapabilities)
 	switch cfg.HostFingerprint {
 	case "":
 		a.hostFingerprint, a.hostFingerprintSource = sysinfo.HostFingerprint(context.Background())
@@ -317,7 +324,7 @@ func (a *Agent) buildManifest(ctx context.Context) domain.Manifest {
 		name = hostname
 	}
 
-	resources, capabilities, err := sysinfo.Manifest(ctx)
+	resources, capabilities, err := a.capabilities(ctx)
 	if err != nil {
 		// Resource/capability reporting is best-effort: a node that can't
 		// introspect its own hardware should still be able to register and
@@ -342,7 +349,7 @@ func (a *Agent) buildManifest(ctx context.Context) domain.Manifest {
 		Capabilities: capabilities,
 		// Lets the manager tell this build apart from agents that can only
 		// download the legacy /agent-binary route (manager/selfupdate.go).
-		AgentFeatures: []string{domain.FeatureSelfUpdatePath, domain.FeatureArtifacts},
+		AgentFeatures: []string{domain.FeatureSelfUpdatePath, domain.FeatureArtifacts, domain.FeatureTimeout},
 		// The manager reserves this many concurrent workloads for us.
 		WorkloadSlots: a.executor.Slots(),
 	}
@@ -445,4 +452,18 @@ func defaultSlots() int {
 		return 16
 	}
 	return n
+}
+
+// capabilities is what this agent advertises: the raw ones sysinfo
+// reports plus every built-in task type available here
+// (internal/tasks), minus whatever the device owner disabled.
+func (a *Agent) capabilities(ctx context.Context) ([]domain.Resource, []domain.Capability, error) {
+	resources, raw, err := sysinfo.Manifest(ctx)
+	var out []domain.Capability
+	for _, c := range append(raw, tasks.Capabilities(ctx)...) {
+		if !a.executor.Disabled(c.Name) {
+			out = append(out, c)
+		}
+	}
+	return resources, out, err
 }

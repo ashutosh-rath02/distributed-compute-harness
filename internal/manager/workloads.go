@@ -143,6 +143,23 @@ func (wr *WorkloadRegistry) CancelPinnedTo(nodeID domain.NodeID, reason string) 
 	return changed
 }
 
+// blockRestart ends a restart-eligible workload for good (CANCELED,
+// never restarted), e.g. because policy no longer allows it.
+func (wr *WorkloadRegistry) blockRestart(id domain.WorkloadID, reason string) (WorkloadRecord, bool) {
+	wr.mu.Lock()
+	defer wr.mu.Unlock()
+	rec, ok := wr.workloads[id]
+	if !ok || !rec.Workload.RestartPolicy.WantsRestartAfter(rec.Status.State) {
+		return WorkloadRecord{}, false
+	}
+	rec.Status.State = domain.WorkloadCanceled
+	rec.Status.Error = reason
+	if rec.Status.FinishedAt.IsZero() {
+		rec.Status.FinishedAt = time.Now().UTC()
+	}
+	return *rec, true
+}
+
 // RestartCandidates returns copies of every workload whose policy wants a
 // restart from its current state (RestartPolicy.WantsRestartAfter) and
 // whose NextRestartAt has passed. Returns copies and takes no action (like

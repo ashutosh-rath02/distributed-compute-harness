@@ -62,6 +62,9 @@ func couldEverFit(rec *NodeRecord, capability domain.CapabilityName, req domain.
 	if !rec.HasCapability(capability) {
 		return false, fmt.Sprintf("does not declare capability %q", capability)
 	}
+	if !offersVersion(rec, capability) {
+		return false, fmt.Sprintf("offers a different version of %q (update the agent)", capability)
+	}
 	for _, f := range features {
 		if !rec.hasAgentFeature(f) {
 			return false, fmt.Sprintf("agent too old: lacks %q (update it)", f)

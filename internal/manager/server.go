@@ -60,6 +60,10 @@ type Config struct {
 	// artifact is kept (default 7 days).
 	Artifacts         *artifacts.Store
 	ArtifactRetention time.Duration
+	// InitialPolicy is the policy used until one is stored (policy.go):
+	// cmd/manager passes domain.DefaultPolicy (raw commands off). Nil =
+	// domain.PermissivePolicy, for embedding and tests.
+	InitialPolicy *domain.Policy
 }
 
 // PersistentStore is the subset of persistent storage the manager needs:
@@ -85,6 +89,9 @@ type PersistentStore interface {
 	// Batch jobs (jobs.go).
 	UpsertJob(job domain.Job) error
 	ListJobs() ([]domain.Job, error)
+	// Policy (policy.go).
+	GetPolicy() (domain.Policy, bool, error)
+	PutPolicy(p domain.Policy) error
 }
 
 // Server is the control-plane process: it accepts connections over a
@@ -129,6 +136,8 @@ type Server struct {
 	grants *grantTable
 	// jobs holds batch jobs (jobs.go).
 	jobs *jobTable
+	// policy decides what may run (policy.go).
+	policy *policyStore
 
 	// agents is the loaded agent-build catalog (agentcatalog.go), built
 	// once at startup from cfg.AgentBinaries — never nil.
@@ -171,6 +180,10 @@ func NewServer(transport domain.Transport, store PersistentStore, cfg Config) *S
 		requeues:     make(map[domain.WorkloadID]int),
 		grants:       newGrantTable(),
 		jobs:         newJobTable(),
+		policy:       &policyStore{p: domain.PermissivePolicy()},
+	}
+	if cfg.InitialPolicy != nil {
+		s.policy.set(*cfg.InitialPolicy)
 	}
 
 	if cfg.OperatorToken == "" {
@@ -324,9 +337,16 @@ func (s *Server) Submit(ctx context.Context, spec WorkloadSpec) (domain.Workload
 	if spec.Capability == "" {
 		spec.Capability = domain.CapabilitySystemExecute
 	}
+	if err := s.checkPolicy(spec.Capability); err != nil {
+		return domain.Workload{}, err
+	}
+	if err := compileTyped(&spec.Capability, &spec.Command, &spec.Args, &spec.Params, spec.Inputs, &spec.Outputs, &spec.Requirements); err != nil {
+		return domain.Workload{}, err
+	}
 	if err := s.prepareFiles(&spec); err != nil {
 		return domain.Workload{}, err
 	}
+	timeout := s.policyFor(spec.Capability).MaxRuntimeSeconds
 	target, command, args, capability, params, req, restartPolicy := spec.Target, spec.Command, spec.Args, spec.Capability, spec.Params, spec.Requirements, spec.RestartPolicy
 	if spec.Attempt < 0 || (spec.Job == "") != (spec.Task == "") {
 		return domain.Workload{}, fmt.Errorf("%w: job, task and attempt go together", ErrInvalidWorkload)
@@ -338,7 +358,7 @@ func (s *Server) Submit(ctx context.Context, spec WorkloadSpec) (domain.Workload
 	}
 	newWorkload := func(target domain.NodeID) domain.Workload {
 		return domain.Workload{ID: domain.WorkloadID(id), Target: target, Pinned: pinned, Command: command, Args: args, Capability: capability, Params: params, Requirements: req, RestartPolicy: restartPolicy, Inputs: spec.Inputs, Outputs: spec.Outputs,
-			Job: spec.Job, Task: spec.Task, Attempt: spec.Attempt, AvoidNodes: spec.AvoidNodes}
+			Job: spec.Job, Task: spec.Task, Attempt: spec.Attempt, AvoidNodes: spec.AvoidNodes, TimeoutSeconds: timeout}
 	}
 	s.placeMu.Lock()
 	rec, resolved, err := s.resolve(placementFor(newWorkload(target)), nil)
@@ -425,6 +445,9 @@ func (s *Server) resolve(p placement, usage map[domain.NodeID]nodeUsage) (*NodeR
 		if ok, reason := couldEverFit(rec, p.capability, p.req, p.features...); !ok {
 			return nil, "", fmt.Errorf("%w (%s: %s)", ErrNoEligibleNode, p.target, reason)
 		}
+		if sel := s.policyFor(p.capability).NodeLabels; !s.matchesLabels(p.target, sel) {
+			return nil, "", fmt.Errorf("%w (%s: lacks the labels policy requires for %s (%v))", ErrNoEligibleNode, p.target, p.capability, sel)
+		}
 		if ok, reason := nodeFits(rec, p.capability, p.req); !ok {
 			return nil, "", fmt.Errorf("%w (%s: %s)", errNoRoom, p.target, reason)
 		}
@@ -448,10 +471,15 @@ func (s *Server) resolve(p placement, usage map[domain.NodeID]nodeUsage) (*NodeR
 	// can take it right now (live state and free slots)? None → queue.
 	var never []string
 	var eligible, preferred []*NodeRecord
+	selector := s.policyFor(p.capability).NodeLabels
 	for _, rec := range candidates {
 		id := rec.Node.Identity.NodeID
 		if ok, reason := couldEverFit(rec, p.capability, p.req, p.features...); !ok {
 			never = append(never, fmt.Sprintf("%s: %s", id, reason))
+			continue
+		}
+		if !s.matchesLabels(id, selector) {
+			never = append(never, fmt.Sprintf("%s: lacks the labels policy requires for %s (%v)", id, p.capability, selector))
 			continue
 		}
 		eligible = append(eligible, rec)
@@ -613,6 +641,17 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 		for _, pw := range workloads {
 			s.Workloads.Seed(pw)
+		}
+		if p, found, err := s.store.GetPolicy(); err != nil {
+			return fmt.Errorf("manager: load policy: %w", err)
+		} else if found {
+			s.policy.set(p)
+		} else if s.cfg.InitialPolicy != nil {
+			// First start with policy: record the starting point, so a
+			// later restart can't silently change it.
+			if err := s.store.PutPolicy(*s.cfg.InitialPolicy); err != nil {
+				return fmt.Errorf("manager: persist policy: %w", err)
+			}
 		}
 		jobs, err := s.store.ListJobs()
 		if err != nil {

@@ -55,6 +55,12 @@ func main() {
 		err = cmdOutputs(client, args[1:])
 	case "map":
 		err = cmdMap(client, args[1:])
+	case "tasks":
+		err = client.cmdTasks(args[1:])
+	case "do":
+		err = cmdDo(client, args[1:])
+	case "policy":
+		err = cmdPolicy(client, args[1:])
 	case "jobs":
 		err = client.cmdJobs()
 	case "job":
@@ -178,6 +184,26 @@ Commands:
   artifact rm <sha256>  delete a stored file (refused while a queued or
                         running workload needs it)
   artifacts             list stored files and how much space they use
+  tasks [type]          list the typed task types (built into every agent, the
+                        same on every OS, sandboxed to their files), whether
+                        policy allows each and how many nodes offer it; with
+                        a type, its parameters
+  do [-target ID] [-in FILE ...] <type> [key=value ...]
+                        run one typed task, e.g.
+                          harnessctl do -in photo.jpg image.resize width=800
+                          harnessctl do cpu.burn seconds=30
+  policy                show what the fleet may run
+  policy type <name> on|off | labels key=value,...|- | max-runtime 10m|0
+                        enable/disable a type (raw system.execute and
+                        filesystem.read are off until you turn them on),
+                        limit it to nodes with these labels, or bound each
+                        attempt's runtime
+  map -type T [-each FILE|GLOB ... | -count N] [key=value ...]
+      [-reduce-type T2 [-reduce-param key=value ...]]
+                        a job of typed tasks, e.g.
+                          harnessctl map -type image.resize -each "photos/*.jpg"
+                            width=800 -reduce-type archive.zip
+                            -reduce-param name=photos.zip
   map [-each FILE|GLOB ... | -count N] [-shared FILE ...] [-out NAME ...]
       [-attempts N] [-reduce "cmd args" [-reduce-out NAME ...]] <cmd> [args...]
                         run one task per file (or N copies) spread over the

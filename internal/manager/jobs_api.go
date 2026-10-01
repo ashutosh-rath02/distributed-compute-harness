@@ -13,11 +13,13 @@ import (
 // Batch job API (jobs.go).
 
 type jobTaskRequest struct {
-	Name    string   `json:"name,omitempty"`
-	Target  string   `json:"target,omitempty"`
-	Command string   `json:"command"`
-	Args    []string `json:"args,omitempty"`
-	Inputs  []struct {
+	Name       string            `json:"name,omitempty"`
+	Target     string            `json:"target,omitempty"`
+	Capability string            `json:"capability,omitempty"`
+	Params     map[string]string `json:"params,omitempty"`
+	Command    string            `json:"command"`
+	Args       []string          `json:"args,omitempty"`
+	Inputs     []struct {
 		Name   string `json:"name"`
 		SHA256 string `json:"sha256"`
 	} `json:"inputs,omitempty"`
@@ -26,7 +28,7 @@ type jobTaskRequest struct {
 }
 
 func (t jobTaskRequest) spec() domain.TaskSpec {
-	ts := domain.TaskSpec{Name: t.Name, Target: domain.NodeID(t.Target), Command: t.Command, Args: t.Args, Outputs: t.Outputs, Requirements: t.Requirements}
+	ts := domain.TaskSpec{Name: t.Name, Target: domain.NodeID(t.Target), Capability: domain.CapabilityName(t.Capability), Params: t.Params, Command: t.Command, Args: t.Args, Outputs: t.Outputs, Requirements: t.Requirements}
 	for _, in := range t.Inputs {
 		ts.Inputs = append(ts.Inputs, domain.ArtifactRef{Name: in.Name, SHA256: in.SHA256})
 	}
@@ -60,6 +62,8 @@ func (s *Server) apiPostJob(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, ErrInvalidWorkload):
 			http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		case errors.Is(err, ErrPolicy):
+			http.Error(w, err.Error(), http.StatusForbidden)
 		case errors.Is(err, ErrNodeNotConnected), errors.Is(err, ErrNoReadyNode), errors.Is(err, ErrNoEligibleNode):
 			http.Error(w, err.Error(), http.StatusConflict)
 		default:

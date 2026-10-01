@@ -1,7 +1,9 @@
 package main
 
 import (
+	"flag"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -104,5 +106,18 @@ func TestHumanBytes(t *testing.T) {
 		if got := humanBytes(c.in); got != c.want {
 			t.Fatalf("humanBytes(%d) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+func TestParseTypedAllowsFlagsAfterParameters(t *testing.T) {
+	fs := flag.NewFlagSet("x", flag.ContinueOnError)
+	in := fs.String("in", "", "")
+	rt := fs.String("reduce-type", "", "")
+	pos, err := parseTyped(fs, []string{"image.resize", "width=800", "-in", "a.jpg", "format=png", "-reduce-type", "archive.zip"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(pos, " ") != "image.resize width=800 format=png" || *in != "a.jpg" || *rt != "archive.zip" {
+		t.Fatalf("pos %v in %q reduce-type %q", pos, *in, *rt)
 	}
 }

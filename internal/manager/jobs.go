@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"home-harness/internal/catalog"
 	"home-harness/internal/domain"
 )
 
@@ -241,23 +242,35 @@ func (s *Server) SubmitJob(ctx context.Context, spec JobSpec) (domain.Job, error
 		return domain.Job{}, fmt.Errorf("%w: maxAttempts must be 1-%d", ErrInvalidWorkload, domain.MaxJobAttempts)
 	}
 	usage := s.Workloads.usageByNode()
-	check := func(label string, t *domain.TaskSpec) error {
-		if t.Command == "" {
+	// check validates one task as Submit will (policy, typed compile,
+	// files) and that some node could ever run it. parts stands in for a
+	// reduce's future inputs.
+	check := func(label string, t *domain.TaskSpec, parts []domain.ArtifactRef) error {
+		if t.Capability == "" {
+			t.Capability = domain.CapabilitySystemExecute
+		}
+		if err := s.checkPolicy(t.Capability); err != nil {
+			return fmt.Errorf("%s: %w", label, err)
+		}
+		if t.Capability == domain.CapabilitySystemExecute && t.Command == "" {
 			return fmt.Errorf("%w: %s: command is required", ErrInvalidWorkload, label)
 		}
-		ws := WorkloadSpec{Target: t.Target, Capability: domain.CapabilitySystemExecute, Inputs: t.Inputs, Outputs: t.Outputs}
+		if err := compileTyped(&t.Capability, &t.Command, &t.Args, &t.Params, append(append([]domain.ArtifactRef{}, t.Inputs...), parts...), &t.Outputs, &t.Requirements); err != nil {
+			return fmt.Errorf("%s: %w", label, err)
+		}
+		ws := WorkloadSpec{Target: t.Target, Capability: t.Capability, Inputs: t.Inputs, Outputs: t.Outputs}
 		if err := s.prepareFiles(&ws); err != nil {
 			return fmt.Errorf("%s: %w", label, err)
 		}
 		t.Inputs = ws.Inputs
-		w := domain.Workload{Target: t.Target, Pinned: t.Target != "", Requirements: t.Requirements, Inputs: t.Inputs, Outputs: t.Outputs}
+		w := domain.Workload{Target: t.Target, Pinned: t.Target != "", Capability: t.Capability, Requirements: t.Requirements, Inputs: append(t.Inputs, parts...), Outputs: t.Outputs, TimeoutSeconds: s.policyFor(t.Capability).MaxRuntimeSeconds}
 		if _, _, err := s.resolve(placementFor(w), usage); err != nil && !errors.Is(err, errNoRoom) {
 			return fmt.Errorf("%s: %w", label, err)
 		}
 		return nil
 	}
 	for i := range spec.Tasks {
-		if err := check("task "+domain.TaskKey(i), &spec.Tasks[i]); err != nil {
+		if err := check("task "+domain.TaskKey(i), &spec.Tasks[i], nil); err != nil {
 			return domain.Job{}, err
 		}
 	}
@@ -273,11 +286,11 @@ func (s *Server) SubmitJob(ctx context.Context, spec JobSpec) (domain.Job, error
 				parts = append(parts, domain.ArtifactRef{Name: domain.ReducePartName(domain.TaskKey(i), out), SHA256: placeholder})
 			}
 		}
+		if err := check("reduce", &r, parts[len(r.Inputs):]); err != nil {
+			return domain.Job{}, err
+		}
 		if err := domain.ValidateWorkloadFiles(parts, r.Outputs); err != nil {
 			return domain.Job{}, fmt.Errorf("%w: reduce: %v", ErrInvalidWorkload, err)
-		}
-		if err := check("reduce", &r); err != nil {
-			return domain.Job{}, err
 		}
 		spec.Reduce = &r
 	}
@@ -438,11 +451,21 @@ func (s *Server) submitAttempt(ctx context.Context, job domain.Job, key string, 
 	if inputs == nil {
 		inputs = t.Inputs
 	}
-	_, err := s.Submit(ctx, WorkloadSpec{
-		Target: t.Target, Command: t.Command, Args: t.Args, Capability: domain.CapabilitySystemExecute,
+	spec := WorkloadSpec{
+		Target: t.Target, Command: t.Command, Args: t.Args, Capability: t.Capability, Params: t.Params,
 		Requirements: t.Requirements, RestartPolicy: domain.RestartNever, Inputs: inputs, Outputs: t.Outputs,
 		Job: job.ID, Task: key, Attempt: tp.attempts + 1, AvoidNodes: tp.avoid,
-	})
+	}
+	if _, typed := catalog.Lookup(t.Capability); typed {
+		spec.Outputs = nil // the type names them again for these inputs
+	}
+	_, err := s.Submit(ctx, spec)
+	if errors.Is(err, ErrInvalidWorkload) || errors.Is(err, ErrPolicy) {
+		// Won't get better by waiting (policy changed, or the reduce's
+		// real inputs don't fit): stop the job and say why.
+		s.finishJob(job, domain.JobFailed, "task "+key+": "+err.Error())
+		return
+	}
 	if err != nil {
 		s.jobs.setWaiting(job.ID, key, err.Error())
 		return
