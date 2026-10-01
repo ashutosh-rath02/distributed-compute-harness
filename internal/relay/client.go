@@ -41,12 +41,11 @@ func DialListen(ctx context.Context, addr, session string) (net.Conn, error) {
 }
 
 // DialConnect registers as the "connect" side of session at the relay
-// addr. Unlike DialListen, this does not wait for a peer to show up later
-// — it either pairs with an already-parked "listen" immediately or fails
-// fast, since there is nothing to wait for on this side (the relay has
-// nothing to hold open for a connect that arrived with no listener
-// waiting). Callers should retry on failure the same way they already
-// retry any other transient dial failure.
+// addr. Unlike DialListen, this does not wait indefinitely for a peer —
+// it pairs with a parked "listen", waiting at most the relay's short
+// connect grace (well under a second) for one to re-register, and
+// otherwise fails fast. Callers should retry on failure the same way they
+// already retry any other transient dial failure.
 func DialConnect(ctx context.Context, addr, session string) (net.Conn, error) {
 	return dial(ctx, addr, handshake{Role: roleConnect, Session: session})
 }

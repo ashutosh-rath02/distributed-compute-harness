@@ -15,10 +15,31 @@ import (
 // crashed mid-registration) a session can accumulate.
 const DefaultIdleTimeout = 60 * time.Second
 
+// connectGrace is how long a "connect" that finds no parked "listen" waits
+// for one to arrive before failing. A manager's pool of listen slots
+// (internal/transport/relay) re-registers the instant this relay's idle
+// timeout expires them — and since the slots registered together, they
+// expire together — so every idle cycle has a window of one
+// manager<->relay round trip with nothing parked. Without a grace period, a
+// connect landing in that window fails even though the manager is healthy,
+// and the agent then sits out a reconnect backoff for nothing. It stays
+// well under a second so a connect for a session with no manager at all
+// still fails fast.
+const connectGrace = 500 * time.Millisecond
+
 // pendingEntry is one parked "listen" connection awaiting a peer.
 type pendingEntry struct {
 	conn    net.Conn
 	claimed chan struct{}
+}
+
+// arrival lets connects waiting out connectGrace for a session learn that
+// a listen has parked: park closes ch. waiters counts the connects
+// currently holding it, so the last one to give up can drop the map entry
+// — otherwise connects for never-listened sessions would leak entries.
+type arrival struct {
+	ch      chan struct{}
+	waiters int
 }
 
 // Server pairs "listen" and "connect" connections that share a session
@@ -31,6 +52,7 @@ type Server struct {
 
 	mu          sync.Mutex
 	pending     map[string][]*pendingEntry
+	arrivals    map[string]*arrival
 	aliasCipher cipher.AEAD
 }
 
@@ -50,7 +72,12 @@ func NewServerWithAliasKey(idleTimeout time.Duration, aliasKey string) *Server {
 	if err != nil {
 		panic(err) // AES-GCM construction with a SHA-256 key cannot fail
 	}
-	return &Server{idleTimeout: idleTimeout, pending: make(map[string][]*pendingEntry), aliasCipher: aead}
+	return &Server{
+		idleTimeout: idleTimeout,
+		pending:     make(map[string][]*pendingEntry),
+		arrivals:    make(map[string]*arrival),
+		aliasCipher: aead,
+	}
 }
 
 func (s *Server) issueAlias(session string) (string, error) { return sealAlias(s.aliasCipher, session) }
@@ -104,10 +131,15 @@ func (s *Server) handleConn(conn net.Conn) {
 	}
 }
 
-// park registers e as pending for session.
+// park registers e as pending for session and wakes any connects waiting
+// for one.
 func (s *Server) park(session string, e *pendingEntry) {
 	s.mu.Lock()
 	s.pending[session] = append(s.pending[session], e)
+	if a := s.arrivals[session]; a != nil {
+		close(a.ch)
+		delete(s.arrivals, session)
+	}
 	s.mu.Unlock()
 }
 
@@ -126,18 +158,56 @@ func (s *Server) remove(session string, e *pendingEntry) bool {
 	return false
 }
 
-// claim atomically pops the oldest pending entry for session (FIFO), or
-// nil if none is waiting.
-func (s *Server) claim(session string) *pendingEntry {
+// claimOrWait atomically pops the oldest pending entry for session (FIFO),
+// or, if none is waiting, registers the caller as waiting for the next
+// park and returns that arrival instead.
+func (s *Server) claimOrWait(session string) (*pendingEntry, *arrival) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	list := s.pending[session]
-	if len(list) == 0 {
-		return nil
+	if list := s.pending[session]; len(list) > 0 {
+		e := list[0]
+		s.pending[session] = list[1:]
+		return e, nil
 	}
-	e := list[0]
-	s.pending[session] = list[1:]
-	return e
+	a := s.arrivals[session]
+	if a == nil {
+		a = &arrival{ch: make(chan struct{})}
+		s.arrivals[session] = a
+	}
+	a.waiters++
+	return nil, a
+}
+
+// stopWaiting releases a claimOrWait registration, dropping the arrival
+// once its last waiter leaves (unless park already replaced/removed it).
+func (s *Server) stopWaiting(session string, a *arrival) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a.waiters--
+	if a.waiters == 0 && s.arrivals[session] == a {
+		delete(s.arrivals, session)
+	}
+}
+
+// claimWithin claims a pending entry for session, waiting up to grace for
+// one to park if none is there yet. A wake-up can lose the race for the
+// new entry to another waiting connect, so it loops until the deadline.
+func (s *Server) claimWithin(session string, grace time.Duration) *pendingEntry {
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
+	for {
+		e, a := s.claimOrWait(session)
+		if e != nil {
+			return e
+		}
+		select {
+		case <-a.ch:
+			s.stopWaiting(session, a)
+		case <-timer.C:
+			s.stopWaiting(session, a)
+			return nil
+		}
+	}
 }
 
 func (s *Server) handleListen(session string, conn net.Conn) {
@@ -163,7 +233,7 @@ func (s *Server) handleListen(session string, conn net.Conn) {
 
 func (s *Server) handleConnect(session string, conn net.Conn) {
 	session = s.resolveSession(session)
-	e := s.claim(session)
+	e := s.claimWithin(session, connectGrace)
 	if e == nil {
 		writeJSONLine(conn, pairedResponse{Error: "no listener waiting for this session"})
 		conn.Close()

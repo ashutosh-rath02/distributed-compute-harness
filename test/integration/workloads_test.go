@@ -281,14 +281,18 @@ func TestWorkloadRejectsSecondConcurrentAssignOnSameNode(t *testing.T) {
 	})
 
 	sleepCmd, sleepArgv := sleepArgs("5")
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	// Generous bounds: waitFor returns as soon as each condition holds, but
+	// starting powershell.exe can take seconds on a loaded Windows machine
+	// (e.g. the whole suite running in parallel), and the submit context
+	// must outlive both waits since the second submit reuses it.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	first, err := srv.SubmitWorkload(ctx, a.NodeID(), sleepCmd, sleepArgv, "", nil, domain.ResourceRequirements{}, domain.RestartNever)
 	if err != nil {
 		t.Fatalf("SubmitWorkload (first): %v", err)
 	}
 
-	waitFor(t, 2*time.Second, func() bool {
+	waitFor(t, 10*time.Second, func() bool {
 		rec, ok := srv.Workloads.Get(first.ID)
 		return ok && rec.Status.State == domain.WorkloadRunning
 	})
@@ -302,7 +306,7 @@ func TestWorkloadRejectsSecondConcurrentAssignOnSameNode(t *testing.T) {
 	// The agent rejects the second assignment (only one workload at a time
 	// per node in v0) — the manager should see that as a reported FAILED
 	// status, not silence.
-	waitFor(t, 2*time.Second, func() bool {
+	waitFor(t, 10*time.Second, func() bool {
 		rec, ok := srv.Workloads.Get(second.ID)
 		return ok && rec.Status.State == domain.WorkloadFailed
 	})

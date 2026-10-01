@@ -200,3 +200,50 @@ func TestTwoPendingListenersPairInFIFOOrder(t *testing.T) {
 		t.Fatalf("second listener got %q, want %q", buf, "B")
 	}
 }
+
+// TestConnectJustBeforeListenStillPairs covers the manager pool's
+// re-registration gap: its listen slots expire together at the idle
+// timeout and re-dial immediately, so a connect can land a round trip
+// before the next listen parks. connectGrace must bridge that instead of
+// failing a connect to a perfectly healthy manager.
+func TestConnectJustBeforeListenStillPairs(t *testing.T) {
+	addr := startTestServer(t, 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	connected := make(chan error, 1)
+	go func() {
+		c, err := DialConnect(ctx, addr, "session-gap")
+		if err == nil {
+			c.Close()
+		}
+		connected <- err
+	}()
+
+	time.Sleep(connectGrace / 5)
+	listenConn, err := DialListen(ctx, addr, "session-gap")
+	if err != nil {
+		t.Fatalf("DialListen: %v", err)
+	}
+	defer listenConn.Close()
+
+	if err := <-connected; err != nil {
+		t.Fatalf("DialConnect arriving %v before the listen should have paired: %v", connectGrace/5, err)
+	}
+}
+
+// TestUnmatchedConnectDoesNotLeakArrival guards the waiter bookkeeping:
+// connects for a session nobody ever listens on (a typo, a stale
+// credential, a scanner) must not accumulate entries in the server.
+func TestUnmatchedConnectDoesNotLeakArrival(t *testing.T) {
+	srv := NewServer(time.Second)
+	if e := srv.claimWithin("nobody-listens", 10*time.Millisecond); e != nil {
+		t.Fatal("expected no entry for a session with no listener")
+	}
+	srv.mu.Lock()
+	n := len(srv.arrivals)
+	srv.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("expected no leftover arrivals after an unmatched connect gave up, got %d", n)
+	}
+}
