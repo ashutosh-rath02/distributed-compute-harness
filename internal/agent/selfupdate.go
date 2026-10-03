@@ -48,17 +48,20 @@ func removeStaleUpdateFile(exePath string) {
 	}
 }
 
-// selfUpdateHTTPClient builds the client performSelfUpdate downloads with,
-// pinned to the manager's certificate fingerprint exactly like the main WS
-// transport already is (mtls.PinnedClientConfig) — not a new trust
-// mechanism, reused for this second, short-lived connection.
+// selfUpdateHTTPClient builds the client performSelfUpdate (and workload
+// file transfers) download with, pinned to the manager's certificate
+// fingerprint exactly like the main WS transport already is
+// (mtls.PinnedClientConfig) — not a new trust mechanism, reused for this
+// second, short-lived connection. Built per use, from the fingerprint the
+// transport actually pins: a pairing device that learned it at its first
+// connection (no -manager-fingerprint) must not check against an empty one.
 func (a *Agent) selfUpdateHTTPClient() *http.Client {
 	if a.cfg.Insecure {
 		return http.DefaultClient
 	}
 	return &http.Client{
 		Timeout:   2 * time.Minute,
-		Transport: &http.Transport{TLSClientConfig: mtls.PinnedClientConfig(a.cfg.ManagerFingerprint)},
+		Transport: &http.Transport{TLSClientConfig: mtls.PinnedClientConfig(a.managerFingerprint())},
 	}
 }
 

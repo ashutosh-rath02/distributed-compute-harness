@@ -16,6 +16,19 @@ import (
 //go:embed dashboard.html
 var dashboardHTML []byte
 
+// liveHTML is the one-screen live view (GET /live): every device with its
+// CPU, memory and busy slots, what runs where, the queue, and the event
+// feed. Like the dashboard, a static shell: it signs in with the
+// dashboard's session (same origin, localStorage) and holds no data.
+//
+//go:embed live.html
+var liveHTML []byte
+
+func (s *Server) apiGetLive(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(liveHTML)
+}
+
 // apiGetDashboard serves the dashboard page itself. Registered on "GET
 // /{$}" (Go 1.22+'s exact-root-only pattern) so it only matches "/",
 // leaving every other path to its own handler.

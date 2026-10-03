@@ -364,10 +364,58 @@ func TestBuildUnixRemoteAndErrors(t *testing.T) {
 // The agent must never be installed to run as SYSTEM (raw commands would
 // run with full control of the machine).
 func TestWindowsInstallNeverRunsAsSystem(t *testing.T) {
-	out := windowsInstall("fetch", "HASH", "-flags", "done")
+	out := windowsInstall(windowsSteps{Fetch: "fetch", Hash: "HASH", AgentFlags: "-flags", Done: "done"})
 	for _, bad := range []string{"-UserId SYSTEM", "-UserId \"SYSTEM\"", "S-1-5-18", "-RunLevel Highest", "LocalSystem", "NT AUTHORITY"} {
 		if strings.Contains(out, bad) {
 			t.Fatalf("the Windows install mentions %q", bad)
+		}
+	}
+}
+
+func TestBuildPairingRefusesWhatItCannotSafelyRender(t *testing.T) {
+	ok := PairingInfo{
+		Fingerprint: strings.Repeat("ab", 32), FallbackAddr: "192.168.1.20:7420",
+		WindowsURL: "http://192.168.1.20:7419/agent/windows/amd64", WindowsSHA256: "abcd",
+	}
+	if _, err := BuildPairing("windows", ok); err != nil {
+		t.Fatalf("valid info: %v", err)
+	}
+	for name, mutate := range map[string]func(*PairingInfo){
+		"no fingerprint (insecure manager)": func(p *PairingInfo) { p.Fingerprint = "" },
+		"odd fingerprint":                   func(p *PairingInfo) { p.Fingerprint = strings.Repeat("ab", 31) + `"x` },
+		"odd fallback address":              func(p *PairingInfo) { p.FallbackAddr = `1.2.3.4:7420"; calc; "` },
+		"no Windows build":                  func(p *PairingInfo) { p.WindowsURL = "" },
+	} {
+		p := ok
+		mutate(&p)
+		if _, err := BuildPairing("windows", p); err == nil {
+			t.Errorf("%s: expected an error", name)
+		}
+	}
+	if _, err := BuildPairing("android", ok); err == nil {
+		t.Error("Android devices join with the app, not a script")
+	}
+}
+
+// Every Windows install (token, invitation or join page) must cope with an
+// agent already running there: Windows won't replace a running agent.exe.
+func TestWindowsInstallStopsAnOldAgentFirst(t *testing.T) {
+	out, err := Build("192.168.10.11:7420", "windows", Info{
+		Fingerprint: "abc123", PairingToken: "secret-token",
+		AgentBinaryAvailable: true, AgentBinarySHA256: "deadbeef",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop, move := strings.Index(out, "Stop-ScheduledTask"), strings.Index(out, "Move-Item $download $agent")
+	kill := strings.Index(out, `Where-Object { $_.Path -eq $agent } | Stop-Process`)
+	if stop < 0 || kill < 0 || move < 0 || stop > move || kill > move {
+		t.Fatal("the old task, launcher and agent must be stopped before agent.exe is replaced")
+	}
+	script := out[strings.Index(out, "$root = "):]
+	for i, r := range script {
+		if r > 127 {
+			t.Fatalf("Windows install script has a non-ASCII character %q at %d", r, i)
 		}
 	}
 }

@@ -2,6 +2,7 @@ package sysinfo
 
 import (
 	"context"
+	"runtime"
 	"testing"
 	"time"
 
@@ -57,5 +58,38 @@ func TestCollectMetricsReturnsPlausibleValues(t *testing.T) {
 	}
 	if m.MemoryAvailableBytes == 0 {
 		t.Fatal("expected non-zero available memory")
+	}
+}
+
+// Where the system's CPU counters are unreadable (an Android app), the
+// figure is this process's own use: it must actually follow the work.
+func TestProcessCPUFollowsTheWork(t *testing.T) {
+	var p processCPU
+	ctx := context.Background()
+	if _, err := p.percent(ctx, 50*time.Millisecond); err != nil {
+		t.Fatalf("first sample: %v", err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	idle, err := p.percent(ctx, 0)
+	if err != nil || idle > 30 {
+		t.Fatalf("idle: %.1f%% (%v)", idle, err)
+	}
+	stop := make(chan struct{})
+	for i := 0; i < runtime.NumCPU(); i++ {
+		go func() {
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+			}
+		}()
+	}
+	time.Sleep(600 * time.Millisecond)
+	busy, err := p.percent(ctx, 0)
+	close(stop)
+	if err != nil || busy < 40 {
+		t.Fatalf("with every CPU busy: %.1f%% (%v), want most of the machine", busy, err)
 	}
 }

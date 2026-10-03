@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live - Home Harness</title>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --line:#30363d; --text:#e6edf3; --dim:#8b949e; --blue:#2f81f7; --green:#3fb950; --amber:#d29922; --red:#f85149; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:system-ui,-apple-system,"Segoe UI",sans-serif; }
+  header { display:flex; align-items:center; gap:16px; flex-wrap:wrap; padding:14px 20px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--bg); z-index:2; }
+  h1 { font-size:1.15rem; margin:0; }
+  .dot { width:10px; height:10px; border-radius:50%; display:inline-block; background:var(--dim); margin-right:6px; }
+  .dot.on { background:var(--green); box-shadow:0 0 8px var(--green); }
+  .stat { color:var(--dim); font-size:.9rem; } .stat b { color:var(--text); font-size:1.05rem; margin-right:3px; }
+  header .spacer { flex:1; }
+  button { font:inherit; font-size:.85rem; padding:7px 12px; border-radius:6px; border:1px solid var(--line); background:var(--panel); color:var(--text); cursor:pointer; }
+  button.primary { background:var(--blue); border-color:var(--blue); color:#fff; }
+  a { color:var(--blue); }
+  main { display:grid; grid-template-columns: minmax(0,2fr) minmax(280px,1fr); gap:16px; padding:16px 20px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  h2 { font-size:.8rem; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); margin:0 0 10px; }
+  .devices { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:14px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; }
+  .card.offline { opacity:.55; }
+  .dname { font-weight:650; font-size:1.05rem; overflow-wrap:anywhere; }
+  .dsub { color:var(--dim); font-size:.8rem; margin-top:2px; }
+  .badge { font-size:.72rem; padding:2px 8px; border-radius:10px; margin-left:6px; vertical-align:middle; background:#2ea04333; color:var(--green); }
+  .badge.off { background:#8b949e33; color:var(--dim); }
+  .row { display:flex; align-items:baseline; justify-content:space-between; margin-top:12px; font-size:.85rem; color:var(--dim); }
+  .big { font-size:1.6rem; font-weight:700; color:var(--text); font-variant-numeric:tabular-nums; }
+  .bar { height:8px; background:#21262d; border-radius:4px; overflow:hidden; margin-top:6px; }
+  .bar > div { height:100%; background:var(--blue); transition:width .6s; }
+  svg.spark { width:100%; height:44px; display:block; margin-top:8px; }
+  .slots { display:flex; gap:5px; margin-top:6px; }
+  .slot { flex:1; height:10px; border-radius:3px; background:#21262d; }
+  .slot.busy { background:var(--amber); }
+  .tasks { margin-top:10px; font-size:.82rem; }
+  .task { display:flex; justify-content:space-between; gap:8px; padding:5px 0; border-top:1px solid var(--line); }
+  .task .t { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .muted { color:var(--dim); }
+  .feed { list-style:none; margin:0; padding:0; font-size:.83rem; max-height:calc(100vh - 140px); overflow:auto; }
+  .feed li { display:flex; gap:8px; padding:6px 0; border-bottom:1px solid var(--line); align-items:flex-start; }
+  .feed time { color:var(--dim); font-variant-numeric:tabular-nums; flex:none; }
+  .feed .ic { width:8px; height:8px; border-radius:50%; margin-top:5px; flex:none; background:var(--dim); }
+  .ok { background:var(--green) !important; } .run { background:var(--blue) !important; } .warn { background:var(--amber) !important; } .bad { background:var(--red) !important; }
+  .flash { animation: flash 1.2s ease-out; }
+  @keyframes flash { from { background:#2f81f733; } to { background:transparent; } }
+  .queue { margin-bottom:18px; }
+  #renderBox { grid-column: 1 / -1; }
+  .rtitle { display:flex; justify-content:space-between; align-items:baseline; gap:12px; flex-wrap:wrap; }
+  .rtitle b { font-size:1.05rem; }
+  .strips { display:flex; gap:2px; margin:10px 0; height:18px; }
+  .strips div { flex:1; border-radius:2px; background:#21262d; }
+  .strips div.running { opacity:.45; }
+  .who { display:flex; gap:16px; flex-wrap:wrap; font-size:.88rem; margin-top:6px; }
+  .chip { display:inline-block; width:12px; height:12px; border-radius:3px; vertical-align:-1px; margin-right:6px; }
+  .result { display:flex; gap:8px; margin-top:12px; }
+  .result .bands { width:14px; display:flex; flex-direction:column; border-radius:3px; overflow:hidden; flex:none; }
+  .result .bands div { flex:1; }
+  .result img { max-width:calc(100% - 22px); height:auto; border-radius:4px; display:block; }
+  .empty { color:var(--dim); font-size:.85rem; padding:6px 0; }
+  #signin { display:none; padding:40px 20px; }
+</style>
+</head>
+<body>
+<header>
+  <h1><span id="conn" class="dot"></span>Home Harness &middot; Live</h1>
+  <span class="stat"><b id="sDevices">-</b>devices online</span>
+  <span class="stat"><b id="sRunning">-</b>running</span>
+  <span class="stat"><b id="sQueued">-</b>queued</span>
+  <span class="stat"><b id="sDone">-</b>completed</span>
+  <span class="spacer"></span>
+  <button id="render" class="primary" title="Renders one big picture in 90 strips, shared by every online device, then joins them">Render across all devices</button>
+  <button id="load" title="Runs a 20-second CPU test on every online device">Make some load</button>
+  <a href="/">Full dashboard</a>
+</header>
+<div id="signin">Not signed in. Open the <a href="/">dashboard</a> with the manager's sign-in link first, then come back here.</div>
+<main id="main">
+  <section id="renderBox" class="card" hidden>
+    <div class="rtitle"><b>One picture, rendered by every device</b><span id="rStatus" class="muted"></span></div>
+    <div id="rStrips" class="strips"></div>
+    <div id="rWho" class="who"></div>
+    <div id="rResult"></div>
+  </section>
+  <section>
+    <h2>Devices</h2>
+    <div id="devices" class="devices"></div>
+  </section>
+  <section>
+    <div class="queue">
+      <h2>Waiting in the queue</h2>
+      <div id="queue"></div>
+    </div>
+    <h2>Activity</h2>
+    <ul id="feed" class="feed"></ul>
+  </section>
+</main>
+<script>
+(function () {
+  "use strict";
+  // Same origin and the same session as the dashboard (dashboard.html):
+  // kept in localStorage, sent only as a header, never a cookie. Every
+  // agent-supplied value is rendered as text, never as HTML.
+  const SESSION_KEY = "homeHarness.operatorSession";
+  const HISTORY = 60; // CPU samples kept per device (one every 2 s)
+  let nodes = [], workloads = [], history = {}, totals = {}, startedAt = {}, signedOut = false;
+
+  function session() { try { return localStorage.getItem(SESSION_KEY) || ""; } catch (e) { return ""; } }
+  async function api(path, options) {
+    const opts = Object.assign({}, options);
+    const headers = new Headers(opts.headers || {});
+    if (session()) headers.set("Authorization", "Bearer " + session());
+    opts.headers = headers;
+    const resp = await fetch(path, opts);
+    if (resp.status === 401) { signedOut = true; document.getElementById("signin").style.display = "block"; document.getElementById("main").style.display = "none"; throw new Error("not signed in"); }
+    return resp;
+  }
+  function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  function fmtBytes(n) { if (!n) return "-"; const u = ["B","KB","MB","GB","TB"]; let i = 0; while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; } return n.toFixed(i >= 3 ? 1 : 0) + " " + u[i]; }
+  function ago(t) { const s = Math.max(0, Math.round((Date.now() - t) / 1000)); return s < 60 ? s + "s" : Math.floor(s / 60) + "m " + (s % 60) + "s"; }
+  function nameOf(id) { const n = nodes.find((x) => x.nodeId === id); return n ? (n.alias || n.name || id) : (id || "manager"); }
+  function platformOf(n) {
+    const p = n.platform || {};
+    if (p.os === "windows") return "Windows";
+    if (p.os === "darwin") return "Mac";
+    if (p.os === "linux" && (p.architecture === "arm64" || p.architecture === "arm")) return "Android / ARM Linux";
+    return (p.os || "?") + "/" + (p.architecture || "?");
+  }
+  function taskLabel(w) { return w.capability || w.command || "task"; }
+
+  async function refresh() {
+    if (signedOut) return;
+    try {
+      const [nr, wr] = await Promise.all([api("/nodes"), api("/workloads")]);
+      nodes = (await nr.json()) || [];
+      workloads = (await wr.json()) || [];
+      document.getElementById("conn").classList.add("on");
+    } catch (e) {
+      document.getElementById("conn").classList.remove("on");
+      return;
+    }
+    for (const n of nodes) {
+      const h = history[n.nodeId] || (history[n.nodeId] = []);
+      h.push(n.state === "READY" && n.metrics ? n.metrics.cpuPercent || 0 : 0);
+      if (h.length > HISTORY) h.shift();
+      if (totals[n.nodeId] === undefined) {
+        totals[n.nodeId] = null;
+        api("/nodes/" + encodeURIComponent(n.nodeId) + "/resources").then((r) => r.ok ? r.json() : null).then((res) => {
+          const mem = (res || []).find((x) => x.kind === "memory.bytes");
+          totals[n.nodeId] = mem ? mem.capacity : null;
+        }).catch(() => {});
+      }
+    }
+    for (const w of workloads) {
+      if (w.state === "RUNNING" && !startedAt[w.id]) startedAt[w.id] = Date.now();
+    }
+    render();
+  }
+
+  function spark(values) {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("class", "spark"); svg.setAttribute("viewBox", "0 0 " + HISTORY + " 100"); svg.setAttribute("preserveAspectRatio", "none");
+    const pts = values.map((v, i) => (HISTORY - values.length + i) + "," + (100 - Math.min(100, v))).join(" ");
+    const area = document.createElementNS(svg.namespaceURI, "polygon");
+    area.setAttribute("points", (HISTORY - values.length) + ",100 " + pts + " " + (HISTORY - 1) + ",100");
+    area.setAttribute("fill", "#2f81f733");
+    const line = document.createElementNS(svg.namespaceURI, "polyline");
+    line.setAttribute("points", pts); line.setAttribute("fill", "none"); line.setAttribute("stroke", "#2f81f7"); line.setAttribute("stroke-width", "2"); line.setAttribute("vector-effect", "non-scaling-stroke");
+    svg.append(area, line);
+    return svg;
+  }
+
+  function render() {
+    const ready = nodes.filter((n) => n.state === "READY");
+    const running = workloads.filter((w) => w.state === "RUNNING" || w.state === "PENDING");
+    const queued = workloads.filter((w) => w.state === "QUEUED");
+    document.getElementById("sDevices").textContent = ready.length;
+    document.getElementById("sRunning").textContent = running.length;
+    document.getElementById("sQueued").textContent = queued.length;
+    document.getElementById("sDone").textContent = workloads.filter((w) => w.state === "COMPLETED").length;
+
+    const box = document.getElementById("devices");
+    box.replaceChildren();
+    if (!nodes.length) box.append(el("div", "empty", "No devices yet. Add one from the full dashboard."));
+    for (const n of nodes) {
+      const online = n.state === "READY";
+      const card = el("div", "card" + (online ? "" : " offline"));
+      const title = el("div", "dname", n.alias || n.name || n.nodeId);
+      title.append(el("span", "badge" + (online ? "" : " off"), online ? "online" : String(n.state).toLowerCase()));
+      const host = n.hostname && n.hostname !== n.name && n.hostname !== "localhost" ? " · " + n.hostname : "";
+      card.append(title, el("div", "dsub", platformOf(n) + host));
+
+      const cpu = online && n.metrics ? n.metrics.cpuPercent || 0 : 0;
+      // Android doesn't let apps see the whole phone's CPU: there the
+      // agent reports what its own tasks use (metrics.cpuScope "process").
+      const own = n.metrics && n.metrics.cpuScope === "process";
+      const cpuLabel = el("span", null, own ? "CPU (harness work)" : "CPU");
+      if (own) cpuLabel.title = "Android doesn't let apps see the whole phone's CPU use; this is what Home Harness tasks use on it.";
+      const cpuRow = el("div", "row"); cpuRow.append(cpuLabel, el("span", "big", online ? cpu.toFixed(0) + "%" : "-"));
+      const bar = el("div", "bar"); const fill = el("div"); fill.style.width = Math.min(100, cpu) + "%"; bar.append(fill);
+      card.append(cpuRow, bar, spark(history[n.nodeId] || []));
+
+      const free = n.metrics ? n.metrics.memoryAvailableBytes : 0, total = totals[n.nodeId];
+      const memRow = el("div", "row"); memRow.append(el("span", null, "Memory free"), el("span", null, fmtBytes(free) + (total ? " of " + fmtBytes(total) : "")));
+      card.append(memRow);
+      if (total && free) { const mb = el("div", "bar"); const mf = el("div"); mf.style.width = Math.max(0, Math.min(100, 100 - free * 100 / total)) + "%"; mf.style.background = "#a371f7"; mb.append(mf); card.append(mb); }
+
+      const slots = n.slots || 1, busy = n.running || 0;
+      const sRow = el("div", "row"); sRow.append(el("span", null, "Busy"), el("span", null, busy + " of " + slots + " slots"));
+      const sl = el("div", "slots"); for (let i = 0; i < slots; i++) sl.append(el("div", "slot" + (i < busy ? " busy" : "")));
+      card.append(sRow, sl);
+
+      const mine = running.filter((w) => w.target === n.nodeId);
+      const tl = el("div", "tasks");
+      if (!mine.length) tl.append(el("div", "muted", online ? "Idle" : ""));
+      for (const w of mine) {
+        const r = el("div", "task");
+        r.append(el("span", "t", taskLabel(w)), el("span", "muted", w.state === "RUNNING" ? "running " + ago(startedAt[w.id] || Date.now()) : "starting"));
+        tl.append(r);
+      }
+      card.append(tl);
+      box.append(card);
+    }
+
+    const q = document.getElementById("queue");
+    q.replaceChildren();
+    if (!queued.length) q.append(el("div", "empty", "Nothing waiting."));
+    for (const w of queued) {
+      const r = el("div", "task");
+      r.append(el("span", "t", taskLabel(w)), el("span", "muted", w.target ? "for " + nameOf(w.target) : "next free device"));
+      q.append(r);
+    }
+  }
+
+  const WORDS = {
+    "workload.assigned": ["run", "sent to"], "workload.started": ["run", "started on"], "workload.completed": ["ok", "finished on"],
+    "workload.failed": ["bad", "failed on"], "workload.canceled": ["warn", "canceled on"], "workload.queued": ["warn", "queued"],
+    "node.registered": ["ok", "joined:"], "node.reconnected": ["ok", "reconnected:"], "node.ready": ["ok", "online:"],
+    "node.offline": ["bad", "offline:"], "node.revoked": ["bad", "revoked:"], "node.join-requested": ["warn", "asks to join:"],
+    "node.join-decided": ["ok", "join request"], "job.submitted": ["run", "job submitted"], "job.finished": ["ok", "job finished"],
+  };
+  function feed(ev) {
+    if (ev.type === "workload.progress" || ev.type === "node.updated") return;
+    const w = WORDS[ev.type] || ["", ev.type];
+    const d = ev.data || {};
+    const wl = d.workloadId ? workloads.find((x) => x.id === d.workloadId) : null;
+    let text;
+    if (ev.type.startsWith("workload.")) {
+      const what = d.capability || d.command || (wl ? taskLabel(wl) : "task");
+      text = what + " " + w[1] + (ev.type === "workload.queued" ? (ev.nodeId ? " for " + nameOf(ev.nodeId) : "") : " " + nameOf(ev.nodeId));
+      if (d.error) text += ": " + d.error;
+      if (ev.type === "workload.started" && d.workloadId) startedAt[d.workloadId] = Date.now();
+    } else if (ev.type.startsWith("node.join")) {
+      text = (ev.type === "node.join-requested" ? (d.name || "a device") + " asks to join (code " + (d.code || "?") + ")" : "join request " + (d.decision || "decided"));
+    } else if (ev.type.startsWith("node.")) {
+      text = w[1] + " " + (d.name || nameOf(ev.nodeId)) + (d.reason ? " (" + d.reason + ")" : "");
+    } else {
+      text = w[1] + (d.state ? ": " + d.state : "") + (d.tasks ? " (" + d.tasks + " tasks)" : "");
+    }
+    const li = el("li", "flash");
+    li.append(el("time", null, new Date(ev.timestamp || Date.now()).toLocaleTimeString()), el("span", "ic " + w[0]), el("span", null, text));
+    const list = document.getElementById("feed");
+    list.prepend(li);
+    while (list.children.length > 80) list.lastChild.remove();
+  }
+
+  // Live events over a fetch stream (EventSource can't send the header).
+  async function stream() {
+    let backoff = 1000;
+    while (!signedOut) {
+      try {
+        const resp = await api("/events");
+        if (!resp.ok || !resp.body) throw new Error("no stream");
+        backoff = 1000;
+        document.getElementById("conn").classList.add("on");
+        const reader = resp.body.getReader(), dec = new TextDecoder();
+        let buf = "";
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          let i;
+          while ((i = buf.indexOf("\n\n")) >= 0) {
+            const chunk = buf.slice(0, i); buf = buf.slice(i + 2);
+            const data = chunk.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trim()).join("\n");
+            if (!data) continue;
+            try { const ev = JSON.parse(data); feed(ev); if (ev.type !== "workload.progress") refresh(); } catch (e) { /* keep going */ }
+          }
+        }
+      } catch (e) { /* reconnect below */ }
+      document.getElementById("conn").classList.remove("on");
+      await new Promise((r) => setTimeout(r, backoff));
+      backoff = Math.min(backoff * 2, 15000);
+    }
+  }
+
+  // ---- one shared task: a fractal rendered in strips by every device
+  // (render.fractal per strip, image.stack to join them: a batch job).
+  const RENDER = { width: 6000, height: 4500, parts: 90, iterations: 50000, scene: "spiral" };
+  const PALETTE = ["#2f81f7", "#3fb950", "#d29922", "#a371f7", "#f85149", "#39c5cf", "#db61a2", "#e3b341"];
+  const colors = {};
+  function colorOf(id) {
+    if (!colors[id]) colors[id] = PALETTE[Object.keys(colors).length % PALETTE.length];
+    return colors[id];
+  }
+  let renderTimer = null;
+
+  document.getElementById("render").addEventListener("click", async () => {
+    const btn = document.getElementById("render");
+    btn.disabled = true;
+    const tasks = [];
+    for (let i = 0; i < RENDER.parts; i++) {
+      tasks.push({ name: "strip " + (i + 1), capability: "render.fractal", params: {
+        width: String(RENDER.width), height: String(RENDER.height), part: String(i), parts: String(RENDER.parts),
+        iterations: String(RENDER.iterations), scene: RENDER.scene } });
+    }
+    const box = document.getElementById("renderBox");
+    box.hidden = false;
+    document.getElementById("rResult").replaceChildren();
+    document.getElementById("rStatus").textContent = "Sending " + RENDER.parts + " strips to the fleet...";
+    try {
+      const resp = await api("/jobs", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "One picture, every device", tasks, reduce: { capability: "image.stack", params: { name: "fractal.png" } } }) });
+      const text = await resp.text();
+      if (!resp.ok) throw new Error(text.trim() || resp.statusText);
+      const job = JSON.parse(text);
+      const started = Date.now();
+      clearInterval(renderTimer);
+      renderTimer = setInterval(() => pollRender(job.id, started), 1000);
+      pollRender(job.id, started);
+    } catch (e) {
+      document.getElementById("rStatus").textContent = "Couldn't start: " + e.message;
+      btn.disabled = false;
+    }
+  });
+
+  async function pollRender(id, started) {
+    let job;
+    try { job = await (await api("/jobs/" + encodeURIComponent(id))).json(); } catch (e) { return; }
+    const tasks = job.tasks || [];
+    const done = tasks.filter((t) => t.state === "COMPLETED").length;
+    const secs = Math.round((Date.now() - started) / 1000);
+    const strips = document.getElementById("rStrips");
+    strips.replaceChildren();
+    const perDevice = {};
+    for (const t of tasks) {
+      const d = el("div");
+      if (t.node && (t.state === "COMPLETED" || t.state === "RUNNING" || t.state === "PENDING")) {
+        d.style.background = colorOf(t.node);
+        if (t.state !== "COMPLETED") d.className = "running";
+        d.title = (t.name || t.key) + ": " + (t.nodeName || t.node) + " (" + t.state.toLowerCase() + ")";
+      }
+      if (t.node && t.state === "COMPLETED") {
+        const k = t.nodeName || nameOf(t.node);
+        perDevice[t.node] = perDevice[t.node] || { name: k, n: 0 };
+        perDevice[t.node].n++;
+      }
+      strips.append(d);
+    }
+    const who = document.getElementById("rWho");
+    who.replaceChildren();
+    for (const [nodeId, v] of Object.entries(perDevice).sort((a, b) => b[1].n - a[1].n)) {
+      const s = el("span");
+      const c = el("span", "chip"); c.style.background = colorOf(nodeId);
+      s.append(c, document.createTextNode(v.name + ": " + v.n + " strip" + (v.n === 1 ? "" : "s")));
+      who.append(s);
+    }
+    const status = document.getElementById("rStatus");
+    if (job.state === "RUNNING" || job.state === "PENDING") {
+      status.textContent = done < tasks.length
+        ? done + " of " + tasks.length + " strips rendered · " + secs + " s"
+        : "All strips rendered; joining them into one picture · " + secs + " s";
+      return;
+    }
+    clearInterval(renderTimer);
+    document.getElementById("render").disabled = false;
+    if (job.state !== "COMPLETED") {
+      status.textContent = "Job " + String(job.state).toLowerCase() + (job.error ? ": " + job.error : "");
+      return;
+    }
+    status.textContent = "Done in " + secs + " s: " + RENDER.width + "×" + RENDER.height + " pixels, " + tasks.length + " strips";
+    const out = (job.outputs || [])[0];
+    if (!out) return;
+    try {
+      const resp = await api("/artifacts/" + encodeURIComponent(out.sha256) + "?name=" + encodeURIComponent(out.name));
+      if (!resp.ok) throw new Error(resp.statusText);
+      const url = URL.createObjectURL(await resp.blob());
+      const result = document.getElementById("rResult");
+      const bands = el("div", "bands");
+      for (const t of tasks) { const b = el("div"); b.style.background = t.node ? colorOf(t.node) : "#21262d"; b.title = t.nodeName || ""; bands.append(b); }
+      const img = el("img"); img.src = url; img.alt = "The fractal rendered by every device";
+      const link = el("a", null, "Download the full picture (" + Math.round(out.size / 1048576 || 0) + " MB)");
+      link.href = url; link.download = "fractal.png";
+      const wrap = el("div", "result"); wrap.append(bands, img);
+      result.replaceChildren(wrap, link);
+      link.style.display = "inline-block"; link.style.marginTop = "8px";
+    } catch (e) {
+      status.textContent += " (couldn't load the picture: " + e.message + ")";
+    }
+  }
+
+  document.getElementById("load").addEventListener("click", async () => {
+    const btn = document.getElementById("load");
+    btn.disabled = true;
+    const ready = nodes.filter((n) => n.state === "READY");
+    for (const n of ready) {
+      try {
+        await api("/workloads", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ target: n.nodeId, capability: "cpu.burn", params: { seconds: "20" } }) });
+      } catch (e) { /* shown in the feed if it fails */ }
+    }
+    setTimeout(() => { btn.disabled = false; }, 2000);
+    refresh();
+  });
+
+  refresh();
+  setInterval(refresh, 2000);
+  stream();
+})();
+</script>
+</body>
+</html>

@@ -64,6 +64,11 @@ type Config struct {
 	// AdvertiseAddr is this machine's LAN address for agents (host:port),
 	// offered pre-filled where the dashboard asks for it. Optional.
 	AdvertiseAddr string
+	// JoinAddr is where the join page listens (-join-addr, plain HTTP;
+	// empty = no join page), and AppAPK the Android app's own APK it offers
+	// for download (joinpage.go). Both optional.
+	JoinAddr string
+	AppAPK   string
 	// InitialPolicy is the policy used until one is stored (policy.go):
 	// cmd/manager passes domain.DefaultPolicy (raw commands off). Nil =
 	// domain.PermissivePolicy, for embedding and tests.
@@ -114,6 +119,7 @@ type Server struct {
 	// coupling to networking code.
 	Events      *eventbus.Bus
 	enrollments *enrollmentStore
+	joinReqs    *joinRequests
 
 	// admitMu serializes admission (handleRegister's revocation check
 	// through its registry Upsert) against RevokeNode/UnrevokeNode, so a
@@ -177,6 +183,7 @@ func NewServer(transport domain.Transport, store PersistentStore, cfg Config) *S
 		Events:       eventbus.New(),
 		pending:      make(map[string]pendingCommand),
 		enrollments:  newEnrollmentStore(),
+		joinReqs:     newJoinRequests(),
 		revocations:  newRevocationList(),
 		meta:         newNodeMetaStore(),
 		auditLog:     newAuditRecorder(),
@@ -731,11 +738,24 @@ func (s *Server) monitorHeartbeats(ctx context.Context) {
 			return
 		case <-ticker.C:
 			s.flushSuppressed()
+			for _, r := range s.joinReqs.prune() {
+				s.publish(domain.EventJoinDecided, r.NodeID, map[string]any{"decision": "expired"})
+			}
 			for _, id := range s.Registry.ExpireStale(s.cfg.HeartbeatTimeout) {
 				log.Printf("node.offline: %s", id)
 				s.publish(domain.EventNodeOffline, id, map[string]any{"reason": "heartbeat timeout"})
 				s.failPendingCommandsFor(id, "node went offline: heartbeat timeout")
 				s.failWorkloadsFor(ctx, id, "node went offline: heartbeat timeout")
+				// Then drop its connection. Only a REGISTER makes a node
+				// READY again, so a node whose connection outlived the
+				// silence (seen when the manager's own machine slept: its
+				// local agent's connection survived and kept heartbeating)
+				// would otherwise stay OFFLINE for good. A live agent
+				// reconnects and registers within seconds. (After the
+				// cancel above, which still uses this connection.)
+				if conn := s.Registry.ConnOf(id); conn != nil {
+					go conn.Close()
+				}
 			}
 		}
 	}
@@ -868,6 +888,21 @@ func (s *Server) handleRegister(ctx context.Context, conn domain.Conn, env *prot
 	admittedBy := "known-identity"
 	if !knownNode {
 		switch {
+		// First, before any token comparison: a pairing device sends no
+		// token, and an empty configured token must never admit it.
+		case payload.Pairing:
+			code := protocol.PairingCode(s.cfg.Fingerprint, node.Identity.PublicKey)
+			decision, isNew := s.joinReqs.request(JoinRequest{
+				NodeID: claimedID, Name: clip(node.Name), Hostname: clip(node.Hostname),
+				Platform: domain.Platform{OS: clip(node.Platform.OS), Architecture: clip(node.Platform.Architecture)},
+				Remote:   remoteHost(conn.RemoteAddr()), Code: code,
+			})
+			if decision != joinApproved {
+				s.admitMu.Unlock()
+				s.answerJoinRequest(ctx, conn, env.Source, claimedID, decision, isNew, code, node.Name)
+				return ""
+			}
+			admittedBy = "approval:" + code
 		case payload.PairingToken == s.cfg.PairingToken:
 			admittedBy = "pairing-token"
 		case s.enrollments.consume(payload.PairingToken):
@@ -913,6 +948,28 @@ func (s *Server) handleRegister(ctx context.Context, conn domain.Conn, env *prot
 	s.kickDispatch() // new capacity: queued work may fit now
 
 	return claimedID
+}
+
+// answerJoinRequest answers a pairing REGISTER that isn't admitted (yet).
+// A waiting device asks again every couple of seconds, so only a new
+// request is logged and published — never each retry (the phone's log is
+// small and rotated).
+func (s *Server) answerJoinRequest(ctx context.Context, conn domain.Conn, dest, id domain.NodeID, d joinDecision, isNew bool, code, name string) {
+	switch d {
+	case joinPending:
+		if isNew {
+			log.Printf("manager: join request from %s (%s) at %s, code %s: approve it on the dashboard", id, clip(name), conn.RemoteAddr(), code)
+			s.publish(domain.EventJoinRequested, id, map[string]any{"name": clip(name), "code": code})
+		}
+		s.send(ctx, conn, protocol.MsgRegisterReject, domain.ManagerNodeID, dest, protocol.RegisterRejectPayload{
+			Reason: "waiting for approval on the manager", PendingApproval: true, Code: code,
+		})
+	case joinRejected:
+		s.send(ctx, conn, protocol.MsgRegisterReject, domain.ManagerNodeID, dest,
+			protocol.RegisterRejectPayload{Reason: "the manager's operator declined this device"})
+	default: // joinFull
+		s.reject(ctx, conn, dest, "too many devices are waiting for approval on the manager; approve or reject them first")
+	}
 }
 
 func (s *Server) reject(ctx context.Context, conn domain.Conn, dest domain.NodeID, reason string) {

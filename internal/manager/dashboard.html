@@ -60,6 +60,9 @@
   .subname { display: block; font-size: 0.75rem; color: GrayText; }
   .signin { border-color: #d29922; background: color-mix(in srgb, #d29922 12%, transparent); }
   .hint { font-size: 0.8rem; color: GrayText; margin-top: 4px; }
+  .joinreq { border: 2px solid #2f81f7; }
+  .paircode { font-size: 2rem; font-weight: 700; letter-spacing: 0.12em; margin: 6px 0; font-variant-numeric: tabular-nums; }
+  .joinurl { font-size: 1.05rem; font-weight: 600; overflow-wrap: anywhere; }
   .enrollment { margin-top: 16px; text-align: center; }
   .enrollment img { width: min(320px, 100%); background: white; padding: 8px; border-radius: 8px; }
   .enrollment a { display: block; overflow-wrap: anywhere; margin-top: 8px; }
@@ -88,6 +91,12 @@
     <strong>Not signed in.</strong> Open the dashboard sign-in link the manager printed at startup
     (on the phone, the Termux installer opens it for you), or run <code>harnessctl login-url</code> on the manager's machine.
   </div>
+  <div id="joinSection" hidden>
+    <h2>Waiting for approval</h2>
+    <div id="joinRequests"></div>
+  </div>
+  <p id="joinBanner" class="card" hidden></p>
+
   <h2>How work moves</h2>
   <div class="flow">
     <div class="flow-step"><strong>1. Phone manager</strong>You request work and state the minimum CPU/memory needed.</div>
@@ -205,7 +214,8 @@
   <div class="card"><ol id="timeline" class="timeline"><li class="hint">Waiting for the next manager event...</li></ol></div>
 
   <h2>Add a device</h2>
-  <div class="card">
+  <details class="card">
+    <summary>Other ways: a setup script or a QR invitation (remote devices, or managers without the join page)</summary>
     <p class="compact"><strong>Another Windows desktop:</strong> keep it on the same Wi-Fi, enter this phone's current Wi-Fi address plus <code>:7420</code>, choose Windows, create a fresh QR/link, then open the full HTTPS link on that desktop. Accept the local certificate warning and run the displayed PowerShell command. Keep that agent process running.</p>
     <p class="hint">The phone IP can change when Wi-Fi changes. Generate a new link with the new address, or use LAN discovery/a reserved DHCP address. Remote mode needs the separate public relay.</p>
     <label for="mode">Connection</label>
@@ -239,7 +249,7 @@
       <a id="inviteLink" target="_blank" rel="noreferrer"></a>
       <p id="inviteExpiry" class="hint"></p>
     </div>
-  </div>
+  </details>
 
 <script>
 (function () {
@@ -926,8 +936,53 @@
       const info = await (await api("/join-info")).json();
       const el = document.getElementById("addr");
       if (info.lanAddr && el && !el.value) el.value = info.lanAddr;
+      // The join page: the easy way in for every device on this Wi-Fi.
+      const banner = document.getElementById("joinBanner");
+      if (info.joinUrl || info.joinPort) {
+        const where = info.joinUrl || ("http://<this machine's IP address>:" + info.joinPort);
+        banner.innerHTML = '<strong>Add a device:</strong> on it, open <span class="joinurl">' + escapeHtml(where)
+          + '</span> in a browser and follow the one step there. Then approve it here.';
+        banner.hidden = false;
+      }
     } catch (e) { /* optional */ }
   }
+
+  // Devices waiting to join by approval. Their names are whatever the
+  // device claims: escaped, and the code comparison is what matters.
+  async function refreshJoinRequests() {
+    try {
+      const resp = await api("/join-requests");
+      if (!resp.ok) return;
+      const reqs = (await resp.json()) || [];
+      document.getElementById("joinSection").hidden = reqs.length === 0;
+      document.getElementById("joinRequests").innerHTML = reqs.map((r) => {
+        const platform = r.platform && r.platform.os ? r.platform.os + "/" + r.platform.architecture : "";
+        const action = r.approved
+          ? '<p class="hint">Approved. Connecting...</p>'
+          : '<button data-approve="' + escapeHtml(r.nodeId) + '">Approve</button> '
+            + '<button class="secondary" data-reject="' + escapeHtml(r.nodeId) + '">Reject</button>';
+        return '<div class="card joinreq"><div><strong>' + escapeHtml(r.name || r.nodeId) + "</strong> "
+          + '<span class="hint">' + escapeHtml(platform) + (r.remote ? " from " + escapeHtml(r.remote) : "") + "</span></div>"
+          + '<div class="paircode">' + escapeHtml(r.code) + "</div>"
+          + '<p class="hint">Approve only if the device shows this same code.</p>' + action + "</div>";
+      }).join("");
+    } catch (e) { /* keep the last view */ }
+  }
+
+  document.getElementById("joinRequests").addEventListener("click", async (event) => {
+    const button = event.target.closest("button[data-approve], button[data-reject]");
+    if (!button) return;
+    const approve = button.hasAttribute("data-approve");
+    const id = approve ? button.dataset.approve : button.dataset.reject;
+    button.disabled = true;
+    try {
+      const resp = await api("/join-requests/" + encodeURIComponent(id) + (approve ? "/approve" : "/reject"), {method: "POST"});
+      if (!resp.ok) throw new Error((await resp.text()).trim() || resp.statusText);
+    } catch (e) {
+      alert((approve ? "Approve" : "Reject") + " failed: " + e.message);
+    }
+    refreshJoinRequests();
+  });
 
   function handleEvent(data) {
     let type = "";
@@ -941,6 +996,7 @@
     if (type.startsWith("job.") || type.startsWith("workload.")) scheduleJobs();
     if (type.startsWith("node.")) refreshCatalog();
     if (type === "node.revoked" || type === "node.unrevoked") refreshRevoked();
+    if (type === "node.join-requested" || type === "node.join-decided" || type === "node.registered") refreshJoinRequests();
     if (document.getElementById("auditSection").open) refreshAudit();
   }
 
@@ -956,7 +1012,7 @@
         const resp = await api("/events");
         if (!resp.ok || !resp.body) throw new Error("event stream unavailable: " + resp.status);
         backoff = 1000;
-        if (!first) { refreshNodes(); refreshWorkloads(); refreshRevoked(); }
+        if (!first) { refreshNodes(); refreshWorkloads(); refreshRevoked(); refreshJoinRequests(); }
         first = false;
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
@@ -991,6 +1047,7 @@
     refreshJobs();
     refreshCatalog();
     refreshRevoked();
+    refreshJoinRequests();
     prefillLanAddr();
     streamEvents();
   })();

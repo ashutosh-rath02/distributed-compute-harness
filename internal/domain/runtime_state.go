@@ -15,4 +15,7 @@ type RuntimeState struct {
 	LastHeartbeat        time.Time     `json:"lastHeartbeat"`
 	ConnectedAt          time.Time     `json:"connectedAt"`
 	AgentVersion         string        `json:"agentVersion"`
+	// CPUScope "process": CPUPercent is the agent's own use (the system's
+	// counters were unreadable, e.g. on Android), not the whole device's.
+	CPUScope string `json:"cpuScope,omitempty"`
 }

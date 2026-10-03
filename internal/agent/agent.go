@@ -6,6 +6,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -113,6 +114,26 @@ type Config struct {
 	// it (sysinfo.HostFingerprint), "-" reports none, and anything else is
 	// reported as given — so tests on one machine can simulate several.
 	HostFingerprint string
+
+	// Pairing joins by the operator's approval instead of a token (see
+	// pairing.go); a waiting device asks again every PairingRetry
+	// (default 2s) instead of backing off.
+	Pairing      bool
+	PairingRetry time.Duration
+	// ManagerFingerprintFunc reports the manager certificate fingerprint
+	// the transport pins (cmd/agent's trust-on-first-use holder, which may
+	// only learn it at the first connection); nil uses ManagerFingerprint.
+	ManagerFingerprintFunc func() string
+	// OnRegistered runs after every successful registration (cmd/agent
+	// keeps a first-use fingerprint once the manager admitted the device).
+	OnRegistered func()
+	// ManagerAddrFallback is dialed when discovery finds no manager (a
+	// network that drops multicast). Unused when ManagerAddr is set.
+	ManagerAddrFallback string
+	// SelfUpdateDisabled leaves self-update out of the advertised
+	// features: this binary can't be replaced in place (the Android app's
+	// worker, updated with the app).
+	SelfUpdateDisabled bool
 }
 
 const defaultAgentVersion = "0.1.0"
@@ -146,6 +167,13 @@ type Agent struct {
 	advMu      sync.Mutex
 	advertised []domain.Capability
 	probeLoops atomic.Int32 // running capability probes: one per live connection
+
+	// pendingAddr is the address that last answered "waiting for
+	// approval": retries go straight back to it rather than paying a
+	// discovery timeout each time. loggedPending de-duplicates the log.
+	pairMu        sync.Mutex
+	pendingAddr   string
+	loggedPending string
 }
 
 // New loads (or generates, on first run) the agent's identity and returns
@@ -162,6 +190,9 @@ func New(transport domain.Transport, cfg Config) (*Agent, error) {
 	}
 	if cfg.AgentVersion == "" {
 		cfg.AgentVersion = defaultAgentVersion
+	}
+	if cfg.PairingRetry == 0 {
+		cfg.PairingRetry = 2 * time.Second
 	}
 
 	id, err := identity.LoadOrCreate(cfg.IdentityDir)
@@ -239,7 +270,18 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	for {
 		connectedAt := time.Now()
-		if err := a.connectAndServe(ctx); err != nil {
+		err := a.connectAndServe(ctx)
+		if isPendingApproval(err) {
+			// Not a failure: waiting for someone to tap Approve. Ask again
+			// soon (and quietly; notePending logged the code once).
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(a.cfg.PairingRetry):
+			}
+			continue
+		}
+		if err != nil {
 			log.Printf("agent %s: connection error: %v", a.identity.NodeID, err)
 		}
 		// The manager marks this node's in-flight workloads FAILED as soon
@@ -286,9 +328,22 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 	defer conn.Close()
 
 	if err := a.register(ctx, conn); err != nil {
+		a.pairMu.Lock()
+		if p := (*PendingApprovalError)(nil); errors.As(err, &p) {
+			a.pendingAddr = addr
+		} else {
+			a.pendingAddr = ""
+		}
+		a.pairMu.Unlock()
 		return err
 	}
-	log.Printf("agent %s: registered with manager", a.identity.NodeID)
+	a.pairMu.Lock()
+	a.pendingAddr, a.loggedPending = "", ""
+	a.pairMu.Unlock()
+	log.Printf("agent %s: registered with manager at %s", a.identity.NodeID, addr)
+	if a.cfg.OnRegistered != nil {
+		a.cfg.OnRegistered()
+	}
 
 	errCh := make(chan error, 2)
 	// connCtx ends with this connection, so loops that would otherwise
@@ -312,10 +367,24 @@ func (a *Agent) resolveManagerAddr(ctx context.Context) (string, error) {
 	if a.cfg.ManagerAddr != "" {
 		return a.cfg.ManagerAddr, nil
 	}
+	a.pairMu.Lock()
+	pending := a.pendingAddr
+	a.pairMu.Unlock()
+	if pending != "" {
+		return pending, nil
+	}
 	if a.cfg.Discoverer == nil {
+		if a.cfg.ManagerAddrFallback != "" {
+			return a.cfg.ManagerAddrFallback, nil
+		}
 		return "", fmt.Errorf("no ManagerAddr configured and no Discoverer set")
 	}
-	return a.cfg.Discoverer.Discover(ctx)
+	addr, err := a.cfg.Discoverer.Discover(ctx)
+	if err != nil && a.cfg.ManagerAddrFallback != "" && ctx.Err() == nil {
+		log.Printf("agent %s: no manager found on the LAN (%v); trying %s", a.identity.NodeID, err, a.cfg.ManagerAddrFallback)
+		return a.cfg.ManagerAddrFallback, nil
+	}
+	return addr, err
 }
 
 func (a *Agent) register(ctx context.Context, conn domain.Conn) error {
@@ -323,7 +392,7 @@ func (a *Agent) register(ctx context.Context, conn domain.Conn) error {
 	a.setAdvertised(manifest.Capabilities)
 	signature := a.identity.Sign(protocol.RegisterSignedData(a.cfg.PairingToken, a.identity.NodeID))
 	if err := a.send(ctx, conn, protocol.MsgRegister, domain.ManagerNodeID,
-		protocol.RegisterPayload{Manifest: manifest, PairingToken: a.cfg.PairingToken, Signature: signature}); err != nil {
+		protocol.RegisterPayload{Manifest: manifest, PairingToken: a.cfg.PairingToken, Signature: signature, Pairing: a.cfg.Pairing}); err != nil {
 		return fmt.Errorf("send REGISTER: %w", err)
 	}
 
@@ -338,6 +407,11 @@ func (a *Agent) register(ctx context.Context, conn domain.Conn) error {
 	case protocol.MsgRegisterReject:
 		var payload protocol.RegisterRejectPayload
 		_ = env.DecodePayload(&payload)
+		if payload.PendingApproval && a.cfg.Pairing {
+			pending := &PendingApprovalError{Code: a.PairingCode(), ManagerCode: payload.Code}
+			a.notePending(pending)
+			return pending
+		}
 		return fmt.Errorf("registration rejected: %s", payload.Reason)
 	default:
 		return fmt.Errorf("unexpected message type during registration: %s", env.Type)
@@ -376,7 +450,7 @@ func (a *Agent) buildManifest(ctx context.Context) domain.Manifest {
 		Capabilities: capabilities,
 		// Lets the manager tell this build apart from agents that can only
 		// download the legacy /agent-binary route (manager/selfupdate.go).
-		AgentFeatures: []string{domain.FeatureSelfUpdatePath, domain.FeatureArtifacts, domain.FeatureTimeout},
+		AgentFeatures: a.agentFeatures(),
 		// The manager reserves this many concurrent workloads for us.
 		WorkloadSlots: a.executor.Slots(),
 	}
@@ -399,6 +473,7 @@ func (a *Agent) heartbeatLoop(ctx context.Context, conn domain.Conn, errCh chan<
 					NodeID:               a.identity.NodeID,
 					State:                domain.NodeReady,
 					CPUPercent:           metrics.CPUPercent,
+					CPUScope:             metrics.CPUScope,
 					MemoryAvailableBytes: metrics.MemoryAvailableBytes,
 					LastHeartbeat:        time.Now().UTC(),
 					AgentVersion:         a.cfg.AgentVersion,
@@ -536,4 +611,13 @@ func (a *Agent) capabilityLoop(ctx context.Context, conn domain.Conn) {
 		log.Printf("agent %s: capabilities changed; told the manager", a.identity.NodeID)
 		a.setAdvertised(caps)
 	}
+}
+
+// agentFeatures are the behaviors this build tells the manager it has.
+func (a *Agent) agentFeatures() []string {
+	features := []string{domain.FeatureArtifacts, domain.FeatureTimeout}
+	if !a.cfg.SelfUpdateDisabled {
+		features = append([]string{domain.FeatureSelfUpdatePath}, features...)
+	}
+	return features
 }

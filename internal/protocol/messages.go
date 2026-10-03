@@ -1,6 +1,10 @@
 package protocol
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
+	"fmt"
+	"strings"
 	"time"
 
 	"home-harness/internal/domain"
@@ -21,6 +25,25 @@ type RegisterPayload struct {
 	Manifest     domain.Manifest `json:"manifest"`
 	PairingToken string          `json:"pairingToken"`
 	Signature    []byte          `json:"signature"`
+	// Pairing asks to be admitted by the operator's approval instead of a
+	// token (agent -pair): an unknown identity is held as a join request
+	// until someone approves it on the manager, comparing PairingCode on
+	// both screens.
+	Pairing bool `json:"pairing,omitempty"`
+}
+
+// PairingCode is the short code a device and its manager both show while
+// a join request waits for approval: derived from the manager's TLS
+// fingerprint and the device's public key, computed by each side on its
+// own. A machine in the middle (its own certificate toward the device,
+// its own key toward the manager) makes the two codes differ.
+func PairingCode(managerFingerprint string, publicKey []byte) string {
+	h := sha256.New()
+	h.Write([]byte("home-harness-pair-v1:" + strings.ToLower(strings.TrimSpace(managerFingerprint)) + ":"))
+	h.Write(publicKey)
+	sum := h.Sum(nil)
+	n := binary.BigEndian.Uint64(sum[:8]) % 1_000_000
+	return fmt.Sprintf("%03d %03d", n/1000, n%1000)
 }
 
 // RegisterSignedData builds the exact byte sequence a REGISTER's Signature
@@ -41,6 +64,11 @@ type RegisterAckPayload struct {
 // pairing token), so rejection is observable rather than a silent hang.
 type RegisterRejectPayload struct {
 	Reason string `json:"reason"`
+	// PendingApproval: not refused, waiting for the operator to approve
+	// this device (Code is the manager's PairingCode). The agent retries
+	// shortly; nothing about this is an error.
+	PendingApproval bool   `json:"pendingApproval,omitempty"`
+	Code            string `json:"code,omitempty"`
 }
 
 // HeartbeatPayload carries the sending node's current runtime state.

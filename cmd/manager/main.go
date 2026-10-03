@@ -55,6 +55,8 @@ func main() {
 	artifactTotal := flag.String("artifact-store-size", "4GiB", "most space all stored workload files may use; uploads beyond it are refused")
 	artifactRetention := flag.Duration("artifact-retention", 7*24*time.Hour, "how long a stored file no queued/running/restarting workload needs is kept after it was last used")
 	advertiseAddr := flag.String("advertise-addr", "", "this machine's LAN address agents should use (host:port), shown pre-filled in the dashboard's \"add a device\" form — e.g. the Android app passes the phone's Wi-Fi address")
+	joinAddr := flag.String("join-addr", "", "serve the join page here (plain HTTP, e.g. :7419): devices open http://<this machine>:7419 to install an agent that joins by approval on the dashboard. Off when empty")
+	appAPK := flag.String("app-apk", "", "the Android app's APK, offered for download on the join page (the app passes its own)")
 	exportState := flag.String("export-state", "", "write the -state-dir (tokens, database, TLS certificate) to this zip and exit; the manager must be stopped. The file holds the TLS key and tokens: keep it private and delete it after importing")
 	importState := flag.String("import-state", "", "unpack a state zip made by -export-state into -state-dir and exit (refuses to replace an existing database without -force)")
 	stateDir := flag.String("state-dir", "", "the state directory for -export-state / -import-state")
@@ -195,6 +197,8 @@ func main() {
 		ArtifactRetention:   *artifactRetention,
 		InitialPolicy:       initialPolicy(*allowRaw),
 		AdvertiseAddr:       *advertiseAddr,
+		JoinAddr:            *joinAddr,
+		AppAPK:              *appAPK,
 	})
 	// Registered before Run (which calls transport.Listen) — puts the
 	// download on the exact address/port agents already dial, no new port
@@ -228,6 +232,20 @@ func main() {
 				log.Printf("manager: discovery beacon stopped: %v", err)
 			}
 		}()
+	}
+
+	if *joinAddr != "" {
+		joinServer := &http.Server{Addr: *joinAddr, Handler: srv.JoinPageHandler(), ReadHeaderTimeout: 10 * time.Second}
+		go func() {
+			if err := joinServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Printf("manager: join page stopped: %v", err)
+			}
+		}()
+		go func() {
+			<-ctx.Done()
+			joinServer.Close()
+		}()
+		log.Printf("manager: to add a device, open http://<this machine's LAN address>%s on it", portSuffix(*joinAddr))
 	}
 
 	apiServer := &http.Server{Addr: *apiAddr, Handler: srv.NewHTTPHandler()}
@@ -363,4 +381,13 @@ func moveState(exportTo, importFrom, stateDir string, withArtifacts, force bool)
 	}
 	fmt.Printf("State imported into %s.\n", stateDir)
 	return nil
+}
+
+// portSuffix is ":port" of a listen address (":7419" from ":7419" or
+// "0.0.0.0:7419").
+func portSuffix(addr string) string {
+	if _, port, err := net.SplitHostPort(addr); err == nil {
+		return ":" + port
+	}
+	return addr
 }

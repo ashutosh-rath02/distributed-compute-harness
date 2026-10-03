@@ -117,6 +117,10 @@ func TestOperatorAuthentication(t *testing.T) {
 		strings.Contains(rec.Body.String(), testOperatorToken) || strings.Contains(rec.Body.String(), "permanent-pairing-secret") {
 		t.Errorf("GET / (dashboard shell): got %d, or it embedded a secret", rec.Code)
 	}
+	if rec := operatorRequest(t, h, http.MethodGet, "/live", "", ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Live") ||
+		strings.Contains(rec.Body.String(), testOperatorToken) || strings.Contains(rec.Body.String(), "permanent-pairing-secret") {
+		t.Errorf("GET /live (live-view shell): got %d, or it embedded a secret", rec.Code)
+	}
 	if rec := operatorRequest(t, h, http.MethodGet, "/enrollments/unknown-token/qr", "", ""); rec.Code == http.StatusUnauthorized {
 		t.Error("the token-scoped QR route must be reachable by an <img> without a header")
 	}

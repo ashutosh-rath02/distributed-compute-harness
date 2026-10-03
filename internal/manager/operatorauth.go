@@ -100,7 +100,8 @@ func LoadOrCreateOperatorToken(path string) (string, error) {
 
 // operatorPublic reports whether r may reach the operator API without a
 // credential. Kept to the minimum the dashboard needs to bootstrap:
-//   - GET / — the dashboard shell, static HTML with no data in it;
+//   - GET / and GET /live — the dashboard and live-view shells, static
+//     HTML with no data in them;
 //   - POST /login — exchanging the token for a session;
 //   - GET /server-proof — proves this manager holds the token (it takes
 //     no credential and returns none);
@@ -110,7 +111,7 @@ func LoadOrCreateOperatorToken(path string) (string, error) {
 func operatorPublic(r *http.Request) bool {
 	path := r.URL.Path
 	switch {
-	case path == "/" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
+	case (path == "/" || path == "/live") && (r.Method == http.MethodGet || r.Method == http.MethodHead):
 		return true
 	case path == "/login" && r.Method == http.MethodPost:
 		return true

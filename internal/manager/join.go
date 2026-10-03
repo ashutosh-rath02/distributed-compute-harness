@@ -1,6 +1,10 @@
 package manager
 
-import "home-harness/internal/joinscript"
+import (
+	"net"
+
+	"home-harness/internal/joinscript"
+)
 
 // JoinInfo is what a new node needs to onboard itself: the manager's own
 // TLS fingerprint and pairing token, handed out over the manager's
@@ -31,6 +35,11 @@ type JoinInfo struct {
 	// LANAddr is the manager's advertised LAN address (-advertise-addr),
 	// if it was given one.
 	LANAddr string `json:"lanAddr,omitempty"`
+	// JoinURL is the join page devices open to add themselves (empty when
+	// there is none, or this manager doesn't know its LAN address; then
+	// JoinPort says where it listens).
+	JoinURL  string `json:"joinUrl,omitempty"`
+	JoinPort string `json:"joinPort,omitempty"`
 }
 
 // JoinInfo reports what an operator needs to onboard a new node. Insecure
@@ -40,6 +49,8 @@ type JoinInfo struct {
 func (s *Server) JoinInfo() JoinInfo {
 	return JoinInfo{
 		LANAddr:        s.cfg.AdvertiseAddr,
+		JoinURL:        s.joinURL(),
+		JoinPort:       s.joinPort(),
 		Fingerprint:    s.cfg.Fingerprint,
 		PairingToken:   s.cfg.PairingToken,
 		Insecure:       s.cfg.Fingerprint == "",
@@ -108,4 +119,27 @@ func (s *Server) scriptInfo(platform string) joinscript.Info {
 		RelayToken:           s.cfg.RelayToken,
 		ArchBuilds:           s.archBuilds(platform, agentBuild.downloadPath),
 	}
+}
+
+// joinPort is the join page's port ("" when there is no join page).
+func (s *Server) joinPort() string {
+	if s.cfg.JoinAddr == "" {
+		return ""
+	}
+	_, port, err := net.SplitHostPort(s.cfg.JoinAddr)
+	if err != nil {
+		return ""
+	}
+	return port
+}
+
+// joinURL is the join page's address on this machine's LAN address, when
+// both are known.
+func (s *Server) joinURL() string {
+	port := s.joinPort()
+	host, _, err := net.SplitHostPort(s.cfg.AdvertiseAddr)
+	if port == "" || err != nil || host == "" {
+		return ""
+	}
+	return "http://" + net.JoinHostPort(host, port)
 }

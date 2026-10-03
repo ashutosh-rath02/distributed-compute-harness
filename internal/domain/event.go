@@ -32,6 +32,13 @@ const (
 	EventJobFinished       EventType = "job.finished"
 )
 
+// A device asked to join by approval (agent -pair), and the operator's
+// answer (approved / rejected / expired).
+const (
+	EventJoinRequested EventType = "node.join-requested"
+	EventJoinDecided   EventType = "node.join-decided"
+)
+
 // Event is a single state change emitted by the harness.
 type Event struct {
 	Type      EventType      `json:"type"`

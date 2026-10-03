@@ -22,6 +22,7 @@ mkdir -p "$out"
 targets=(
   "windows amd64 agent-windows-amd64.exe"
   "linux arm64 agent-linux-arm64"   # Android (Termux) and ARM Linux
+  "linux arm agent-linux-arm"       # 32-bit Android devices (older tablets)
   "linux amd64 agent-linux-amd64"
   "darwin arm64 agent-darwin-arm64"
   "darwin amd64 agent-darwin-amd64"
@@ -30,7 +31,7 @@ targets=(
 failed=()
 for target in "${targets[@]}"; do
   read -r goos goarch name <<<"$target"
-  if CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -trimpath -o "$out/$name" ./cmd/agent; then
+  if CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" GOARM=7 go build -trimpath -o "$out/$name" ./cmd/agent; then
     echo "built $out/$name ($goos/$goarch)"
   else
     failed+=("$goos/$goarch")

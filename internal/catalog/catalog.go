@@ -164,6 +164,32 @@ var builtins = []Type{
 		Reduce:      true,
 	},
 	{
+		Name: "render.fractal", Version: "1", Title: "Render part of a fractal image",
+		Description: "Draw one horizontal strip of a Mandelbrot fractal, using every CPU core. Split a big image into many parts as a job and every device renders strips; image.stack joins them into one picture.",
+		Params: []Param{
+			{Name: "width", Type: Int, Title: "Image width (pixels)", Default: "3200", Min: num(16), Max: num(8000)},
+			{Name: "height", Type: Int, Title: "Image height (pixels)", Default: "2400", Min: num(16), Max: num(8000)},
+			{Name: "part", Type: Int, Title: "Which strip (0 = top)", Default: "0", Min: num(0), Max: num(999)},
+			{Name: "parts", Type: Int, Title: "Strips in the whole image", Default: "1", Min: num(1), Max: num(1000)},
+			{Name: "iterations", Type: Int, Title: "Detail (iterations)", Default: "2000", Min: num(16), Max: num(50000)},
+			{Name: "scene", Type: Enum, Title: "Where to look", Default: "seahorse", Enum: []string{"seahorse", "spiral", "classic"}},
+		},
+		Outputs:                  []string{"fractal-{{part}}.png"},
+		Requirements:             domain.ResourceRequirements{MinMemoryBytes: 256 << 20},
+		DefaultMaxRuntimeSeconds: 600,
+	},
+	{
+		Name: "image.stack", Version: "1", Title: "Stack image strips",
+		Description: "Join images top to bottom, in name order, into one PNG: the last step of a job that renders a picture in strips.",
+		Params: []Param{
+			{Name: "name", Type: String, Title: "Result name", Default: "image.png", Pattern: `[A-Za-z0-9._-]{1,60}\.png`},
+		},
+		Inputs:       Inputs{Min: 1, Max: domain.MaxWorkloadInputs, Extensions: []string{"png", "jpg", "jpeg", "gif"}, Description: "the strips, top first by name"},
+		Outputs:      []string{"{{name}}"},
+		Reduce:       true,
+		Requirements: domain.ResourceRequirements{MinMemoryBytes: 512 << 20},
+	},
+	{
 		Name: "llm.generate", Version: "1", Title: "Ask a local AI model",
 		Description: "Run a prompt on a local model (Ollama) on whichever device has it, streaming the answer back. Text files given as input are included as context.",
 		Params: []Param{

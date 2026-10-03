@@ -82,3 +82,25 @@ func TestDetectBinaryPlatformMissingFileReturnsEmpty(t *testing.T) {
 		t.Fatalf("detectBinaryPlatform = (%q, %q), want (\"\", \"\") for a missing file", goos, arch)
 	}
 }
+
+// The 32-bit ARM build (older Android tablets) must be recognized: an
+// unrecognized -agent-binary stops the manager from starting at all.
+func TestDetectBinaryPlatformELFARM32(t *testing.T) {
+	b := make([]byte, 52)
+	copy(b[0:4], []byte{0x7f, 'E', 'L', 'F'})
+	b[4] = 1 // ELFCLASS32
+	b[5] = 1 // little endian
+	b[6] = 1 // EI_VERSION
+	le := binary.LittleEndian
+	le.PutUint16(b[16:18], 2)    // ET_EXEC
+	le.PutUint16(b[18:20], 0x28) // EM_ARM
+	le.PutUint32(b[20:24], 1)    // e_version
+	le.PutUint16(b[40:42], 52)   // e_ehsize
+	path := filepath.Join(t.TempDir(), "agent-linux-arm")
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if goos, arch := detectBinaryPlatform(path); goos != "linux" || arch != "arm" {
+		t.Fatalf("detectBinaryPlatform = (%q, %q), want (linux, arm)", goos, arch)
+	}
+}

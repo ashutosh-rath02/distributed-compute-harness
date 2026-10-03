@@ -1,6 +1,8 @@
 package io.homeharness.manager;
 
+import android.app.Activity;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
 import android.content.res.AssetManager;
@@ -8,6 +10,11 @@ import android.net.ConnectivityManager;
 import android.net.LinkAddress;
 import android.net.LinkProperties;
 import android.net.Network;
+import android.net.NetworkCapabilities;
+import android.net.wifi.WifiManager;
+import android.net.Uri;
+import android.os.Build;
+import android.provider.Settings;
 
 import org.json.JSONObject;
 
@@ -43,8 +50,14 @@ final class Harness {
     static final String KEY_START_ON_BOOT = "startOnBoot";
     static final String KEY_ASKED_BATTERY = "askedBattery";
     static final String KEY_AGENTS_VERSION = "agentsVersion";
+    /** "manager" or "worker" (unset until the first launch asks). */
+    static final String KEY_MODE = "mode";
+    /** A worker's typed manager address ("" = find it on the LAN). */
+    static final String KEY_MANAGER_ADDR = "managerAddr";
+    static final String MODE_MANAGER = "manager", MODE_WORKER = "worker";
     static final int AGENT_PORT = 7420;
     static final int API_PORT = 7421;
+    static final int JOIN_PORT = 7419;
 
     private Harness() {}
 
@@ -62,6 +75,84 @@ final class Harness {
 
     static File logFile(Context c) {
         return new File(stateDir(c), "manager.log");
+    }
+
+    static String mode(Context c) {
+        return prefs(c).getString(KEY_MODE, "");
+    }
+
+    static boolean isWorker(Context c) {
+        return MODE_WORKER.equals(mode(c));
+    }
+
+    /** Switches between manager and worker: stops the service, records the
+     *  mode, and reopens the app in it. Each mode's files stay where they
+     *  are, so switching back finds them again. */
+    static void switchMode(Activity a, String mode) {
+        ManagerService.stop(a);
+        prefs(a).edit().putString(KEY_MODE, mode).apply();
+        Intent i = new Intent(a, MainActivity.class);
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+        a.startActivity(i);
+        a.finish();
+    }
+
+    static File workerDir(Context c) {
+        return new File(c.getFilesDir(), "worker");
+    }
+
+    static File workerLog(Context c) {
+        return new File(workerDir(c), "agent.log");
+    }
+
+    /** The log of whichever mode the service runs. */
+    static File currentLog(Context c) {
+        return isWorker(c) ? workerLog(c) : logFile(c);
+    }
+
+    /** The agent binary, a "native library" like the manager's. */
+    static File agentBinary(Context c) {
+        return new File(c.getApplicationInfo().nativeLibraryDir, "libhomeharness_agent.so");
+    }
+
+    /** What the worker is called on the manager: the name the owner gave
+     *  this device, else its make and model. */
+    static String deviceName(Context c) {
+        String n = Settings.Global.getString(c.getContentResolver(), "device_name");
+        if (n == null || n.trim().isEmpty()) n = Build.MANUFACTURER + " " + Build.MODEL;
+        return n.trim();
+    }
+
+    /** The worker's command line: the agent joins by approval on the
+     *  manager (-pair), finding it on the LAN unless an address was typed.
+     *  No self-update: its binary is part of the app, updated with it. */
+    static List<String> workerCommand(Context c) {
+        File dir = workerDir(c);
+        dir.mkdirs();
+        List<String> cmd = new ArrayList<>();
+        cmd.add(agentBinary(c).getAbsolutePath());
+        cmd.add("-pair");
+        cmd.add("-no-self-update");
+        cmd.add("-identity-dir");
+        cmd.add(new File(dir, "identity").getAbsolutePath());
+        cmd.add("-work-dir");
+        cmd.add(new File(dir, "work").getAbsolutePath());
+        cmd.add("-name");
+        cmd.add(deviceName(c));
+        String addr = prefs(c).getString(KEY_MANAGER_ADDR, "");
+        if (!addr.isEmpty()) {
+            cmd.add("-manager-addr");
+            cmd.add(addr);
+        }
+        return cmd;
+    }
+
+    static void openBatterySettings(Activity a) {
+        try {
+            a.startActivity(new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:" + a.getPackageName())));
+        } catch (Exception e) {
+            a.startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+        }
     }
 
     /** The manager binary: shipped as a "native library" because Android
@@ -145,18 +236,41 @@ final class Harness {
      *  offline). Java can read it where the manager process can't: apps
      *  targeting Android 11+ may not enumerate interfaces. */
     static String lanAddress(Context c) {
-        ConnectivityManager cm = (ConnectivityManager) c.getSystemService(Context.CONNECTIVITY_SERVICE);
-        if (cm == null) return null;
-        Network n = cm.getActiveNetwork();
-        if (n == null) return null;
-        LinkProperties lp = cm.getLinkProperties(n);
-        if (lp == null) return null;
-        for (LinkAddress la : lp.getLinkAddresses()) {
-            if (la.getAddress() instanceof Inet4Address && !la.getAddress().isLoopbackAddress()) {
-                return la.getAddress().getHostAddress();
+        // The Wi-Fi network the owner joined in Settings: phones with "dual
+        // Wi-Fi" can sit on a second one too (seen on a OnePlus: wlan1 on
+        // another network next to the home wlan0).
+        WifiManager wm = (WifiManager) c.getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+        if (wm != null) {
+            @SuppressWarnings("deprecation")
+            int ip = wm.getConnectionInfo() != null ? wm.getConnectionInfo().getIpAddress() : 0;
+            if (ip != 0) {
+                String s = (ip & 0xff) + "." + ((ip >> 8) & 0xff) + "." + ((ip >> 16) & 0xff) + "." + ((ip >> 24) & 0xff);
+                try {
+                    if (java.net.InetAddress.getByName(s).isSiteLocalAddress()) return s;
+                } catch (IOException e) {
+                    // fall through to the network scan below
+                }
             }
         }
-        return null;
+        ConnectivityManager cm = (ConnectivityManager) c.getSystemService(Context.CONNECTIVITY_SERVICE);
+        if (cm == null) return null;
+        // Then the Wi-Fi (or Ethernet) network: Android's "active" network
+        // can be mobile data even while Wi-Fi is connected (Wi-Fi without
+        // internet, or a hotspot running), and a mobile address is useless
+        // to devices at home. Then any other private LAN address.
+        String fallback = null;
+        for (Network n : cm.getAllNetworks()) {
+            NetworkCapabilities caps = cm.getNetworkCapabilities(n);
+            LinkProperties lp = cm.getLinkProperties(n);
+            if (caps == null || lp == null) continue;
+            boolean lan = caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET);
+            for (LinkAddress la : lp.getLinkAddresses()) {
+                if (!(la.getAddress() instanceof Inet4Address) || !la.getAddress().isSiteLocalAddress()) continue;
+                if (lan) return la.getAddress().getHostAddress();
+                if (fallback == null) fallback = la.getAddress().getHostAddress();
+            }
+        }
+        return fallback;
     }
 
     /** The manager's command line: the same flags as the Termux launcher. */
@@ -179,6 +293,13 @@ final class Harness {
         cmd.add(new File(state, "tls").getAbsolutePath());
         cmd.add("-artifact-dir");
         cmd.add(new File(state, "artifacts").getAbsolutePath());
+        // The join page: other devices open http://<phone>:7419 to add
+        // themselves, and are approved on the dashboard.
+        cmd.add("-join-addr");
+        cmd.add(":" + JOIN_PORT);
+        // ...where Android devices also download this app to be workers.
+        cmd.add("-app-apk");
+        cmd.add(c.getApplicationInfo().sourceDir);
         String ip = lanAddress(c);
         if (ip != null) {
             cmd.add("-advertise-addr");
@@ -215,17 +336,18 @@ final class Harness {
      *  keep an app's child alive past the app, holding port 7420). Only
      *  our own binary, found by its command line. */
     static void killStale(Context c) {
-        for (int pid : managerPids(c)) android.os.Process.killProcess(pid);
+        for (int pid : pidsOf(binary(c))) android.os.Process.killProcess(pid);
+        for (int pid : pidsOf(agentBinary(c))) android.os.Process.killProcess(pid);
     }
 
     /** Whether any manager process (our binary) is still alive. */
     static boolean managerAlive(Context c) {
-        return !managerPids(c).isEmpty();
+        return !pidsOf(binary(c)).isEmpty();
     }
 
-    private static List<Integer> managerPids(Context c) {
+    private static List<Integer> pidsOf(File binary) {
         List<Integer> pids = new ArrayList<>();
-        String bin = binary(c).getAbsolutePath();
+        String bin = binary.getAbsolutePath();
         File[] procs = new File("/proc").listFiles();
         if (procs == null) return pids;
         int self = android.os.Process.myPid();
@@ -290,7 +412,12 @@ final class Harness {
 
     /** The last lines of the manager's log. */
     static String logTail(Context c, int maxChars) {
-        String all = readFile(logFile(c));
+        return readTail(logFile(c), maxChars);
+    }
+
+    /** The last maxChars of a log file ("" if there is none). */
+    static String readTail(File f, int maxChars) {
+        String all = readFile(f);
         return all.length() <= maxChars ? all : all.substring(all.length() - maxChars);
     }
 }

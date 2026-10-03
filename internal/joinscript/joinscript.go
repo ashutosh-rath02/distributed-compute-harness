@@ -129,30 +129,52 @@ pkg install -y curl && mkdir -p ~/home-harness && cd ~/home-harness && curl %s-o
 	}
 
 	return "Paste this into PowerShell. It installs the agent for the current user and reconnects automatically at every logon using LAN discovery:\n\n" +
-		windowsInstall(
-			fmt.Sprintf(`curl.exe %s"%s://%s" -o $download`, curlFlag, scheme, addr+binaryPath),
-			hash,
-			fmt.Sprintf("-pairing-token %s %s", info.PairingToken, authFlag),
-			"Installed. The agent now discovers the phone on the LAN and reconnects automatically after logon.",
-		), nil
+		windowsInstall(windowsSteps{
+			Fetch:      fmt.Sprintf(`curl.exe %s"%s://%s" -o $download`, curlFlag, scheme, addr+binaryPath),
+			Hash:       hash,
+			AgentFlags: fmt.Sprintf("-pairing-token %s %s", info.PairingToken, authFlag),
+			Done:       "Installed. The agent now discovers the phone on the LAN and reconnects automatically after logon.",
+		}), nil
+}
+
+// windowsSteps fills windowsInstall: Fetch places the candidate binary at
+// $download, which must match Hash; AgentFlags are the launcher's agent
+// flags; BeforeStart runs once the new agent.exe is in place but before
+// anything starts it (pairing creates the identity there, so the code it
+// shows is the running agent's); AfterStart runs last; Done is the closing
+// message. Everything must stay ASCII: the join page's installer reaches
+// Windows PowerShell 5.1 through irm | iex.
+type windowsSteps struct {
+	Fetch, Hash, AgentFlags string
+	BeforeStart, AfterStart string
+	Done                    string
 }
 
 // windowsInstall is the one PowerShell installation block every Windows
-// onboarding path shares: fetch places the candidate binary at $download,
-// which must match hash before it replaces the installed agent; then a
-// per-user HKCU Run launcher keeps the agent (run with agentFlags) alive
-// across crashes and logons. Sharing it keeps LAN and relay onboarding
-// from drifting apart on persistence — a remote node that silently stops
-// at window close is exactly the kind of regression that would otherwise
+// onboarding path shares: it replaces the installed agent with a verified
+// download (stopping one installed earlier first: Windows won't replace a
+// running agent.exe, and its launcher would start it again), then a
+// per-user scheduled task keeps the agent alive across crashes and
+// logons. Sharing it keeps LAN, relay and join-page onboarding from
+// drifting apart on persistence - a remote node that silently stops at
+// window close is exactly the kind of regression that would otherwise
 // only show up on real hardware.
-func windowsInstall(fetch, hash, agentFlags, done string) string {
+func windowsInstall(st windowsSteps) string {
 	return fmt.Sprintf(`$root = Join-Path $env:LOCALAPPDATA "HomeHarness"
 New-Item -ItemType Directory -Force $root | Out-Null
 $download = Join-Path $root "agent.new.exe"
 $agent = Join-Path $root "agent.exe"
 %s
-if ((Get-FileHash $download -Algorithm SHA256).Hash -ne "%s") { Remove-Item $download -Force; throw "agent.exe hash mismatch — wrong, corrupted, or tampered binary; aborting" }
+if ((Get-FileHash $download -Algorithm SHA256).Hash -ne "%s") { Remove-Item $download -Force; throw "agent.exe hash mismatch - wrong, corrupted, or tampered binary; aborting" }
+$taskName = "HomeComputeHarnessAgent"
+# An agent installed earlier: stop its task, its launcher loop and the
+# agent itself, so agent.exe can be replaced.
+Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.CommandLine -like ('*' + $root + '\start-agent.ps1*') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+Get-Process agent -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $agent } | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 500
 Move-Item $download $agent -Force
+%s
 $launcher = Join-Path $root "start-agent.ps1"
 @'
 $agent = Join-Path $env:LOCALAPPDATA "HomeHarness\agent.exe"
@@ -169,7 +191,6 @@ while ($true) {
 # needed; raw commands run as you, not SYSTEM). The older Run-key entry
 # is the fallback, and is removed when the task takes over so only one
 # launcher ever loops.
-$taskName = "HomeComputeHarnessAgent"
 $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
 $launchArgs = '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $launcher + '"'
 $task = $false
@@ -187,8 +208,9 @@ try {
   New-ItemProperty -Path $runKey -Name $taskName -Value ("powershell.exe " + $launchArgs) -PropertyType String -Force | Out-Null
 }
 if ($task) { Start-ScheduledTask -TaskName $taskName } else { Start-Process powershell.exe -ArgumentList $launchArgs -WindowStyle Hidden }
+%s
 Write-Host "%s"
-`, fetch, hash, agentFlags, done)
+`, st.Fetch, st.Hash, st.BeforeStart, st.AgentFlags, st.AfterStart, st.Done)
 }
 
 // ValidateAddress accepts an IP address or conservative DNS hostname plus
@@ -262,11 +284,11 @@ pkg install -y curl && mkdir -p ~/home-harness && cd ~/home-harness && curl -fLo
 `, info.BootstrapURL, strings.ToLower(hash), flags), nil
 		}
 		return "Paste this into PowerShell. It installs the agent for the current user and reconnects through the relay automatically at every logon:\n\n" +
-			windowsInstall(
-				fmt.Sprintf(`curl.exe -fL "%s" -o $download`, info.BootstrapURL),
-				hash, flags,
-				"Installed. The agent now connects through the relay and reconnects automatically after logon.",
-			), nil
+			windowsInstall(windowsSteps{
+				Fetch: fmt.Sprintf(`curl.exe -fL "%s" -o $download`, info.BootstrapURL),
+				Hash:  hash, AgentFlags: flags,
+				Done: "Installed. The agent now connects through the relay and reconnects automatically after logon.",
+			}), nil
 	}
 
 	if platform == "android" {
@@ -290,9 +312,9 @@ with -relay-public-url configured to have the binary fetched for you.
 
 Then paste this into PowerShell. It installs the agent for the current user and reconnects through the relay automatically at every logon:
 
-` + windowsInstall(
-		`Copy-Item -LiteralPath (Join-Path (Get-Location) "agent.exe") $download -Force`,
-		hash, flags,
-		"Installed. The agent now connects through the relay and reconnects automatically after logon.",
-	), nil
+` + windowsInstall(windowsSteps{
+		Fetch: `Copy-Item -LiteralPath (Join-Path (Get-Location) "agent.exe") $download -Force`,
+		Hash:  hash, AgentFlags: flags,
+		Done: "Installed. The agent now connects through the relay and reconnects automatically after logon.",
+	}), nil
 }

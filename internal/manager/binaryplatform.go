@@ -34,6 +34,8 @@ func detectBinaryPlatform(path string) (goos, arch string) {
 			return "linux", "arm64"
 		case elf.EM_X86_64:
 			return "linux", "amd64"
+		case elf.EM_ARM: // 32-bit Android devices (older tablets)
+			return "linux", "arm"
 		}
 		return "linux", ""
 	}

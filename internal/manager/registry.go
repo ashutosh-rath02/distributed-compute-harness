@@ -198,11 +198,23 @@ func (r *Registry) SetOfflineIfCurrent(id domain.NodeID, conn domain.Conn) bool 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	rec, ok := r.nodes[id]
-	if !ok || rec.Conn != conn {
+	// Already OFFLINE (a heartbeat timeout got there first, then closed
+	// this connection): its cleanup already ran.
+	if !ok || rec.Conn != conn || rec.State == domain.NodeOffline {
 		return false
 	}
 	rec.State = domain.NodeOffline
 	return true
+}
+
+// ConnOf returns a node's current connection (nil if none).
+func (r *Registry) ConnOf(id domain.NodeID) domain.Conn {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if rec, ok := r.nodes[id]; ok {
+		return rec.Conn
+	}
+	return nil
 }
 
 // Touch records a heartbeat/activity timestamp for a node.

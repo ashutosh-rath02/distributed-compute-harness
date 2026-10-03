@@ -209,3 +209,33 @@ func TestHeartbeatTimeoutSendsBestEffortCancel(t *testing.T) {
 		t.Fatalf("expected WORKLOAD_CANCEL sent over the still-live connection, got %s", env.Type)
 	}
 }
+
+// A node marked OFFLINE by a heartbeat timeout while its connection stays
+// up (seen live: the manager's laptop slept, and its own agent's local
+// connection survived) could never become READY again, since only a
+// REGISTER does that. The manager now drops such a connection, so a live
+// agent reconnects.
+func TestHeartbeatTimeoutClosesTheConnection(t *testing.T) {
+	const addr = "127.0.0.1:19279"
+	srv := startManagerWithReconcile(t, addr, 300*time.Millisecond, 5*time.Second)
+	nodeID, conn := registerRawSilentNode(t, addr, "slept-agent")
+	defer conn.Close()
+	waitFor(t, 3*time.Second, func() bool {
+		rec, ok := srv.Registry.Get(nodeID)
+		return ok && rec.State == domain.NodeReady
+	})
+	// Silent from here on: the manager must time it out and hang up.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for {
+		if _, err := conn.Receive(ctx); err != nil {
+			if ctx.Err() != nil {
+				t.Fatal("the manager kept the timed-out node's connection open")
+			}
+			break
+		}
+	}
+	if rec, _ := srv.Registry.Get(nodeID); rec.State != domain.NodeOffline {
+		t.Fatalf("state %s, want OFFLINE", rec.State)
+	}
+}

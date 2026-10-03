@@ -107,6 +107,12 @@ func main() {
 		err = requireArgs(args, 2, "revoke <id>", func() error { return client.cmdRevokeNode(args[1]) })
 	case "revocations":
 		err = client.cmdRevocations()
+	case "join-requests":
+		err = client.cmdJoinRequests()
+	case "approve":
+		err = requireArgs(args, 2, "approve <id|code>", func() error { return client.cmdDecideJoin(strings.Join(args[1:], " "), true) })
+	case "reject":
+		err = requireArgs(args, 2, "reject <id|code>", func() error { return client.cmdDecideJoin(strings.Join(args[1:], " "), false) })
 	case "unrevoke":
 		err = requireArgs(args, 2, "unrevoke <id>", func() error { return client.cmdUnrevokeNode(args[1]) })
 	case "join":
@@ -246,6 +252,12 @@ Commands:
                         such a device off completely also rotate the
                         manager's -pairing-token.
   revocations           list revoked node identities
+  join-requests         devices waiting to join by approval (they ran the
+                        join page's installer, or an agent with -pair), with
+                        the pairing code each one shows
+  approve <id|code>     admit a waiting device: compare its pairing code
+                        with the one the device shows first
+  reject <id|code>      refuse a waiting device (for the next 10 minutes)
   unrevoke <id>         lift a revocation; the node must then be admitted
                         afresh (its shared-token launcher does this on its
                         own; a one-time-invitation node needs a new one)
@@ -936,7 +948,7 @@ func (c *apiClient) cmdUnrevokeNode(id string) error {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("manager returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
-	fmt.Printf("Revocation of %s lifted. The node must be admitted again: a shared-token launcher reconnects on its own; a node enrolled by invitation needs a new one.\n", id)
+	fmt.Printf("Revocation of %s lifted. The node must be admitted again: a shared-token launcher reconnects on its own, a device that joined by approval asks again (approve it: harnessctl join-requests), and a node enrolled by invitation needs a new one.\n", id)
 	return nil
 }
 

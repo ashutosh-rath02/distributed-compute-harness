@@ -70,7 +70,7 @@ public class ManagerService extends Service {
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         return new Notification.Builder(this, CHANNEL)
                 .setSmallIcon(R.drawable.ic_launcher)
-                .setContentTitle("Home Harness manager")
+                .setContentTitle(Harness.isWorker(this) ? "Home Harness worker" : "Home Harness manager")
                 .setContentText(text)
                 .setContentIntent(open)
                 .setOngoing(true)
@@ -115,21 +115,29 @@ public class ManagerService extends Service {
         while (!stopping) {
             long started = SystemClock.elapsedRealtime();
             try {
+                // The same supervision for either mode: the manager, or (on
+                // a worker device) the agent.
+                boolean worker = Harness.isWorker(this);
                 Harness.killStale(this);
-                Harness.copyAgents(this);
-                File log = Harness.logFile(this);
+                if (!worker) Harness.copyAgents(this);
+                File log = Harness.currentLog(this);
                 log.getParentFile().mkdirs();
                 if (log.length() > MAX_LOG) {
                     File old = new File(log.getPath() + ".1");
                     old.delete();
                     log.renameTo(old);
                 }
-                ProcessBuilder pb = new ProcessBuilder(Harness.command(this))
-                        .directory(Harness.stateDir(this))
+                ProcessBuilder pb = new ProcessBuilder(worker ? Harness.workerCommand(this) : Harness.command(this))
+                        .directory(worker ? Harness.workerDir(this) : Harness.stateDir(this))
                         .redirectErrorStream(true)
                         .redirectOutput(ProcessBuilder.Redirect.appendTo(log));
+                pb.environment().put("HOME_HARNESS_SUPERVISED", "1");
                 String ip = Harness.lanAddress(this);
-                updateNotification(ip != null ? "Devices join at " + ip + ":" + Harness.AGENT_PORT : "Running (no network)");
+                if (worker) {
+                    updateNotification("Runs tasks for your manager. Open the app to see its status.");
+                } else {
+                    updateNotification(ip != null ? "Add a device: open http://" + ip + ":" + Harness.JOIN_PORT + " on it" : "Running (no network)");
+                }
                 Process p;
                 synchronized (lock) {
                     if (stopping) break;

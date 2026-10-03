@@ -40,7 +40,7 @@ import java.net.URL;
 public class MainActivity extends Activity {
     private static final String BASE = "http://127.0.0.1:" + Harness.API_PORT;
     private static final int PICK_FILES = 1, IMPORT_STATE = 2, EXPORT_STATE = 3;
-    private static final int M_RELOAD = 1, M_IMPORT = 2, M_EXPORT = 3, M_AWAKE = 4, M_BOOT = 5, M_BATTERY = 6, M_TOGGLE = 7, M_LOG = 8;
+    private static final int M_RELOAD = 1, M_IMPORT = 2, M_EXPORT = 3, M_AWAKE = 4, M_BOOT = 5, M_BATTERY = 6, M_TOGGLE = 7, M_LOG = 8, M_WORKER = 9;
 
     private WebView web;
     private ValueCallback<Uri[]> fileCallback;
@@ -48,6 +48,19 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle saved) {
         super.onCreate(saved);
+        // An install from before worker mode existed was a manager.
+        if (Harness.mode(this).isEmpty() && new File(Harness.stateDir(this), "manager.db").exists()) {
+            Harness.prefs(this).edit().putString(Harness.KEY_MODE, Harness.MODE_MANAGER).apply();
+        }
+        if (Harness.mode(this).isEmpty()) {
+            chooseMode();
+            return;
+        }
+        if (Harness.isWorker(this)) {
+            startActivity(new Intent(this, WorkerActivity.class));
+            finish();
+            return;
+        }
         web = new WebView(this);
         setContentView(web);
         WebSettings s = web.getSettings();
@@ -90,6 +103,18 @@ public class MainActivity extends Activity {
         ManagerService.start(this);
         askBatteryOnce();
         waitAndLoad();
+    }
+
+    /** First launch: this device runs the manager, or works for one. */
+    private void chooseMode() {
+        new AlertDialog.Builder(this)
+                .setTitle("How will you use this device?")
+                .setItems(new CharSequence[]{
+                        "Run the manager here\nThis phone controls your other devices.",
+                        "Use this device as a worker\nIt runs tasks for a manager on another phone."},
+                        (d, which) -> Harness.switchMode(this, which == 0 ? Harness.MODE_MANAGER : Harness.MODE_WORKER))
+                .setCancelable(false)
+                .show();
     }
 
     private void showPage(String title, String body) {
@@ -227,11 +252,13 @@ public class MainActivity extends Activity {
         menu.add(0, M_BATTERY, 0, "Battery optimization…");
         menu.add(0, M_TOGGLE, 0, ManagerService.running ? "Stop the manager" : "Start the manager");
         menu.add(0, M_LOG, 0, "Manager log");
+        menu.add(0, M_WORKER, 0, "Use this device as a worker instead…");
         return true;
     }
 
     @Override
     public boolean onPrepareOptionsMenu(Menu menu) {
+        if (menu.findItem(M_TOGGLE) == null) return false;
         menu.findItem(M_TOGGLE).setTitle(ManagerService.running ? "Stop the manager" : "Start the manager");
         return true;
     }
@@ -281,6 +308,14 @@ public class MainActivity extends Activity {
             case M_LOG:
                 new AlertDialog.Builder(this).setTitle("Manager log").setMessage(Harness.logTail(this, 6000))
                         .setPositiveButton("OK", null).show();
+                return true;
+            case M_WORKER:
+                new AlertDialog.Builder(this)
+                        .setTitle("Use this device as a worker?")
+                        .setMessage("The manager on this phone stops, so your devices lose their manager until you switch back. Its data stays here.")
+                        .setPositiveButton("Switch", (d, w) -> Harness.switchMode(this, Harness.MODE_WORKER))
+                        .setNegativeButton("Cancel", null)
+                        .show();
                 return true;
         }
         return super.onOptionsItemSelected(item);
@@ -398,7 +433,7 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        if (web.canGoBack()) web.goBack();
+        if (web != null && web.canGoBack()) web.goBack();
         else super.onBackPressed();
     }
 }

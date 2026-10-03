@@ -39,6 +39,10 @@ mkdir -p "$out/assets/agents" "$out/lib" "$out/classes" "$out/gen" "$out/dex" di
 echo "== agent builds (handed out by the manager for onboarding and self-update)"
 bash scripts/build-agents.sh >/dev/null
 cp bin/agents/agent-* "$out/assets/agents/"
+# The manager on the phone refuses to start on a build it can't identify:
+# vet the whole set here, with the same code, before it ships.
+checks=(); for a in "$out"/assets/agents/agent-*; do checks+=(-agent-binary "$a"); done
+go run ./cmd/manager -check-agent-binaries "${checks[@]}" >/dev/null
 
 echo "== manager for each Android ABI (GOOS=linux: Android runs Linux binaries)"
 build_manager() { # goos goarch goarm abi
@@ -47,6 +51,13 @@ build_manager() { # goos goarch goarm abi
 build_manager linux arm64 "" arm64-v8a
 build_manager linux arm 7 armeabi-v7a
 build_manager linux amd64 "" x86_64
+
+echo "== agent for each ABI (worker mode): the catalog builds themselves, byte for byte"
+# Copies, not rebuilds: an app worker then reports the very hash the
+# manager serves for its platform, so it never shows as outdated.
+cp bin/agents/agent-linux-arm64 "$out/lib/arm64-v8a/libhomeharness_agent.so"
+cp bin/agents/agent-linux-arm "$out/lib/armeabi-v7a/libhomeharness_agent.so"
+cp bin/agents/agent-linux-amd64 "$out/lib/x86_64/libhomeharness_agent.so"
 
 echo "== resources"
 "$aapt2" compile --dir android/res -o "$out/res.zip"

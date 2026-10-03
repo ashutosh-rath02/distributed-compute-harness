@@ -90,9 +90,12 @@ func (s *Server) toNodeView(rec *NodeRecord, relations map[domain.NodeID]hostRel
 //	GET  /enrollments/{token}/qr     render an invitation URL as a self-contained SVG QR code
 //	POST /login                      exchange the operator token for a dashboard session (operatorauth.go)
 //	GET  /server-proof?nonce=        prove this manager holds the operator token, before a client sends it (operatorauth.go)
+//	GET  /join-requests              devices waiting to be approved (agent -pair), with their pairing codes (joinrequests.go)
+//	POST /join-requests/{id}/approve admit that device at its next connect; /reject refuses it for a while
 //	PUT  /nodes/{id}/meta            set the operator's alias/labels for a node (fleet.go)
 //	GET  /audit?log=&limit=          the audit log, newest first: log=security (default) or noise (audit.go)
 //	GET  /                           a local web dashboard (node list + "add a device" form)
+//	GET  /live                       the one-screen live view (devices, running work, events)
 //	POST /workloads                 submit a workload: {"target":"...optional...","command":"...","args":[...],"requirements":{...optional...}}
 //	GET  /workloads                 list all known workloads
 //	GET  /workloads/{id}             one workload's request + status
@@ -139,12 +142,16 @@ func (s *Server) NewHTTPHandler() http.Handler {
 	mux.HandleFunc("POST /enrollments", s.apiCreateEnrollment)
 	mux.HandleFunc("GET /enrollments/{token}/qr", s.apiGetEnrollmentQR)
 	mux.HandleFunc("GET /{$}", s.apiGetDashboard)
+	mux.HandleFunc("GET /live", s.apiGetLive)
 	mux.HandleFunc("POST /workloads", s.apiPostWorkload)
 	mux.HandleFunc("GET /workloads", s.apiListWorkloads)
 	mux.HandleFunc("GET /workloads/{id}", s.apiGetWorkload)
 	mux.HandleFunc("POST /workloads/{id}/cancel", s.apiCancelWorkload)
 	mux.HandleFunc("POST /login", s.apiLogin)
 	mux.HandleFunc("GET /server-proof", s.apiServerProof)
+	mux.HandleFunc("GET /join-requests", s.apiListJoinRequests)
+	mux.HandleFunc("POST /join-requests/{id}/approve", s.apiDecideJoinRequest(true))
+	mux.HandleFunc("POST /join-requests/{id}/reject", s.apiDecideJoinRequest(false))
 	mux.HandleFunc("PUT /nodes/{id}/meta", s.apiPutNodeMeta)
 	mux.HandleFunc("GET /audit", s.apiListAudit)
 	mux.HandleFunc("POST /artifacts", s.apiPostArtifact)

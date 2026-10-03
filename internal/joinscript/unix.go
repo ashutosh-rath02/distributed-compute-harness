@@ -45,6 +45,14 @@ type ArchBuild struct {
 // bash end to end, so it can be piped (`curl … | bash`) as well as pasted,
 // and every human-facing line is a comment or an echo.
 func unixInstall(platform string, builds map[string]ArchBuild, urlFor func(arch string, b ArchBuild) string, curlFlags, agentFlags, done string) (string, error) {
+	return unixInstallSteps(platform, builds, urlFor, curlFlags, agentFlags, "", "", done)
+}
+
+// unixInstallSteps is unixInstall with commands run once the new agent is
+// in place but before anything starts it (beforeStart: pairing creates
+// the identity there, so the code it shows is the running agent's) and
+// at the very end (afterStart).
+func unixInstallSteps(platform string, builds map[string]ArchBuild, urlFor func(arch string, b ArchBuild) string, curlFlags, agentFlags, beforeStart, afterStart, done string) (string, error) {
 	goos := unixPlatforms[platform]
 	if len(builds) == 0 {
 		return "", fmt.Errorf("manager has no %s agent build configured — restart it with -agent-binary for %s (see scripts/build-agents.sh) to enable joining", platform, goos)
@@ -160,7 +168,9 @@ done
 LAUNCHER
 } > "$dir/run-agent.sh"
 chmod 755 "$dir/run-agent.sh"
+%[8]s
 %[6]s
+%[9]s
 echo "%[7]s"
-`, platform, choose.String(), dir, fetch, agentFlags, persist, done), nil
+`, platform, choose.String(), dir, fetch, agentFlags, persist, done, beforeStart, afterStart), nil
 }

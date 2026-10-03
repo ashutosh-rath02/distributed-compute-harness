@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -19,15 +20,17 @@ import (
 	"home-harness/internal/agent"
 	"home-harness/internal/discovery/udp"
 	"home-harness/internal/domain"
+	"home-harness/internal/identity"
 	"home-harness/internal/instancelock"
 	"home-harness/internal/mtls"
+	"home-harness/internal/protocol"
 	"home-harness/internal/transport/relay"
 	"home-harness/internal/transport/ws"
 )
 
 func main() {
 	managerAddr := flag.String("manager-addr", "", "manager address host:port; if empty, discover it via LAN multicast")
-	pairingToken := flag.String("pairing-token", "", "shared secret required to register (required)")
+	pairingToken := flag.String("pairing-token", "", "shared secret required to register (required unless -pair)")
 	identityDir := flag.String("identity-dir", defaultIdentityDir(), "directory holding this node's persistent identity")
 	name := flag.String("name", "", "friendly node name (defaults to hostname)")
 	heartbeatInterval := flag.Duration("heartbeat-interval", 5*time.Second, "how often to send heartbeats")
@@ -39,10 +42,34 @@ func main() {
 	disable := flag.String("disable-capabilities", "", "comma-separated capabilities this device won't offer, e.g. system.execute,filesystem.read to allow only the sandboxed built-in task types")
 	workDir := flag.String("work-dir", "", "where workloads that take input/output files get their working directories (default: the user cache dir); never inside -identity-dir")
 	relayToken := flag.String("relay-token", "", "the manager's relay session token (required if -relay-addr is set)")
+	pair := flag.Bool("pair", false, "join by approval on the manager instead of a pairing token: this device waits, showing a pairing code, until someone approves it there")
+	pairCode := flag.Bool("pair-code", false, "print this device's pairing code (for -manager-fingerprint, creating the identity if needed) and exit")
+	addrFallback := flag.String("manager-addr-fallback", "", "manager address (host:port) to use when LAN discovery finds none")
+	noSelfUpdate := flag.Bool("no-self-update", false, "don't offer self-update (this binary can't be replaced in place; it is updated some other way, e.g. with the Android app)")
 	flag.Parse()
 
-	if *pairingToken == "" {
-		log.Fatal("agent: -pairing-token is required")
+	// Without -manager-fingerprint, a device that paired before pins the
+	// certificate it kept then (see firstUse).
+	pinFile := filepath.Join(*identityDir, pinnedFingerprintFile)
+	if *managerFingerprint == "" && !*insecure {
+		if data, err := os.ReadFile(pinFile); err == nil {
+			*managerFingerprint = strings.TrimSpace(string(data))
+		}
+	}
+
+	if *pairCode {
+		id, err := identity.LoadOrCreate(*identityDir)
+		if err != nil {
+			log.Fatalf("agent: %v", err)
+		}
+		if *managerFingerprint == "" {
+			log.Fatal("agent: -pair-code needs -manager-fingerprint")
+		}
+		fmt.Println("Pairing code: " + protocol.PairingCode(*managerFingerprint, id.PublicKey))
+		return
+	}
+	if *pairingToken == "" && !*pair {
+		log.Fatal("agent: -pairing-token is required (or -pair, to join by approval on the manager)")
 	}
 	if *relayAddr != "" && *relayToken == "" {
 		log.Fatal("agent: -relay-token is required when -relay-addr is set")
@@ -51,6 +78,7 @@ func main() {
 	var transport domain.Transport
 	var selfUpdateHTTPClient *http.Client
 	var selfUpdateURL string
+	var tofu *firstUse
 	switch {
 	case *relayAddr != "" && !*insecure:
 		if *managerFingerprint == "" {
@@ -66,6 +94,11 @@ func main() {
 		transport = relayTransport
 		selfUpdateHTTPClient = relayTransport.HTTPClient(*relayAddr)
 		selfUpdateURL = "http://manager"
+	case !*insecure && *managerFingerprint == "" && *pair:
+		// A pairing device given no fingerprint (the Android app's worker):
+		// trust on first use, pinned for every later connection.
+		tofu = &firstUse{file: pinFile}
+		transport = ws.NewTLSClient(tofu.config())
 	case !*insecure:
 		if *managerFingerprint == "" {
 			log.Fatal("agent: -manager-fingerprint is required unless -insecure is set (get it from the manager's startup log)")
@@ -81,7 +114,7 @@ func main() {
 		effectiveManagerAddr = *relayAddr
 	}
 
-	a, err := agent.New(transport, agent.Config{
+	cfg := agent.Config{
 		ManagerAddr:               effectiveManagerAddr,
 		Discoverer:                &udp.Discoverer{},
 		PairingToken:              *pairingToken,
@@ -103,7 +136,15 @@ func main() {
 		ManagerFingerprint:   *managerFingerprint,
 		SelfUpdateHTTPClient: selfUpdateHTTPClient,
 		SelfUpdateBaseURL:    selfUpdateURL,
-	})
+		Pairing:              *pair,
+		ManagerAddrFallback:  *addrFallback,
+		SelfUpdateDisabled:   *noSelfUpdate,
+	}
+	if tofu != nil {
+		cfg.ManagerFingerprintFunc = tofu.fingerprint
+		cfg.OnRegistered = tofu.keep
+	}
+	a, err := agent.New(transport, cfg)
 	if err != nil {
 		log.Fatalf("agent: %v", err)
 	}
