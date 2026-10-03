@@ -29,7 +29,7 @@ import java.util.regex.Pattern;
  * read from the agent's own log.
  */
 public class WorkerActivity extends Activity {
-    private static final int M_ADDR = 1, M_LOG = 2, M_AWAKE = 3, M_BOOT = 4, M_BATTERY = 5, M_SWITCH = 6;
+    private static final int M_ADDR = 1, M_LOG = 2, M_AWAKE = 3, M_BOOT = 4, M_BATTERY = 5, M_SWITCH = 6, M_FORGET = 7;
     private static final Pattern CODE = Pattern.compile("pairing: approve this device on the manager, code (\\d{3} \\d{3})");
     private static final Pattern CONNECTED = Pattern.compile("registered with manager at (\\S+)");
 
@@ -142,6 +142,11 @@ public class WorkerActivity extends Activity {
                 detail.setText("Something is between this device and the manager. Don't approve it. Check that both are on your own Wi-Fi, then restart the worker.");
                 return;
             }
+            if (l.contains("isn't accepting new devices")) {
+                status.setText("The manager isn't accepting new devices");
+                detail.setText("On the manager, open \"Add a device\" (it stays open 15 minutes). This device asks again by itself.");
+                return;
+            }
             if (l.contains("node revoked by operator")) {
                 status.setText("The manager removed this device");
                 detail.setText("It stays out until whoever runs the manager lets it back in; then it asks to join again by itself.");
@@ -194,6 +199,15 @@ public class WorkerActivity extends Activity {
         restartWorker();
     }
 
+    /** Drops the pinned manager certificate and any typed address; the
+     *  device keeps its identity and pairs again (approval needed). */
+    private void forgetManager() {
+        ManagerService.stop(this);
+        new java.io.File(new java.io.File(Harness.workerDir(this), "identity"), "manager-fingerprint").delete();
+        Harness.prefs(this).edit().putString(Harness.KEY_MANAGER_ADDR, "").apply();
+        ui.postDelayed(() -> ManagerService.start(this), 800);
+    }
+
     private void restartWorker() {
         ManagerService.stop(this);
         ui.postDelayed(() -> ManagerService.start(this), 800);
@@ -221,6 +235,7 @@ public class WorkerActivity extends Activity {
         menu.add(0, M_BOOT, 0, "Start when the device boots").setCheckable(true)
                 .setChecked(Harness.prefs(this).getBoolean(Harness.KEY_START_ON_BOOT, true));
         menu.add(0, M_BATTERY, 0, "Battery optimization…");
+        menu.add(0, M_FORGET, 0, "Forget this manager…");
         menu.add(0, M_SWITCH, 0, "Run the manager here instead…");
         return true;
     }
@@ -247,6 +262,15 @@ public class WorkerActivity extends Activity {
             }
             case M_BATTERY:
                 Harness.openBatterySettings(this);
+                return true;
+            case M_FORGET:
+                new AlertDialog.Builder(this)
+                        .setTitle("Forget this manager?")
+                        .setMessage("This device stops trusting its manager and pairs again with whichever manager answers first on this Wi-Fi: you approve it there with a new code. "
+                                + "If the old manager is still around, this device may simply reconnect to it; to cut it off, revoke this device on that manager.")
+                        .setPositiveButton("Forget", (d, w) -> forgetManager())
+                        .setNegativeButton("Cancel", null)
+                        .show();
                 return true;
             case M_SWITCH:
                 new AlertDialog.Builder(this)

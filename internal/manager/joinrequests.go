@@ -52,6 +52,8 @@ const (
 	joinApproved
 	joinRejected
 	joinFull
+	// joinClosed: a new device asked while the join window is closed.
+	joinClosed
 )
 
 type joinRequests struct {
@@ -70,8 +72,11 @@ func newJoinRequests() *joinRequests {
 
 // request records (or refreshes) r's request and decides this REGISTER:
 // approved (admit now), pending (tell the device to keep waiting),
-// rejected, or full. isNew reports a request seen for the first time.
-func (j *joinRequests) request(r JoinRequest) (d joinDecision, isNew bool) {
+// rejected, full, or closed. isNew reports a request seen for the first
+// time. allowNew is whether the join window is open: it only gates
+// creating a request — a device already waiting (or approved) keeps its
+// request when the window closes, so approving it still works.
+func (j *joinRequests) request(r JoinRequest, allowNew bool) (d joinDecision, isNew bool) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	now := j.now()
@@ -86,6 +91,9 @@ func (j *joinRequests) request(r JoinRequest) (d joinDecision, isNew bool) {
 			return joinApproved, false
 		}
 		return joinPending, false
+	}
+	if !allowNew {
+		return joinClosed, false
 	}
 	if len(j.byID) >= maxJoinRequests || j.fromHostLocked(r.Remote) >= maxJoinRequestsPerHost {
 		return joinFull, false

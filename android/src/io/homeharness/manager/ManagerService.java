@@ -136,7 +136,9 @@ public class ManagerService extends Service {
                 if (worker) {
                     updateNotification("Runs tasks for your manager. Open the app to see its status.");
                 } else {
-                    updateNotification(ip != null ? "Add a device: open http://" + ip + ":" + Harness.JOIN_PORT + " on it" : "Running (no network)");
+                    // Adding devices is opened from the dashboard (it may be
+                    // closed), so the notification just says where it runs.
+                    updateNotification(ip != null ? "Running at " + ip + ". Add devices from the app." : "Running (no network)");
                 }
                 Process p;
                 synchronized (lock) {

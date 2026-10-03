@@ -235,7 +235,7 @@
     <div id="addrFields">
       <label for="addr">Manager address (this machine's LAN address, e.g. 192.168.10.11:7420)</label>
       <input id="addr" type="text" placeholder="192.168.10.11:7420" autocomplete="off">
-      <p class="hint">Not auto-detected on purpose — a multi-homed machine has no single "right" address to guess.</p>
+      <p class="hint">Filled in with this machine's network address when the manager knows it. Check it's the one your devices use.</p>
     </div>
     <p id="remoteHint" class="hint" hidden>QR + link uses the relay's public HTTPS enrollment gateway and downloads automatically. The plain “Generate script” fallback still expects the matching binary to be placed on the device first.</p>
 
@@ -936,16 +936,55 @@
       const info = await (await api("/join-info")).json();
       const el = document.getElementById("addr");
       if (info.lanAddr && el && !el.value) el.value = info.lanAddr;
-      // The join page: the easy way in for every device on this Wi-Fi.
-      const banner = document.getElementById("joinBanner");
-      if (info.joinUrl || info.joinPort) {
-        const where = info.joinUrl || ("http://<this machine's IP address>:" + info.joinPort);
-        banner.innerHTML = '<strong>Add a device:</strong> on it, open <span class="joinurl">' + escapeHtml(where)
-          + '</span> in a browser and follow the one step there. Then approve it here.';
-        banner.hidden = false;
-      }
     } catch (e) { /* optional */ }
   }
+
+  // The join window (joinwindow.go): new devices may ask to join, and the
+  // join page serves its installers, only while it is open. The countdown
+  // runs from the seconds the manager reports, not a clock time.
+  let joinTimer = null;
+  async function refreshJoinWindow() {
+    let v;
+    try { v = await (await api("/join-window")).json(); } catch (e) { return; }
+    const banner = document.getElementById("joinBanner");
+    clearInterval(joinTimer);
+    if (!v.port) { banner.hidden = true; return; } // this manager has no join page
+    banner.hidden = false;
+    if (!v.open) {
+      banner.innerHTML = '<strong>Adding devices is off.</strong> New devices can\'t ask to join; the ones you have keep working. '
+        + '<button class="small" data-join="open">Allow new devices for 15 minutes</button>';
+      return;
+    }
+    const where = v.url || ("http://<this machine's IP address>:" + v.port);
+    banner.innerHTML = '<strong>Add a device:</strong> on it, open <span class="joinurl">' + escapeHtml(where)
+      + '</span> in a browser and follow the one step there. Then approve it here.<br>'
+      + '<span class="hint">Open for <span id="joinLeft"></span> more. </span>'
+      + '<button class="small secondary" data-join="close">Close now</button>';
+    const deadline = Date.now() + v.remainingSeconds * 1000;
+    const tick = () => {
+      const left = Math.max(0, Math.round((deadline - Date.now()) / 1000));
+      if (left === 0) { clearInterval(joinTimer); refreshJoinWindow(); return; }
+      document.getElementById("joinLeft").textContent = Math.floor(left / 60) + ":" + String(left % 60).padStart(2, "0");
+    };
+    tick();
+    joinTimer = setInterval(tick, 1000);
+  }
+
+  document.getElementById("joinBanner").addEventListener("click", async (event) => {
+    const button = event.target.closest("button[data-join]");
+    if (!button) return;
+    button.disabled = true;
+    const open = button.dataset.join === "open";
+    try {
+      const resp = await api("/join-window", open
+        ? {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({minutes: 15})}
+        : {method: "DELETE"});
+      if (!resp.ok) throw new Error((await resp.text()).trim() || resp.statusText);
+    } catch (e) {
+      alert((open ? "Opening" : "Closing") + " failed: " + e.message);
+    }
+    refreshJoinWindow();
+  });
 
   // Devices waiting to join by approval. Their names are whatever the
   // device claims: escaped, and the code comparison is what matters.
@@ -997,6 +1036,7 @@
     if (type.startsWith("node.")) refreshCatalog();
     if (type === "node.revoked" || type === "node.unrevoked") refreshRevoked();
     if (type === "node.join-requested" || type === "node.join-decided" || type === "node.registered") refreshJoinRequests();
+    if (type === "join.window") refreshJoinWindow();
     if (document.getElementById("auditSection").open) refreshAudit();
   }
 
@@ -1012,7 +1052,7 @@
         const resp = await api("/events");
         if (!resp.ok || !resp.body) throw new Error("event stream unavailable: " + resp.status);
         backoff = 1000;
-        if (!first) { refreshNodes(); refreshWorkloads(); refreshRevoked(); refreshJoinRequests(); }
+        if (!first) { refreshNodes(); refreshWorkloads(); refreshRevoked(); refreshJoinRequests(); refreshJoinWindow(); }
         first = false;
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
@@ -1048,6 +1088,7 @@
     refreshCatalog();
     refreshRevoked();
     refreshJoinRequests();
+    refreshJoinWindow();
     prefillLanAddr();
     streamEvents();
   })();

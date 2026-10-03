@@ -69,6 +69,10 @@ type Config struct {
 	// for download (joinpage.go). Both optional.
 	JoinAddr string
 	AppAPK   string
+	// FirstRunJoinWindow is how long adding devices (joinwindow.go) stays
+	// open when the manager starts knowing no devices at all; 0 = closed
+	// until the operator opens it.
+	FirstRunJoinWindow time.Duration
 	// InitialPolicy is the policy used until one is stored (policy.go):
 	// cmd/manager passes domain.DefaultPolicy (raw commands off). Nil =
 	// domain.PermissivePolicy, for embedding and tests.
@@ -120,6 +124,7 @@ type Server struct {
 	Events      *eventbus.Bus
 	enrollments *enrollmentStore
 	joinReqs    *joinRequests
+	joinWin     *joinWindow
 
 	// admitMu serializes admission (handleRegister's revocation check
 	// through its registry Upsert) against RevokeNode/UnrevokeNode, so a
@@ -184,6 +189,7 @@ func NewServer(transport domain.Transport, store PersistentStore, cfg Config) *S
 		pending:      make(map[string]pendingCommand),
 		enrollments:  newEnrollmentStore(),
 		joinReqs:     newJoinRequests(),
+		joinWin:      newJoinWindow(),
 		revocations:  newRevocationList(),
 		meta:         newNodeMetaStore(),
 		auditLog:     newAuditRecorder(),
@@ -708,6 +714,8 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 	}
 
+	s.openJoinWindowOnFirstRun()
+
 	conns, err := s.transport.Listen(ctx, s.cfg.Addr)
 	if err != nil {
 		return err
@@ -896,7 +904,7 @@ func (s *Server) handleRegister(ctx context.Context, conn domain.Conn, env *prot
 				NodeID: claimedID, Name: clip(node.Name), Hostname: clip(node.Hostname),
 				Platform: domain.Platform{OS: clip(node.Platform.OS), Architecture: clip(node.Platform.Architecture)},
 				Remote:   remoteHost(conn.RemoteAddr()), Code: code,
-			})
+			}, s.joinWindowOpen())
 			if decision != joinApproved {
 				s.admitMu.Unlock()
 				s.answerJoinRequest(ctx, conn, env.Source, claimedID, decision, isNew, code, node.Name)
@@ -967,6 +975,11 @@ func (s *Server) answerJoinRequest(ctx context.Context, conn domain.Conn, dest, 
 	case joinRejected:
 		s.send(ctx, conn, protocol.MsgRegisterReject, domain.ManagerNodeID, dest,
 			protocol.RegisterRejectPayload{Reason: "the manager's operator declined this device"})
+	case joinClosed:
+		// Quiet: such a device asks again every few seconds until someone
+		// opens the window.
+		s.send(ctx, conn, protocol.MsgRegisterReject, domain.ManagerNodeID, dest,
+			protocol.RegisterRejectPayload{Reason: "the manager isn't accepting new devices right now", JoinClosed: true})
 	default: // joinFull
 		s.reject(ctx, conn, dest, "too many devices are waiting for approval on the manager; approve or reject them first")
 	}

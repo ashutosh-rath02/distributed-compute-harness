@@ -6,7 +6,6 @@ package agent
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -120,6 +119,9 @@ type Config struct {
 	// (default 2s) instead of backing off.
 	Pairing      bool
 	PairingRetry time.Duration
+	// JoinClosedRetry is how often a pairing device asks again while the
+	// manager's join window is closed (default 15s).
+	JoinClosedRetry time.Duration
 	// ManagerFingerprintFunc reports the manager certificate fingerprint
 	// the transport pins (cmd/agent's trust-on-first-use holder, which may
 	// only learn it at the first connection); nil uses ManagerFingerprint.
@@ -193,6 +195,9 @@ func New(transport domain.Transport, cfg Config) (*Agent, error) {
 	}
 	if cfg.PairingRetry == 0 {
 		cfg.PairingRetry = 2 * time.Second
+	}
+	if cfg.JoinClosedRetry == 0 {
+		cfg.JoinClosedRetry = 15 * time.Second
 	}
 
 	id, err := identity.LoadOrCreate(cfg.IdentityDir)
@@ -271,13 +276,17 @@ func (a *Agent) Run(ctx context.Context) error {
 	for {
 		connectedAt := time.Now()
 		err := a.connectAndServe(ctx)
-		if isPendingApproval(err) {
-			// Not a failure: waiting for someone to tap Approve. Ask again
-			// soon (and quietly; notePending logged the code once).
+		if isPendingApproval(err) || isJoinClosed(err) {
+			// Not a failure: waiting for someone to tap Approve, or to open
+			// the join window. Ask again (quietly: logged once).
+			wait := a.cfg.PairingRetry
+			if isJoinClosed(err) {
+				wait = a.cfg.JoinClosedRetry
+			}
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(a.cfg.PairingRetry):
+			case <-time.After(wait):
 			}
 			continue
 		}
@@ -329,7 +338,7 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 
 	if err := a.register(ctx, conn); err != nil {
 		a.pairMu.Lock()
-		if p := (*PendingApprovalError)(nil); errors.As(err, &p) {
+		if isPendingApproval(err) || isJoinClosed(err) {
 			a.pendingAddr = addr
 		} else {
 			a.pendingAddr = ""
@@ -411,6 +420,10 @@ func (a *Agent) register(ctx context.Context, conn domain.Conn) error {
 			pending := &PendingApprovalError{Code: a.PairingCode(), ManagerCode: payload.Code}
 			a.notePending(pending)
 			return pending
+		}
+		if payload.JoinClosed && a.cfg.Pairing {
+			a.noteJoinClosed()
+			return &JoinClosedError{}
 		}
 		return fmt.Errorf("registration rejected: %s", payload.Reason)
 	default:

@@ -56,6 +56,7 @@ func main() {
 	artifactRetention := flag.Duration("artifact-retention", 7*24*time.Hour, "how long a stored file no queued/running/restarting workload needs is kept after it was last used")
 	advertiseAddr := flag.String("advertise-addr", "", "this machine's LAN address agents should use (host:port), shown pre-filled in the dashboard's \"add a device\" form — e.g. the Android app passes the phone's Wi-Fi address")
 	joinAddr := flag.String("join-addr", "", "serve the join page here (plain HTTP, e.g. :7419): devices open http://<this machine>:7419 to install an agent that joins by approval on the dashboard. Off when empty")
+	joinWindow := flag.Duration("join-window", 15*time.Minute, "how long adding devices stays open when the manager starts with no devices yet (0 = closed until opened from the dashboard); later it is opened from the dashboard's \"Add a device\"")
 	appAPK := flag.String("app-apk", "", "the Android app's APK, offered for download on the join page (the app passes its own)")
 	exportState := flag.String("export-state", "", "write the -state-dir (tokens, database, TLS certificate) to this zip and exit; the manager must be stopped. The file holds the TLS key and tokens: keep it private and delete it after importing")
 	importState := flag.String("import-state", "", "unpack a state zip made by -export-state into -state-dir and exit (refuses to replace an existing database without -force)")
@@ -72,6 +73,10 @@ func main() {
 			log.Fatalf("manager: %v", err)
 		}
 		return
+	}
+
+	if *advertiseAddr == "" {
+		*advertiseAddr = detectLANAddr(*addr)
 	}
 
 	if *checkAgentBinaries {
@@ -198,6 +203,7 @@ func main() {
 		InitialPolicy:       initialPolicy(*allowRaw),
 		AdvertiseAddr:       *advertiseAddr,
 		JoinAddr:            *joinAddr,
+		FirstRunJoinWindow:  *joinWindow,
 		AppAPK:              *appAPK,
 	})
 	// Registered before Run (which calls transport.Listen) — puts the
@@ -390,4 +396,26 @@ func portSuffix(addr string) string {
 		return ":" + port
 	}
 	return addr
+}
+
+// detectLANAddr guesses this machine's LAN address for agents (host:port
+// with -addr's port): the local address of the route to the internet
+// (a UDP "dial" sends nothing). Only a private address, and only when
+// -addr listens on every interface; otherwise none (the dashboard then
+// asks). The Android app passes its own, since an app can't do this.
+func detectLANAddr(listen string) string {
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil || port == "" || (host != "" && host != "0.0.0.0" && host != "::") {
+		return ""
+	}
+	c, err := net.Dial("udp4", "192.0.2.1:9") // TEST-NET-1: never reached
+	if err != nil {
+		return ""
+	}
+	defer c.Close()
+	ip := c.LocalAddr().(*net.UDPAddr).IP
+	if !ip.IsPrivate() {
+		return ""
+	}
+	return net.JoinHostPort(ip.String(), port)
 }

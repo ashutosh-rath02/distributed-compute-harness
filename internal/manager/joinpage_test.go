@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const joinTestFingerprint = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
@@ -25,6 +26,7 @@ func newJoinPageServer(t *testing.T, appAPK string) *Server {
 		Addr: ":7420", Fingerprint: joinTestFingerprint, AppAPK: appAPK,
 		PairingToken: "the-permanent-pairing-secret", OperatorToken: testOperatorToken,
 	})
+	s.OpenJoinWindow(time.Hour) // adding devices is on for these tests
 	s.agents = &agentCatalog{builds: []agentBuild{
 		{OS: "windows", Arch: "amd64", SHA256: "aaaa1111", Path: write("agent.exe", "windows agent bytes")},
 		{OS: "darwin", Arch: "arm64", SHA256: "bbbb2222", Path: write("agent-darwin-arm64", "mac agent bytes")},

@@ -92,6 +92,7 @@ func (s *Server) toNodeView(rec *NodeRecord, relations map[domain.NodeID]hostRel
 //	GET  /server-proof?nonce=        prove this manager holds the operator token, before a client sends it (operatorauth.go)
 //	GET  /join-requests              devices waiting to be approved (agent -pair), with their pairing codes (joinrequests.go)
 //	POST /join-requests/{id}/approve admit that device at its next connect; /reject refuses it for a while
+//	GET  /join-window                whether new devices may join now; POST {"minutes":N} opens it, DELETE closes it (joinwindow.go)
 //	PUT  /nodes/{id}/meta            set the operator's alias/labels for a node (fleet.go)
 //	GET  /audit?log=&limit=          the audit log, newest first: log=security (default) or noise (audit.go)
 //	GET  /                           a local web dashboard (node list + "add a device" form)
@@ -150,6 +151,9 @@ func (s *Server) NewHTTPHandler() http.Handler {
 	mux.HandleFunc("POST /login", s.apiLogin)
 	mux.HandleFunc("GET /server-proof", s.apiServerProof)
 	mux.HandleFunc("GET /join-requests", s.apiListJoinRequests)
+	mux.HandleFunc("GET /join-window", s.apiGetJoinWindow)
+	mux.HandleFunc("POST /join-window", s.apiOpenJoinWindow)
+	mux.HandleFunc("DELETE /join-window", s.apiCloseJoinWindow)
 	mux.HandleFunc("POST /join-requests/{id}/approve", s.apiDecideJoinRequest(true))
 	mux.HandleFunc("POST /join-requests/{id}/reject", s.apiDecideJoinRequest(false))
 	mux.HandleFunc("PUT /nodes/{id}/meta", s.apiPutNodeMeta)

@@ -88,6 +88,10 @@ func TestOperatorAuthentication(t *testing.T) {
 		{http.MethodPost, "/nodes/node-x/revoke", ""},
 		{http.MethodPost, "/enrollments", `{"platform":"windows"}`},
 		{http.MethodGet, "/enrollments/tok/extra/qr", ""},
+		{http.MethodGet, "/join-window", ""},
+		{http.MethodPost, "/join-window", `{"minutes":5}`},
+		{http.MethodDelete, "/join-window", ""},
+		{http.MethodGet, "/join-requests", ""},
 	} {
 		rec := operatorRequest(t, h, route.method, route.path, "", route.body)
 		if rec.Code != http.StatusUnauthorized || rec.Header().Get("WWW-Authenticate") == "" {

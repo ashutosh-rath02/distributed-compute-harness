@@ -37,6 +37,8 @@ const (
 const (
 	EventJoinRequested EventType = "node.join-requested"
 	EventJoinDecided   EventType = "node.join-decided"
+	// The join window opened or closed (data: open, remainingSeconds).
+	EventJoinWindow EventType = "join.window"
 )
 
 // Event is a single state change emitted by the harness.

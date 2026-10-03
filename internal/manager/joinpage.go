@@ -2,6 +2,7 @@ package manager
 
 import (
 	"html/template"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -45,6 +46,18 @@ func (s *Server) JoinPageHandler() http.Handler {
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Cache-Control", "no-store")
+		// Closed (joinwindow.go): nothing to download, only a note on how
+		// to open it.
+		if !s.joinWindowOpen() {
+			if r.URL.Path != "/" {
+				http.Error(w, "Adding devices is switched off on the manager. Open \"Add a device\" on its dashboard, then try again.", http.StatusForbidden)
+				return
+			}
+			w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			io.WriteString(w, joinClosedPage)
+			return
+		}
 		mux.ServeHTTP(w, r)
 	})
 }
@@ -166,6 +179,15 @@ func (s *Server) joinPage(w http.ResponseWriter, r *http.Request) {
 		"Ready": s.cfg.Fingerprint != "" && len(s.agents.builds) > 0,
 	})
 }
+
+const joinClosedPage = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Adding devices is off - Home Harness</title>
+<style>body{font-family:system-ui,sans-serif;max-width:40rem;margin:0 auto;padding:2rem 1rem;line-height:1.5;color:#1f2328;background:#fff}
+h1{font-size:1.4rem}.note{color:#59636e}@media (prefers-color-scheme:dark){body{background:#0d1117;color:#e6edf3}.note{color:#9198a1}}</style></head>
+<body><h1>Adding devices is switched off</h1>
+<p>On the manager, open its dashboard and choose <strong>Add a device</strong>. It stays open for 15 minutes; then reload this page.</p>
+<p class="note">Devices that already joined keep working: this only stops new ones.</p></body></html>`
 
 var joinPageTemplate = template.Must(template.New("join").Parse(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">

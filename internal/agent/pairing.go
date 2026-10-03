@@ -62,3 +62,26 @@ func isPendingApproval(err error) bool {
 	var p *PendingApprovalError
 	return errors.As(err, &p)
 }
+
+// JoinClosedError: the manager isn't taking new devices right now (its
+// join window is closed). The agent asks again every JoinClosedRetry,
+// quietly, so it gets in soon after someone opens the window.
+type JoinClosedError struct{}
+
+func (*JoinClosedError) Error() string { return "the manager isn't accepting new devices right now" }
+
+func isJoinClosed(err error) bool {
+	var c *JoinClosedError
+	return errors.As(err, &c)
+}
+
+// noteJoinClosed logs a closed join window once per stretch of refusals.
+func (a *Agent) noteJoinClosed() {
+	a.pairMu.Lock()
+	defer a.pairMu.Unlock()
+	if a.loggedPending == "closed" {
+		return
+	}
+	a.loggedPending = "closed"
+	log.Printf("agent %s: pairing: the manager isn't accepting new devices right now; open \"Add a device\" on the manager and this device asks again by itself", a.identity.NodeID)
+}

@@ -69,6 +69,9 @@ type RegisterRejectPayload struct {
 	// shortly; nothing about this is an error.
 	PendingApproval bool   `json:"pendingApproval,omitempty"`
 	Code            string `json:"code,omitempty"`
+	// JoinClosed: the manager isn't taking new devices (its join window
+	// is closed). The agent asks again later, quietly.
+	JoinClosed bool `json:"joinClosed,omitempty"`
 }
 
 // HeartbeatPayload carries the sending node's current runtime state.

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,6 +27,13 @@ import (
 
 func startPairingManager(t *testing.T, addr, token string) (*manager.Server, string, string) {
 	t.Helper()
+	return startPairingManagerWindow(t, addr, token, time.Minute)
+}
+
+// startPairingManagerWindow starts a TLS manager with a store and an API;
+// firstRun is how long adding devices is open at its (first) start.
+func startPairingManagerWindow(t *testing.T, addr, token string, firstRun time.Duration) (*manager.Server, string, string) {
+	t.Helper()
 	cert, err := mtls.LoadOrCreateCert(t.TempDir())
 	if err != nil {
 		t.Fatalf("LoadOrCreateCert: %v", err)
@@ -40,6 +48,7 @@ func startPairingManager(t *testing.T, addr, token string) (*manager.Server, str
 	fp := mtls.Fingerprint(cert)
 	srv := manager.NewServer(ws.NewTLSServer(cert), store, manager.Config{
 		Addr: addr, PairingToken: token, Fingerprint: fp, HeartbeatTimeout: 2 * time.Second,
+		FirstRunJoinWindow: firstRun,
 	})
 	go srv.Run(ctx)
 	api := httptest.NewServer(srv.NewHTTPHandler())
@@ -52,7 +61,7 @@ func startPairingAgent(t *testing.T, ctx context.Context, addr, fingerprint, dir
 	a, err := agent.New(ws.NewTLSClient(mtls.PinnedClientConfig(fingerprint)), agent.Config{
 		ManagerAddr: addr, Pairing: true, ManagerFingerprint: fingerprint,
 		IdentityDir: dir, Name: "pairing-laptop", HostFingerprint: "-",
-		HeartbeatInterval: 100 * time.Millisecond, PairingRetry: 100 * time.Millisecond,
+		HeartbeatInterval: 100 * time.Millisecond, PairingRetry: 100 * time.Millisecond, JoinClosedRetry: 100 * time.Millisecond,
 		ReconnectBackoff: 50 * time.Millisecond, MaxReconnectBackoff: 200 * time.Millisecond,
 	})
 	if err != nil {
@@ -235,6 +244,7 @@ func TestPairingRefusesARevokedIdentity(t *testing.T) {
 func TestPairingRequestsFromOneHostAreCapped(t *testing.T) {
 	const addr = "127.0.0.1:19584"
 	_, api := startManagerWithAPI(t, addr, 2*time.Second)
+	openJoinWindow(t, api.URL)
 	for i := 0; i < 4; i++ {
 		env, _ := rawPairingRegister(t, addr, filepath.Join(t.TempDir(), fmt.Sprintf("flood-%d", i)))
 		p := rejectPayload(t, env)
@@ -247,5 +257,96 @@ func TestPairingRequestsFromOneHostAreCapped(t *testing.T) {
 	}
 	if n := len(joinRequests(t, api.URL)); n != 3 {
 		t.Fatalf("want 3 requests, got %d", n)
+	}
+}
+
+func openJoinWindow(t *testing.T, api string) {
+	t.Helper()
+	resp, err := http.Post(api+"/join-window", "application/json", strings.NewReader(`{"minutes":5}`))
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("open the join window: %v %v", err, resp)
+	}
+	resp.Body.Close()
+}
+
+func closeJoinWindow(t *testing.T, api string) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodDelete, api+"/join-window", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("close the join window: %v %v", err, resp)
+	}
+	resp.Body.Close()
+}
+
+// While adding devices is closed, a new device can't even queue a request;
+// it waits quietly and gets in once someone opens the window and approves.
+func TestPairingWaitsForTheJoinWindow(t *testing.T) {
+	const addr = "127.0.0.1:19585"
+	srv, fp, api := startPairingManagerWindow(t, addr, "the-shared-token", 0)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a := startPairingAgent(t, ctx, addr, fp, filepath.Join(t.TempDir(), "late"))
+	time.Sleep(800 * time.Millisecond)
+	if n := len(joinRequests(t, api)); n != 0 || isReady(srv, a.NodeID()) {
+		t.Fatalf("closed window: %d requests, ready=%v", n, isReady(srv, a.NodeID()))
+	}
+	openJoinWindow(t, api)
+	waitFor(t, 3*time.Second, func() bool { return len(joinRequests(t, api)) == 1 })
+	if code := decideJoin(t, api, a.NodeID(), "approve"); code != http.StatusOK {
+		t.Fatalf("approve: %d", code)
+	}
+	waitFor(t, 3*time.Second, func() bool { return isReady(srv, a.NodeID()) })
+}
+
+// Closing the window must not strand a device that was already waiting.
+func TestApprovalAfterTheJoinWindowCloses(t *testing.T) {
+	const addr = "127.0.0.1:19586"
+	srv, fp, api := startPairingManager(t, addr, "the-shared-token")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a := startPairingAgent(t, ctx, addr, fp, filepath.Join(t.TempDir(), "early"))
+	waitFor(t, 3*time.Second, func() bool { return len(joinRequests(t, api)) == 1 })
+	closeJoinWindow(t, api)
+	time.Sleep(300 * time.Millisecond)
+	if len(joinRequests(t, api)) != 1 {
+		t.Fatal("a waiting device lost its request when the window closed")
+	}
+	if code := decideJoin(t, api, a.NodeID(), "approve"); code != http.StatusOK {
+		t.Fatalf("approve: %d", code)
+	}
+	waitFor(t, 3*time.Second, func() bool { return isReady(srv, a.NodeID()) })
+}
+
+// A manager that already knows devices starts with adding devices closed:
+// restarting it must not reopen the window.
+func TestJoinWindowStartsClosedForAKnownFleet(t *testing.T) {
+	const addr = "127.0.0.1:19587"
+	dbPath := filepath.Join(t.TempDir(), "manager.db")
+	store, err := persistent.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := identity.LoadOrCreate(filepath.Join(t.TempDir(), "known"))
+	if err := store.UpsertNode(domain.Manifest{SchemaVersion: domain.ManifestSchemaVersion, Node: domain.Node{Identity: id.Identity, Name: "known"}}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() { cancel(); store.Close() })
+	srv := manager.NewServer(ws.New(), store, manager.Config{Addr: addr, PairingToken: "x", HeartbeatTimeout: 2 * time.Second, FirstRunJoinWindow: time.Hour})
+	go srv.Run(ctx)
+	api := httptest.NewServer(srv.NewHTTPHandler())
+	t.Cleanup(api.Close)
+	var v struct{ Open bool }
+	waitFor(t, 3*time.Second, func() bool {
+		resp, err := http.Get(api.URL + "/join-window")
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		return json.NewDecoder(resp.Body).Decode(&v) == nil && srv.Registry.List() != nil && len(srv.Registry.List()) == 1
+	})
+	if v.Open {
+		t.Fatal("a manager that knows devices must start with adding devices closed")
 	}
 }
