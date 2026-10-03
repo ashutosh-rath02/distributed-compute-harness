@@ -24,6 +24,7 @@ import (
 	"home-harness/internal/domain"
 	"home-harness/internal/manager"
 	"home-harness/internal/mtls"
+	"home-harness/internal/statebundle"
 	"home-harness/internal/store/persistent"
 	"home-harness/internal/transport/multi"
 	"home-harness/internal/transport/relay"
@@ -53,7 +54,23 @@ func main() {
 	artifactMax := flag.String("artifact-max-size", "256MiB", "largest single workload file accepted (upload or output)")
 	artifactTotal := flag.String("artifact-store-size", "4GiB", "most space all stored workload files may use; uploads beyond it are refused")
 	artifactRetention := flag.Duration("artifact-retention", 7*24*time.Hour, "how long a stored file no queued/running/restarting workload needs is kept after it was last used")
+	advertiseAddr := flag.String("advertise-addr", "", "this machine's LAN address agents should use (host:port), shown pre-filled in the dashboard's \"add a device\" form — e.g. the Android app passes the phone's Wi-Fi address")
+	exportState := flag.String("export-state", "", "write the -state-dir (tokens, database, TLS certificate) to this zip and exit; the manager must be stopped. The file holds the TLS key and tokens: keep it private and delete it after importing")
+	importState := flag.String("import-state", "", "unpack a state zip made by -export-state into -state-dir and exit (refuses to replace an existing database without -force)")
+	stateDir := flag.String("state-dir", "", "the state directory for -export-state / -import-state")
+	withArtifacts := flag.Bool("with-artifacts", false, "with -export-state: include stored workload files (can be large)")
+	force := flag.Bool("force", false, "with -import-state: replace an existing state")
 	flag.Parse()
+
+	if *exportState != "" || *importState != "" {
+		if *stateDir == "" {
+			log.Fatal("manager: -state-dir is required with -export-state / -import-state")
+		}
+		if err := moveState(*exportState, *importState, *stateDir, *withArtifacts, *force); err != nil {
+			log.Fatalf("manager: %v", err)
+		}
+		return
+	}
 
 	if *checkAgentBinaries {
 		catalog, err := manager.BuildAgentCatalog(agentBinaries)
@@ -177,6 +194,7 @@ func main() {
 		Artifacts:           artifactStore,
 		ArtifactRetention:   *artifactRetention,
 		InitialPolicy:       initialPolicy(*allowRaw),
+		AdvertiseAddr:       *advertiseAddr,
 	})
 	// Registered before Run (which calls transport.Listen) — puts the
 	// download on the exact address/port agents already dial, no new port
@@ -213,9 +231,32 @@ func main() {
 	}
 
 	apiServer := &http.Server{Addr: *apiAddr, Handler: srv.NewHTTPHandler()}
+	// Keeps trying while the API port is taken instead of running on
+	// without an API until someone restarts the manager: on a phone,
+	// another app can hold 127.0.0.1:7421 for a while (the Android app
+	// checks /server-proof before signing in, so that app learns nothing).
 	go func() {
-		if err := apiServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("manager: API server stopped: %v", err)
+		failing := false
+		for {
+			ln, err := net.Listen("tcp", *apiAddr)
+			if err == nil {
+				if failing {
+					log.Printf("manager: API listening on %s again", *apiAddr)
+				}
+				failing = false
+				if err = apiServer.Serve(ln); err == http.ErrServerClosed {
+					return
+				}
+			}
+			if !failing {
+				log.Printf("manager: API server stopped: %v (retrying every 5s)", err)
+				failing = true
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(5 * time.Second):
+			}
 		}
 	}()
 	go func() {
@@ -285,4 +326,41 @@ func initialPolicy(allowRaw bool) *domain.Policy {
 		}
 	}
 	return &p
+}
+
+// moveState runs -export-state or -import-state.
+func moveState(exportTo, importFrom, stateDir string, withArtifacts, force bool) error {
+	if exportTo != "" {
+		f, err := os.OpenFile(exportTo, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+		if err != nil {
+			return err
+		}
+		if err := statebundle.Export(stateDir, f, withArtifacts); err != nil {
+			f.Close()
+			os.Remove(exportTo)
+			return err
+		}
+		if err := f.Close(); err != nil {
+			return err
+		}
+		fmt.Printf("State exported to %s. It holds the TLS key and tokens: move it to the new install, import it, then delete it.\n", exportTo)
+		return nil
+	}
+	f, err := os.Open(importFrom)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return err
+	}
+	if err := statebundle.Import(f, info.Size(), stateDir, force); err != nil {
+		return err
+	}
+	fmt.Printf("State imported into %s.\n", stateDir)
+	return nil
 }

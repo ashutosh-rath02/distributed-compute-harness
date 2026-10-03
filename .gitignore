@@ -9,3 +9,5 @@ harness-manager-tls/
 harness-artifacts/
 # operator API credential the manager creates in its working directory
 harness-operator-token
+/build/
+/dist/

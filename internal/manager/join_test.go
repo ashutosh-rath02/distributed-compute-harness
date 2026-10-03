@@ -15,6 +15,18 @@ func TestJoinInfoListsTheCatalog(t *testing.T) {
 		info.AgentBinaries[1].Path != "/agent-binaries/linux/arm64" {
 		t.Fatalf("expected both catalog builds in JoinInfo, got %+v", info.AgentBinaries)
 	}
+	if info.LANAddr != "" {
+		t.Fatalf("no -advertise-addr, yet lanAddr %q", info.LANAddr)
+	}
+}
+
+// The Android app can't let the manager find its own Wi-Fi address, so
+// it passes one; the dashboard offers it from /join-info.
+func TestJoinInfoCarriesTheAdvertisedAddress(t *testing.T) {
+	s := &Server{cfg: Config{AdvertiseAddr: "192.168.1.20:7420"}, agents: &agentCatalog{}}
+	if got := s.JoinInfo().LANAddr; got != "192.168.1.20:7420" {
+		t.Fatalf("lanAddr = %q", got)
+	}
 }
 
 func TestJoinInfoInsecureWhenFingerprintEmpty(t *testing.T) {

@@ -61,6 +61,9 @@ type Config struct {
 	// artifact is kept (default 7 days).
 	Artifacts         *artifacts.Store
 	ArtifactRetention time.Duration
+	// AdvertiseAddr is this machine's LAN address for agents (host:port),
+	// offered pre-filled where the dashboard asks for it. Optional.
+	AdvertiseAddr string
 	// InitialPolicy is the policy used until one is stored (policy.go):
 	// cmd/manager passes domain.DefaultPolicy (raw commands off). Nil =
 	// domain.PermissivePolicy, for embedding and tests.

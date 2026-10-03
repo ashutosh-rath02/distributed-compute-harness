@@ -89,6 +89,7 @@ func (s *Server) toNodeView(rec *NodeRecord, relations map[domain.NodeID]hostRel
 //	POST /enrollments                create a short-lived LAN or public-relay QR/link invitation
 //	GET  /enrollments/{token}/qr     render an invitation URL as a self-contained SVG QR code
 //	POST /login                      exchange the operator token for a dashboard session (operatorauth.go)
+//	GET  /server-proof?nonce=        prove this manager holds the operator token, before a client sends it (operatorauth.go)
 //	PUT  /nodes/{id}/meta            set the operator's alias/labels for a node (fleet.go)
 //	GET  /audit?log=&limit=          the audit log, newest first: log=security (default) or noise (audit.go)
 //	GET  /                           a local web dashboard (node list + "add a device" form)
@@ -143,6 +144,7 @@ func (s *Server) NewHTTPHandler() http.Handler {
 	mux.HandleFunc("GET /workloads/{id}", s.apiGetWorkload)
 	mux.HandleFunc("POST /workloads/{id}/cancel", s.apiCancelWorkload)
 	mux.HandleFunc("POST /login", s.apiLogin)
+	mux.HandleFunc("GET /server-proof", s.apiServerProof)
 	mux.HandleFunc("PUT /nodes/{id}/meta", s.apiPutNodeMeta)
 	mux.HandleFunc("GET /audit", s.apiListAudit)
 	mux.HandleFunc("POST /artifacts", s.apiPostArtifact)

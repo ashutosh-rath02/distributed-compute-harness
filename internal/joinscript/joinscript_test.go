@@ -23,6 +23,9 @@ func TestBuildWindowsSecureEmbedsFingerprintTokenAndHash(t *testing.T) {
 		`HKCU:\Software\Microsoft\Windows\CurrentVersion\Run`,
 		"HomeComputeHarnessAgent",
 		"start-agent.ps1",
+		"Register-ScheduledTask",
+		"-RunLevel Limited",
+		"Remove-ItemProperty -Path $runKey",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected output to contain %q, got:\n%s", want, out)
@@ -202,6 +205,8 @@ func assertWindowsPersistentInstall(t *testing.T, out string) {
 		"HomeComputeHarnessAgent",
 		"start-agent.ps1",
 		"Move-Item $download $agent",
+		"Register-ScheduledTask",
+		"-RestartCount 999",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected persistent install to contain %q, got:\n%s", want, out)
@@ -353,5 +358,16 @@ func TestBuildUnixRemoteAndErrors(t *testing.T) {
 	}
 	if _, err := Build("192.168.10.11:7420", "beos", unixInfo()); err == nil || !strings.Contains(err.Error(), "macos") {
 		t.Errorf("unknown platform error should list the platforms, got %v", err)
+	}
+}
+
+// The agent must never be installed to run as SYSTEM (raw commands would
+// run with full control of the machine).
+func TestWindowsInstallNeverRunsAsSystem(t *testing.T) {
+	out := windowsInstall("fetch", "HASH", "-flags", "done")
+	for _, bad := range []string{"-UserId SYSTEM", "-UserId \"SYSTEM\"", "S-1-5-18", "-RunLevel Highest", "LocalSystem", "NT AUTHORITY"} {
+		if strings.Contains(out, bad) {
+			t.Fatalf("the Windows install mentions %q", bad)
+		}
 	}
 }

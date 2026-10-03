@@ -550,6 +550,13 @@
   // save the blob — never open or navigate to it (a blob: URL would
   // inherit this page's origin).
   async function downloadArtifact(sha, name) {
+    // Inside the Android app the WebView can't save a blob: the app
+    // fetches the file itself (with its own credential) and stores it in
+    // Downloads.
+    if (window.HarnessAndroid && window.HarnessAndroid.download) {
+      window.HarnessAndroid.download(sha, name);
+      return;
+    }
     const resp = await api("/artifacts/" + encodeURIComponent(sha) + "?name=" + encodeURIComponent(name));
     if (!resp.ok) throw new Error((await resp.text()).trim() || resp.statusText);
     const blob = new Blob([await resp.arrayBuffer()], {type: "application/octet-stream"});
@@ -912,6 +919,16 @@
     }, 500);
   }
 
+  // The manager may know its LAN address (-advertise-addr; the Android
+  // app passes the phone's Wi-Fi address): offer it in "add a device".
+  async function prefillLanAddr() {
+    try {
+      const info = await (await api("/join-info")).json();
+      const el = document.getElementById("addr");
+      if (info.lanAddr && el && !el.value) el.value = info.lanAddr;
+    } catch (e) { /* optional */ }
+  }
+
   function handleEvent(data) {
     let type = "";
     try {
@@ -974,6 +991,7 @@
     refreshJobs();
     refreshCatalog();
     refreshRevoked();
+    prefillLanAddr();
     streamEvents();
   })();
 

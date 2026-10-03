@@ -2,6 +2,9 @@ package manager
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -116,6 +119,41 @@ func TestOperatorAuthentication(t *testing.T) {
 	}
 	if rec := operatorRequest(t, h, http.MethodGet, "/enrollments/unknown-token/qr", "", ""); rec.Code == http.StatusUnauthorized {
 		t.Error("the token-scoped QR route must be reachable by an <img> without a header")
+	}
+}
+
+// The Android app asks for a proof before it loads the dashboard with the
+// login link: only the manager holding the token can answer, nobody needs
+// a credential to ask, and no answer works as a credential.
+func TestServerProofProvesTheToken(t *testing.T) {
+	s := NewServer(nil, nil, Config{OperatorToken: testOperatorToken})
+	h := s.NewHTTPHandler()
+	nonce := strings.Repeat("ab", 16)
+	rec := operatorRequest(t, h, http.MethodGet, "/server-proof?nonce="+nonce, "", "")
+	var resp struct {
+		Proof string `json:"proof"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	mac := hmac.New(sha256.New, []byte(testOperatorToken))
+	mac.Write([]byte("harness-server-proof-v1:" + nonce))
+	if rec.Code != http.StatusOK || resp.Proof != hex.EncodeToString(mac.Sum(nil)) {
+		t.Fatalf("server proof: got %d %q", rec.Code, rec.Body.String())
+	}
+	if other := serverProof(strings.Repeat("f", 64), nonce); other == resp.Proof {
+		t.Fatal("a manager with another token must not produce the same proof")
+	}
+	for _, leaked := range []string{testOperatorToken, dashboardSession(testOperatorToken)} {
+		if strings.Contains(rec.Body.String(), leaked) {
+			t.Fatal("the proof endpoint returned a credential")
+		}
+		if rec := operatorRequest(t, h, http.MethodGet, "/nodes", resp.Proof, ""); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("a proof worked as a bearer credential: %d", rec.Code)
+		}
+	}
+	for _, bad := range []string{"", "abc", strings.Repeat("AB", 16), strings.Repeat("zz", 16), strings.Repeat("a", 130), "dashboard-session-v1" + strings.Repeat("0", 32)} {
+		if rec := operatorRequest(t, h, http.MethodGet, "/server-proof?nonce="+bad, "", ""); rec.Code != http.StatusBadRequest {
+			t.Errorf("nonce %q: got %d, want 400", bad, rec.Code)
+		}
 	}
 }
 

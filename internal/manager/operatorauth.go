@@ -102,6 +102,8 @@ func LoadOrCreateOperatorToken(path string) (string, error) {
 // credential. Kept to the minimum the dashboard needs to bootstrap:
 //   - GET / — the dashboard shell, static HTML with no data in it;
 //   - POST /login — exchanging the token for a session;
+//   - GET /server-proof — proves this manager holds the token (it takes
+//     no credential and returns none);
 //   - GET /enrollments/{token}/qr — loaded by an <img>, which can't send
 //     headers; its path already contains the unguessable invitation token,
 //     so knowing the URL already means knowing the secret.
@@ -111,6 +113,8 @@ func operatorPublic(r *http.Request) bool {
 	case path == "/" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
 		return true
 	case path == "/login" && r.Method == http.MethodPost:
+		return true
+	case path == "/server-proof" && r.Method == http.MethodGet:
 		return true
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/enrollments/") &&
 		strings.HasSuffix(path, "/qr") && strings.Count(path, "/") == 3:
@@ -182,6 +186,37 @@ func (s *Server) apiLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(domain.AuditSecurity, "operator.login", "", actorDashboardSession, map[string]any{"remote": r.RemoteAddr})
 	writeJSON(w, http.StatusOK, map[string]string{"session": dashboardSession(token)})
+}
+
+const serverProofContext = "harness-server-proof-v1:"
+
+// serverProof is what GET /server-proof answers for nonce.
+func serverProof(token, nonce string) string {
+	mac := hmac.New(sha256.New, []byte(token))
+	mac.Write([]byte(serverProofContext + nonce))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// apiServerProof lets a client that holds the token check that it is
+// talking to this manager before it sends the token anywhere. On Android
+// any app can listen on 127.0.0.1:7421 while the manager is down (stopped,
+// restarting); the Android app would otherwise load that app's page with
+// the login link, and that page would also read the dashboard session
+// from localStorage (same origin). It answers HMAC(token, context+nonce)
+// for a client-chosen nonce: only the real manager can, and the answers
+// reveal nothing that works as a credential (the context differs from
+// the session's).
+func (s *Server) apiServerProof(w http.ResponseWriter, r *http.Request) {
+	nonce := r.URL.Query().Get("nonce")
+	if len(nonce) < 32 || len(nonce) > 128 || strings.Trim(nonce, "0123456789abcdef") != "" {
+		http.Error(w, "nonce must be 32-128 lowercase hex characters", http.StatusBadRequest)
+		return
+	}
+	if s.cfg.OperatorToken == "" {
+		http.Error(w, "this manager has no operator token", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"proof": serverProof(s.cfg.OperatorToken, nonce)})
 }
 
 // LoginURL is the dashboard link that signs a browser in: the token rides

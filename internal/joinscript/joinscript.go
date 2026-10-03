@@ -164,9 +164,29 @@ while ($true) {
   Start-Sleep -Seconds 5
 }
 '@ | Set-Content -Encoding UTF8 $launcher
-$run = 'powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $launcher + '"'
-New-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "HomeComputeHarnessAgent" -Value $run -PropertyType String -Force | Out-Null
-Start-Process powershell.exe -ArgumentList @("-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-File", $launcher) -WindowStyle Hidden
+# Start at sign-in as a per-user scheduled task: hidden, restarted if
+# it ever stops, kept running on battery, and never elevated (no admin
+# needed; raw commands run as you, not SYSTEM). The older Run-key entry
+# is the fallback, and is removed when the task takes over so only one
+# launcher ever loops.
+$taskName = "HomeComputeHarnessAgent"
+$runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+$launchArgs = '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $launcher + '"'
+$task = $false
+try {
+  $user = "$env:USERDOMAIN\$env:USERNAME"
+  $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $launchArgs
+  $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
+  $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
+  $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
+  Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "Home Compute Harness agent" -Force -ErrorAction Stop | Out-Null
+  Remove-ItemProperty -Path $runKey -Name $taskName -ErrorAction SilentlyContinue
+  $task = $true
+} catch {
+  Write-Warning ("Couldn't register a scheduled task (" + $_.Exception.Message + "); starting at sign-in from the Run key instead.")
+  New-ItemProperty -Path $runKey -Name $taskName -Value ("powershell.exe " + $launchArgs) -PropertyType String -Force | Out-Null
+}
+if ($task) { Start-ScheduledTask -TaskName $taskName } else { Start-Process powershell.exe -ArgumentList $launchArgs -WindowStyle Hidden }
 Write-Host "%s"
 `, fetch, hash, agentFlags, done)
 }

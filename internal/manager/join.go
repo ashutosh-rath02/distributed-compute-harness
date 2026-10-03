@@ -28,6 +28,9 @@ type JoinInfo struct {
 	RelayAvailable bool              `json:"relayAvailable"`
 	RelayAddr      string            `json:"relayAddr,omitempty"`
 	RelayToken     string            `json:"relayToken,omitempty"`
+	// LANAddr is the manager's advertised LAN address (-advertise-addr),
+	// if it was given one.
+	LANAddr string `json:"lanAddr,omitempty"`
 }
 
 // JoinInfo reports what an operator needs to onboard a new node. Insecure
@@ -36,6 +39,7 @@ type JoinInfo struct {
 // (cmd/manager/main.go), so the two are equivalent.
 func (s *Server) JoinInfo() JoinInfo {
 	return JoinInfo{
+		LANAddr:        s.cfg.AdvertiseAddr,
 		Fingerprint:    s.cfg.Fingerprint,
 		PairingToken:   s.cfg.PairingToken,
 		Insecure:       s.cfg.Fingerprint == "",
