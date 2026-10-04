@@ -1149,6 +1149,7 @@
     button.disabled = true;
     try {
       if (files.length < (t.inputs.min || 0)) throw new Error("Pick the input file(s): this task needs at least " + t.inputs.min + ".");
+      if (batch && !files.length) throw new Error("Pick the files to run it on: once per file needs at least one.");
       const inputs = [];
       for (const f of files) inputs.push(await uploadFile(f, progress));
       let resp;
