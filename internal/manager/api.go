@@ -196,6 +196,7 @@ func (s *Server) NewHTTPHandler() http.Handler {
 	mux.HandleFunc("GET /ai-info", s.apiGetAIInfo)
 	mux.HandleFunc("GET /v1/models", s.apiOpenAIModels)
 	mux.HandleFunc("POST /v1/chat/completions", s.apiOpenAIChat)
+	s.registerRemoteAccessRoutes(mux) // GET/PUT /remote-access, POST /remote-access/rotate (remote.go)
 	// Host check and CSRF protection first (apiguard.go), then operator
 	// authentication (operatorauth.go) — browser defenses and the
 	// credential check are independent layers.

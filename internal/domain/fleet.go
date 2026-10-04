@@ -36,6 +36,10 @@ const (
 	// AuditNoise holds high-volume, peer-driven entries: rejected
 	// registrations and routine reconnects.
 	AuditNoise AuditLog = "noise"
+	// AuditRemote holds every request made through the remote dashboard
+	// (one per call, so it is busy): separate so it never evicts the
+	// security log.
+	AuditRemote AuditLog = "remote"
 )
 
 // AuditEntry is one durable record of something security-relevant.

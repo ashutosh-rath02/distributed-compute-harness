@@ -135,6 +135,14 @@
       It records what happened; it is not protection against someone who already holds the operator token.</p>
     <div id="audit"></div>
   </details>
+  <details id="remoteSection">
+    <summary><h2 style="display:inline">Remote access</h2></summary>
+    <p class="hint">Use this dashboard away from home, through your relay, with its own remote key (never this manager's sign-in link).
+      The relay can't read or change what you do remotely or reuse your sign-in. It does deliver the remote page itself, so a compromised relay
+      could stop it working or change it to capture the key as you type it: pick the least that you need, and make a new key if you ever doubt the relay.
+      Revoking, policy, adding devices, labels and updates need full control; the pairing token, AI key and these settings are never available remotely.</p>
+    <div id="remoteAccess"></div>
+  </details>
   <details id="aiSection">
     <summary><h2 style="display:inline">Use with AI apps</h2></summary>
     <p class="hint">Apps that speak OpenAI's chat API (chat apps, editor plugins, scripts using the openai library) can use the AI models on your devices: give them this base URL and key.
@@ -340,6 +348,9 @@
   }
 
   async function api(path, options) {
+    // On the remote page (through the relay) every call is sealed instead:
+    // remote.js, inlined there by the manager (remote.go).
+    if (window.harnessRemote) return window.harnessRemote.api(path, options);
     const opts = Object.assign({}, options);
     const headers = new Headers(opts.headers || {});
     const session = storedSession();
@@ -782,6 +793,81 @@
   document.getElementById("auditSection").addEventListener("toggle", (event) => {
     if (event.target.open) refreshAudit();
   });
+
+  // Remote access (remote.go): on or off, how much it may do, its address
+  // and key, and what remote browsers asked for. Local only: hidden on the
+  // remote page, and the manager refuses these routes remotely anyway.
+  const REMOTE_MODES = [["read-only", "View only"], ["standard", "View and run tasks (no admin changes)"],
+    ["full", "Full control (also revoke, policy, adding devices, labels, updates)"]];
+  let remoteKeyValue = "";
+  async function refreshRemoteAccess() {
+    const el = document.getElementById("remoteAccess");
+    let v;
+    try {
+      const resp = await api("/remote-access");
+      if (!resp.ok) throw new Error((await resp.text()).trim() || resp.statusText);
+      v = await resp.json();
+    } catch (e) {
+      el.innerHTML = '<p class="error">' + escapeHtml("Failed to load: " + String(e.message || e)) + "</p>";
+      return;
+    }
+    if (!v.available && !v.enabled) {
+      el.innerHTML = '<p class="hint">' + escapeHtml(String(v.unavailable || "Remote access isn't available on this manager.")) + "</p>";
+      return;
+    }
+    const options = REMOTE_MODES.map(([m, label]) => '<option value="' + m + '"' + (v.mode === m ? " selected" : "") + ">"
+      + escapeHtml(label) + "</option>").join("");
+    let html = "<p><strong>" + (v.enabled ? "Remote access is on." : "Remote access is off.") + '</strong> <select id="remoteModeSelect">'
+      + options + "</select> " + (v.enabled
+        ? '<button class="small" data-remote="save">Save</button> <button class="small secondary" data-remote="off">Turn off</button>'
+        : '<button class="small" data-remote="on">Turn on</button>') + "</p>";
+    if (v.enabled) {
+      html += '<p>Address (open it on your phone or laptop, anywhere): <span class="joinurl" id="remoteURL"></span></p>'
+        + '<p>Remote key: <code id="remoteKeyText">hidden</code> <button class="small secondary" data-remote="show">Show</button> '
+        + '<button class="small secondary" data-remote="rotate">New key (signs out every remote browser)</button></p>'
+        + '<p class="hint">' + Number(v.sessions || 0) + " remote sign-in" + (v.sessions === 1 ? "" : "s") + " now. Recent remote requests:</p>"
+        + '<div id="remoteLog"></div>';
+    }
+    el.innerHTML = html;
+    remoteKeyValue = String(v.key || "");
+    if (!v.enabled) return;
+    document.getElementById("remoteURL").textContent = String(v.url || "");
+    const log = document.getElementById("remoteLog");
+    try {
+      const entries = (await (await api("/audit?log=remote&limit=15")).json()) || [];
+      log.innerHTML = !entries.length ? '<p class="hint">None yet.</p>'
+        : "<table><thead><tr><th>Time</th><th>Request</th><th>Result</th></tr></thead><tbody>" + entries.map((e) => {
+          const d = e.detail || {};
+          return "<tr><td>" + escapeHtml(new Date(e.time).toLocaleString()) + "</td><td>" + escapeHtml(String(d.method || "") + " " + String(d.path || ""))
+            + "</td><td>" + escapeHtml(d.refused ? "refused: " + String(d.refused) : "allowed") + "</td></tr>";
+        }).join("") + "</tbody></table>";
+    } catch (e) { log.textContent = ""; }
+  }
+  document.getElementById("remoteAccess").addEventListener("click", async (event) => {
+    const button = event.target.closest("button[data-remote]");
+    if (!button) return;
+    const action = button.dataset.remote;
+    if (action === "show") {
+      document.getElementById("remoteKeyText").textContent = remoteKeyValue;
+      button.hidden = true;
+      return;
+    }
+    if (action === "rotate" && !confirm("Make a new remote key? Every remote browser is signed out and the old key stops working.")) return;
+    button.disabled = true;
+    try {
+      const resp = action === "rotate" ? await api("/remote-access/rotate", {method: "POST"})
+        : await api("/remote-access", {method: "PUT", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({enabled: action !== "off", mode: document.getElementById("remoteModeSelect").value})});
+      if (!resp.ok) throw new Error((await resp.text()).trim() || resp.statusText);
+    } catch (e) {
+      alert("Remote access: " + e.message);
+    }
+    refreshRemoteAccess();
+  });
+  document.getElementById("remoteSection").addEventListener("toggle", (event) => {
+    if (event.target.open) refreshRemoteAccess();
+  });
+  if (window.harnessRemote) document.getElementById("remoteSection").hidden = true;
 
   // Use with AI apps: the OpenAI-compatible API's base URL, key and the
   // models it can serve now. All text goes in through textContent.

@@ -86,6 +86,9 @@ type Config struct {
 	// sleeping manager stops the whole fleet. Never blocks a sleep the
 	// user asks for.
 	KeepAwake bool
+	// RemoteAccessFile keeps the remote dashboard's settings and key
+	// (remote.go) across restarts; empty = in memory only.
+	RemoteAccessFile string
 }
 
 // PersistentStore is the subset of persistent storage the manager needs:
@@ -183,6 +186,8 @@ type Server struct {
 	agents *agentCatalog
 	// app: the Android app offered to agents updated with it (nil = none).
 	app *agentBuild
+	// remote: the remote dashboard through the relay (remote.go).
+	remote *remoteAccess
 }
 
 // pendingCommand tracks who a dispatched command was sent to, so its
@@ -227,6 +232,7 @@ func NewServer(transport domain.Transport, store PersistentStore, cfg Config) *S
 		jobs:         newJobTable(),
 		plans:        newPlanTable(),
 		policy:       &policyStore{p: domain.PermissivePolicy()},
+		remote:       newRemoteAccess(cfg.RemoteAccessFile),
 	}
 	if cfg.KeepAwake {
 		s.awake = keepawake.New("Home Harness manager: your devices are working on tasks")

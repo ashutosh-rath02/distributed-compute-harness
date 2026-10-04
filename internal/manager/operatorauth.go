@@ -136,6 +136,9 @@ func bearerToken(r *http.Request) string {
 // operatorPublic ones. A Server with no OperatorToken (tests, embedding)
 // is unauthenticated; cmd/manager always configures one.
 func (s *Server) requireOperator(next http.Handler) http.Handler {
+	// Remote calls (remote.go) were verified by the remote handler and are
+	// held to the remote mode by remoteGate; local requests pass through it.
+	next = s.remoteGate(next)
 	token := s.cfg.OperatorToken
 	if token == "" {
 		return next
@@ -143,6 +146,10 @@ func (s *Server) requireOperator(next http.Handler) http.Handler {
 	session := dashboardSession(token)
 	aiKey := s.cfg.AIKey
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if remoteCallFrom(r.Context()) != nil {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if operatorPublic(r) {
 			next.ServeHTTP(w, r)
 			return

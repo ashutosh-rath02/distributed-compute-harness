@@ -29,6 +29,7 @@ var auditBuckets = map[domain.AuditLog][]byte{
 	domain.AuditSecurity:   []byte("audit"),
 	domain.AuditAdmissions: []byte("audit-admissions"),
 	domain.AuditNoise:      []byte("audit-noise"),
+	domain.AuditRemote:     []byte("audit-remote"),
 }
 
 // Record is what the persistent store keeps for a node: its last-known
@@ -55,6 +56,10 @@ func Open(path string) (*Store, error) {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
+		}
+		// The remote dashboard's request log (manager/remote.go).
+		if _, err := tx.CreateBucketIfNotExists(auditBuckets[domain.AuditRemote]); err != nil {
+			return err
 		}
 		return nil
 	})
