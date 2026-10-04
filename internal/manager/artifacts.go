@@ -195,6 +195,7 @@ func (s *Server) assign(ctx context.Context, conn domain.Conn, w domain.Workload
 			}
 		}
 	}
+	payload.Tunnels = s.splitGrants(w) // a split session's part: its tunnel tokens
 	s.send(ctx, conn, protocol.MsgWorkloadAssign, domain.ManagerNodeID, w.Target, payload)
 }
 

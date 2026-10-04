@@ -21,6 +21,7 @@ func (a *Agent) handleWorkloadAssign(ctx context.Context, conn domain.Conn, env 
 	}
 	wl := payload.Workload
 	log.Printf("agent %s: WORKLOAD_ASSIGN %s: %s %v", a.identity.NodeID, wl.ID, wl.Command, wl.Args)
+	a.rememberTunnels(wl.ID, payload.Tunnels)
 
 	if a.cfg.InsecureWorkloadsDisabled {
 		a.sendWorkloadStatus(ctx, conn, domain.WorkloadStatus{
@@ -44,6 +45,9 @@ func (a *Agent) handleWorkloadAssign(ctx context.Context, conn domain.Conn, env 
 		a.sendWorkloadStatus(ctx, conn, status)
 		if status.State != domain.WorkloadRunning && changesModels(wl.EffectiveCapability()) {
 			a.requestReprobe() // the manager learns the new model list now, not in 30 s
+		}
+		if status.State != domain.WorkloadRunning {
+			a.forgetTunnels(wl.ID)
 		}
 	})
 	if err != nil {

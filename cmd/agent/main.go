@@ -48,6 +48,7 @@ func main() {
 	addrFallback := flag.String("manager-addr-fallback", "", "manager address (host:port) to use when LAN discovery finds none")
 	deviceStateFile := flag.String("device-state-file", "", "a file another program keeps current with this device's charging and screen state (the Android app writes one); it overrides what the agent reads itself while it is fresh")
 	priority := flag.String("priority", "low", "low: run tasks below normal priority, so the owner's own apps come first; normal: don't")
+	llamaDir := flag.String("llama-cpp-dir", agent.DefaultLlamaCppDir(), "where this device's own llama.cpp build is (ggml-rpc-server, llama-server): lets it take part in models split across devices. Never downloaded by the agent")
 	keepAwake := flag.Bool("keep-awake", true, "ask the OS not to sleep while a task runs here (it never blocks closing the lid or choosing Sleep)")
 	noSelfUpdate := flag.Bool("no-self-update", false, "don't offer self-update (this binary can't be replaced in place; it is updated some other way, e.g. with the Android app)")
 	flag.Parse()
@@ -145,6 +146,7 @@ func main() {
 		SelfUpdateDisabled:   *noSelfUpdate,
 		DeviceStateFile:      *deviceStateFile,
 		KeepAwake:            *keepAwake,
+		LlamaCppDir:          *llamaDir,
 	}
 	switch *priority {
 	case "low":

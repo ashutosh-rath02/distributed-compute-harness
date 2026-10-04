@@ -43,6 +43,9 @@ type ollama struct {
 	cachedAt  time.Time
 	cached    []ollamaModel
 	cachedErr error
+
+	// local: models other local servers answer (localmodels.go).
+	local localModels
 }
 
 func newOllama(raw string) *ollama {

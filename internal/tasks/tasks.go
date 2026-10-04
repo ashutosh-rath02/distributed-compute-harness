@@ -25,6 +25,9 @@ type Env struct {
 	Outputs []string          // declared output names, relative to Dir
 	Stdout  io.Writer         // captured like a process's stdout (capped)
 	Stderr  io.Writer
+	// Workload is the workload this run belongs to (for handlers that
+	// keep per-assignment state, like a split session's tunnel tokens).
+	Workload domain.WorkloadID
 }
 
 // Handler runs one task type.
@@ -58,6 +61,10 @@ type Options struct {
 // Registry is one agent's set of handlers.
 type Registry struct {
 	handlers map[domain.CapabilityName]Handler
+	// ollama is the device's local model runtime adapter (nil in a bare
+	// Builtins registry); it also holds models served by other local
+	// servers (localmodels.go).
+	ollama *ollama
 }
 
 func builtinHandlers() map[domain.CapabilityName]Handler {
@@ -90,6 +97,7 @@ func NewRegistry(opts Options) *Registry {
 	r.handlers["llm.pull"] = ollamaPull{o}
 	r.handlers["llm.remove"] = ollamaRemove{o}
 	r.handlers["llm.inventory"] = ollamaInventory{o}
+	r.ollama = o
 	return r
 }
 

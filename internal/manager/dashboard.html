@@ -154,6 +154,21 @@
     <p class="hint">Each device keeps its own models in its own Ollama. Download one to the device that should run it (big models want a big GPU or lots of memory), or remove one to free its disk space.
       AI tasks go to a device that has the model, preferring one whose graphics card can hold it. A device shows here once Ollama runs on it.</p>
     <div id="aiDevices"></div>
+    <h3>A model too big for one device</h3>
+    <p class="hint">Devices with llama.cpp installed can run one model together: the device with the model file (.gguf) runs it, the others lend their memory, connected through the manager (llama.cpp's helper has no password, so it never listens on your network).
+      Chat with it through "Use with AI apps" by the name you give it. It stops when unused for 30 minutes, or when a device is unplugged or in use.
+      Helpers keep the model pieces they were sent (HomeHarness\llama-rpc-cache in their cache folder) so the next start is quicker: delete that folder to free the space.</p>
+    <div id="splitStatus" class="hint"></div>
+    <div id="splitForm">
+      <label for="splitMain">Device with the model file</label>
+      <select id="splitMain"></select>
+      <label for="splitModel">Model file on that device</label>
+      <input id="splitModel" placeholder="C:\models\big-model.gguf">
+      <label for="splitName">Name to chat with it by</label>
+      <input id="splitName" placeholder="big-model">
+      <button id="splitStart" type="button">Start on all helpers</button>
+      <div id="splitError" class="error"></div>
+    </div>
   </details>
 
   <h2>Run a task</h2>
@@ -808,9 +823,59 @@
         const pull = !online ? '<span class="subname">offline</span>'
           : '<input class="pull-model" data-node="' + escapeHtml(d.nodeId) + '" placeholder="e.g. llama3.2:1b" style="width:12em"> '
             + '<button class="small" data-pull="' + escapeHtml(d.nodeId) + '">Download</button>';
-        return "<tr><td>" + escapeHtml(d.name || d.nodeId) + gpuText(d.gpus) + fit + "</td><td>" + models + "</td><td>" + pull + busy + "</td></tr>";
+        const llama = d.llamaVersion ? '<span class="subname">llama.cpp ' + escapeHtml(d.llamaVersion) + "</span>" : "";
+        return "<tr><td>" + escapeHtml(d.name || d.nodeId) + gpuText(d.gpus) + fit + llama + "</td><td>" + (d.ollama ? models : '<span class="subname">no Ollama</span>')
+          + "</td><td>" + (d.ollama ? pull : "") + busy + "</td></tr>";
       }).join("") + "</tbody></table>";
+    const main = document.getElementById("splitMain");
+    const keep = main.value;
+    main.innerHTML = devices.filter((d) => d.llamaVersion && d.state === "READY")
+      .map((d) => '<option value="' + escapeHtml(d.nodeId) + '">' + escapeHtml(d.name || d.nodeId) + "</option>").join("");
+    if (keep) main.value = keep;
+    document.getElementById("splitForm").hidden = !main.options.length;
+    refreshSplit();
   }
+
+  // The split session: its state (from GET /llm/split), Stop, and Start.
+  async function refreshSplit() {
+    const el = document.getElementById("splitStatus");
+    try {
+      const v = await (await api("/llm/split")).json();
+      const s = v.session;
+      if (!s) {
+        el.textContent = document.getElementById("splitMain").options.length ? "No session." : "No device has llama.cpp yet (put its release in the agent's llama.cpp folder).";
+        return;
+      }
+      const helpers = (s.helpers || []).map((id) => { const n = currentNodes.find((o) => o.nodeId === id); return n ? (n.alias || n.name) : id; });
+      el.innerHTML = escapeHtml("Session " + s.state + ": " + s.name + " over " + (helpers.length + 1) + " devices (helpers: " + helpers.join(", ") + ")"
+        + (s.reason ? " — " + s.reason : ""))
+        + (s.state !== "stopped" ? ' <button class="small danger" id="splitStop" type="button">Stop</button>' : "");
+    } catch (e) {
+      el.textContent = "Failed to load the split session.";
+    }
+  }
+  document.getElementById("splitStatus").addEventListener("click", async (event) => {
+    if (!event.target.closest("#splitStop")) return;
+    await api("/llm/split", {method: "DELETE"});
+    setTimeout(refreshSplit, 500);
+  });
+  document.getElementById("splitStart").addEventListener("click", async () => {
+    const err = document.getElementById("splitError");
+    err.textContent = "";
+    try {
+      const resp = await api("/llm/split", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({
+        main: document.getElementById("splitMain").value, model: document.getElementById("splitModel").value.trim(),
+        name: document.getElementById("splitName").value.trim()})});
+      if (!resp.ok) throw new Error((await resp.text()).trim() || resp.statusText);
+    } catch (e) {
+      err.textContent = e.message;
+    }
+    for (let i = 0; i < 600; i++) {
+      await refreshSplit();
+      if (/Session (ready|stopped)/.test(document.getElementById("splitStatus").textContent)) break;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  });
 
   // Runs a model task on one device and shows its last line of output
   // under that device until it ends.
@@ -1011,7 +1076,7 @@
   async function refreshCatalog() {
     try {
       const cat = await (await api("/catalog")).json();
-      catalogTypes = cat.types || [];
+      catalogTypes = (cat.types || []).filter((t) => !t.internal); // split-session parts aren't run by hand
       rawPolicy = cat.raw || {};
       const sel = document.getElementById("typedType");
       const previous = sel.value;

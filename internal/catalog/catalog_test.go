@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -19,6 +20,21 @@ func mustType(t *testing.T, name domain.CapabilityName) Type {
 
 func img(name string) []domain.ArtifactRef {
 	return []domain.ArtifactRef{{Name: name, SHA256: strings.Repeat("0", 64)}}
+}
+
+// Every pattern compiles: a bad one would otherwise only show up as a
+// panic on the first request that uses it (Go caps repeat counts at 1000).
+func TestEveryParamPatternCompiles(t *testing.T) {
+	for _, ty := range Types() {
+		for _, p := range ty.Params {
+			if p.Pattern == "" {
+				continue
+			}
+			if _, err := regexp.Compile(`^(?:` + p.Pattern + `)$`); err != nil {
+				t.Errorf("%s.%s: %v", ty.Name, p.Name, err)
+			}
+		}
+	}
 }
 
 func TestCompileFillsDefaultsCanonicalizesAndRendersOutputs(t *testing.T) {
@@ -81,7 +97,16 @@ func TestEveryBuiltinCompilesWithDefaults(t *testing.T) {
 		given := map[string]string{}
 		for _, p := range ty.Params {
 			if p.Required && p.Default == "" {
-				given[p.Name] = "x" // a valid value for every required param today
+				switch {
+				case p.Type == Int || p.Type == Number:
+					given[p.Name] = "1"
+				case p.Pattern == SessionPattern:
+					given[p.Name] = strings.Repeat("a", 16)
+				case strings.Contains(p.Pattern, "gguf"):
+					given[p.Name] = "model.gguf"
+				default:
+					given[p.Name] = "x"
+				}
 			}
 		}
 		params, outputs, err := ty.Compile(given, inputs)

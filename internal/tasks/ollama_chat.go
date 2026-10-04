@@ -10,7 +10,9 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
+	"strings"
 
 	"home-harness/internal/catalog"
 )
@@ -47,12 +49,34 @@ func ParseChatMessages(raw string) ([]ChatMessage, error) {
 
 type ollamaChat struct{ o *ollama }
 
-func (c ollamaChat) Available(ctx context.Context) error { return c.o.available(ctx) }
+// Available while Ollama has a model or a local server (a split session)
+// serves one.
+func (c ollamaChat) Available(ctx context.Context) error {
+	if len(c.o.local.names()) > 0 {
+		return nil
+	}
+	return c.o.available(ctx)
+}
 
-// Attributes advertises the same models as llm.generate: placement
-// matches the requested model against them.
+// Attributes advertises the same models as llm.generate, plus those a
+// local server serves: placement matches the requested model against
+// them.
 func (c ollamaChat) Attributes(ctx context.Context) map[string]string {
-	return ollamaGenerate{c.o}.Attributes(ctx)
+	attrs := ollamaGenerate{c.o}.Attributes(ctx)
+	local := c.o.local.names()
+	if len(local) == 0 {
+		return attrs
+	}
+	if attrs == nil {
+		attrs = map[string]string{}
+	}
+	names := local
+	if have := attrs[catalog.AttrModels]; have != "" {
+		names = append(strings.Split(have, ","), local...)
+	}
+	sort.Strings(names)
+	attrs[catalog.AttrModels] = strings.Join(names, ",")
+	return attrs
 }
 
 func (c ollamaChat) Run(ctx context.Context, env Env) error {
@@ -69,6 +93,10 @@ func (c ollamaChat) Run(ctx context.Context, env Env) error {
 	}
 	if v, _ := strconv.Atoi(env.Params["seed"]); v > 0 {
 		options["seed"] = v
+	}
+	// A model a local server answers (a split session's llama-server).
+	if lm, ok := c.o.local.get(env.Params["model"]); ok {
+		return openAIChat(ctx, env, lm.base, lm.alias, msgs, options)
 	}
 	// Placement matched the normalized name; Ollama gets the exact name it
 	// listed.

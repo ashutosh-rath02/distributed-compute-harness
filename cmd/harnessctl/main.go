@@ -67,6 +67,8 @@ func main() {
 		err = requireArgs(args, 3, "pull <device-id> <model>", func() error {
 			return client.cmdModelTask("llm.pull", args[1], args[2])
 		})
+	case "split":
+		err = client.cmdSplit(args[1:])
 	case "rm-model":
 		err = requireArgs(args, 3, "rm-model <device-id> <model>", func() error {
 			return client.cmdModelTask("llm.remove", args[1], args[2])
@@ -235,6 +237,10 @@ Commands:
                           harnessctl pull node-1234 llama3.2:1b
   rm-model <device-id> <model>
                         remove a model from that device's Ollama
+  split [start -main ID -model PATH.gguf -name NAME [-helpers ID,ID] | stop]
+                        run one model too big for any single device across
+                        several with llama.cpp (each needs llama.cpp
+                        installed); chat with it through /v1 by NAME
   policy                show what the fleet may run
   policy type <name> on|off | labels key=value,...|- | max-runtime 10m|0
                         enable/disable a type (raw system.execute and

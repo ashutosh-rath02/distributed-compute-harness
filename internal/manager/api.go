@@ -117,6 +117,7 @@ func (s *Server) toNodeView(rec *NodeRecord, relations map[domain.NodeID]hostRel
 //	GET  /policy, PUT /policy        what the fleet may run: per-type enable, node labels, max runtime
 //	GET  /models                     the local AI models READY nodes have, and where
 //	GET  /ai-devices                 devices whose Ollama answers: their models (with sizes) and GPUs (aidevices.go)
+//	GET  /llm/split                  the split session (a model run across devices with llama.cpp); POST {"name","model","main","helpers"} starts one, DELETE stops it (split.go)
 //	POST /jobs                       submit a batch job: {"tasks":[...],"reduce":{...},"maxAttempts":3} (jobs.go)
 //	GET  /jobs                       list jobs with progress counts
 //	GET  /jobs/{id}                  one job: every task's state, attempts, node, outputs
@@ -178,6 +179,9 @@ func (s *Server) NewHTTPHandler() http.Handler {
 	mux.HandleFunc("GET /catalog", s.apiGetCatalog)
 	mux.HandleFunc("GET /models", s.apiListModels)
 	mux.HandleFunc("GET /ai-devices", s.apiListAIDevices)
+	mux.HandleFunc("GET /llm/split", s.apiGetSplit)
+	mux.HandleFunc("POST /llm/split", s.apiStartSplit)
+	mux.HandleFunc("DELETE /llm/split", s.apiStopSplit)
 	mux.HandleFunc("GET /policy", s.apiGetPolicy)
 	mux.HandleFunc("PUT /policy", s.apiPutPolicy)
 	mux.HandleFunc("POST /jobs", s.apiPostJob)

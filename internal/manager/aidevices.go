@@ -21,6 +21,10 @@ type aiDevice struct {
 	// DedicatedGPUBytes: the GPU memory a model can fit in (integrated
 	// GPUs don't count).
 	DedicatedGPUBytes uint64 `json:"dedicatedGpuBytes,omitempty"`
+	// LlamaVersion: the device has llama.cpp (it can take part in split
+	// sessions), at this build.
+	LlamaVersion string `json:"llamaVersion,omitempty"`
+	Ollama       bool   `json:"ollama"`
 }
 
 type aiModel struct {
@@ -29,15 +33,22 @@ type aiModel struct {
 }
 
 // apiListAIDevices is GET /ai-devices: every known device whose Ollama
-// answers (it offers llm.pull), with its models and sizes and its GPUs.
+// answers (it offers llm.pull) or that has llama.cpp (split sessions),
+// with its models and sizes and its GPUs.
 func (s *Server) apiListAIDevices(w http.ResponseWriter, r *http.Request) {
 	out := []aiDevice{}
 	for _, rec := range s.Registry.List() {
-		if !rec.HasCapability("llm.pull") {
+		ollama := rec.HasCapability("llm.pull")
+		llama := attrValue(rec, capSplitHelper, catalog.AttrLlamaVersion)
+		if llama == "" {
+			llama = attrValue(rec, capSplitMain, catalog.AttrLlamaVersion)
+		}
+		if !ollama && llama == "" {
 			continue
 		}
 		id := rec.Node.Identity.NodeID
-		d := aiDevice{NodeID: id, Name: s.nodeDisplayName(id), State: rec.State, Models: []aiModel{}, GPUs: rec.GPUs, DedicatedGPUBytes: domain.DedicatedGPUMemory(rec.GPUs)}
+		d := aiDevice{NodeID: id, Name: s.nodeDisplayName(id), State: rec.State, Models: []aiModel{}, GPUs: rec.GPUs, DedicatedGPUBytes: domain.DedicatedGPUMemory(rec.GPUs),
+			LlamaVersion: llama, Ollama: ollama}
 		sizes := map[string]int64{}
 		for _, e := range attrValues(rec, "llm.generate", catalog.AttrModelSizes) {
 			if name, size, ok := strings.Cut(e, "="); ok {

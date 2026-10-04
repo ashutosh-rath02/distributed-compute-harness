@@ -53,6 +53,9 @@ func (c *apiClient) cmdTasks(args []string) error {
 	}
 	fmt.Printf("%-16s %-26s %-6s %-6s %s\n", "TYPE", "TITLE", "POLICY", "NODES", "INPUT FILES")
 	for _, t := range cat.Types {
+		if t.Internal {
+			continue // parts of split sessions (harnessctl split)
+		}
 		files := "-"
 		if t.Inputs.Max > 0 {
 			files = fmt.Sprintf("%d-%d", t.Inputs.Min, t.Inputs.Max)

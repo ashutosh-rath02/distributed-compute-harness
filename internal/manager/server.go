@@ -147,6 +147,8 @@ type Server struct {
 	meta *nodeMetaStore
 	// tunnels: device-to-device tunnel grants and waiting connections.
 	tunnels *tunnelTable
+	// splits: the split session, if any (split.go).
+	splits *splitTable
 	// awake is held while work is in flight (keepAwakeTick); nil unless
 	// Config.KeepAwake. awakeUntil is touched only by the reconcile loop.
 	awake      *keepawake.Request
@@ -217,6 +219,7 @@ func NewServer(transport domain.Transport, store PersistentStore, cfg Config) *S
 		requeues:     make(map[domain.WorkloadID]int),
 		grants:       newGrantTable(),
 		tunnels:      newTunnelTable(),
+		splits:       newSplitTable(),
 		jobs:         newJobTable(),
 		policy:       &policyStore{p: domain.PermissivePolicy()},
 	}

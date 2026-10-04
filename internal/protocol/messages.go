@@ -113,6 +113,18 @@ type WorkloadAssignPayload struct {
 	// set when the workload declares files). It is deliberately not part
 	// of domain.Workload, so it is never persisted or shown by the API.
 	ArtifactToken string `json:"artifactToken,omitempty"`
+	// Tunnels are this assignment's tunnel tokens (a split session's part):
+	// a helper gets its own, the main device one per helper. Like the
+	// artifact token, never part of domain.Workload.
+	Tunnels []TunnelGrant `json:"tunnels,omitempty"`
+}
+
+// TunnelGrant is one side's token for one tunnel pair of a session
+// (manager/tunnel.go).
+type TunnelGrant struct {
+	Session string `json:"session"`
+	Index   int    `json:"index"`
+	Token   string `json:"token"`
 }
 
 // TunnelOpenPayload asks a helper device to connect its local service

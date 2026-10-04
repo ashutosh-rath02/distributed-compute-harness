@@ -98,6 +98,9 @@ type Type struct {
 	// TargetRequired: the task is about one particular device (its own
 	// models), so a submission must name it — never placed anywhere.
 	TargetRequired bool `json:"targetRequired,omitempty"`
+	// Internal: a part of something the manager runs (a split session),
+	// not offered in the task form or "harnessctl tasks".
+	Internal bool `json:"internal,omitempty"`
 	// DefaultMaxRuntimeSeconds is the per-attempt limit when policy sets
 	// none for this type.
 	DefaultMaxRuntimeSeconds int `json:"defaultMaxRuntimeSeconds,omitempty"`
@@ -252,6 +255,34 @@ var builtins = []Type{
 		DefaultMaxRuntimeSeconds: 120,
 	},
 	{
+		Name: "llm.split-helper", Version: "1", Title: "Lend memory to a split model",
+		Description: "Part of a split session (a model too big for one device): runs llama.cpp's ggml-rpc-server on this device's loopback only, reached through the session's tunnel. Started and stopped by the manager.",
+		Params: []Param{
+			{Name: "session", Type: String, Title: "Session", Required: true, Pattern: SessionPattern},
+			{Name: "index", Type: Int, Title: "Helper number", Required: true, Min: num(0), Max: num(15)},
+		},
+		TargetRequired:           true,
+		Internal:                 true,
+		MaxPerNode:               1,
+		Streams:                  true,
+		DefaultMaxRuntimeSeconds: 12 * 3600,
+	},
+	{
+		Name: "llm.split-main", Version: "1", Title: "Run a model split across devices",
+		Description: "Part of a split session: runs llama.cpp's llama-server with the model file on this device, its layers spread over the session's helpers through their tunnels, and answers the session's chats. Started and stopped by the manager.",
+		Params: []Param{
+			{Name: "session", Type: String, Title: "Session", Required: true, Pattern: SessionPattern},
+			{Name: "model", Type: String, Title: "Model file (.gguf) on this device", Required: true, MaxLength: 1024, Pattern: `.+\.(gguf|GGUF)`},
+			{Name: "name", Type: String, Title: "Name to chat with it by", Required: true, Pattern: ModelPattern, MaxLength: 128},
+			{Name: "helpers", Type: Int, Title: "Helpers", Required: true, Min: num(1), Max: num(15)},
+		},
+		TargetRequired:           true,
+		Internal:                 true,
+		MaxPerNode:               1,
+		Streams:                  true,
+		DefaultMaxRuntimeSeconds: 12 * 3600,
+	},
+	{
 		Name: "llm.inventory", Version: "1", Title: "List local AI models",
 		Description: "List the models the device's local runtime (Ollama) has.",
 	},
@@ -260,6 +291,20 @@ var builtins = []Type{
 // AttrModels is the capability attribute listing a node's local models
 // (comma-separated, normalized by NormalizeModel).
 const AttrModels = "models"
+
+// SessionPattern matches a split session's id.
+const SessionPattern = `[a-f0-9]{16}`
+
+// Markers a split session's parts print once ready; the manager waits for
+// them in the parts' streamed output.
+const (
+	SplitHelperReady = "split-helper ready"
+	SplitMainReady   = "split-main ready"
+)
+
+// AttrLlamaVersion is the llama.cpp build a device's split parts run: every
+// part of a session must run the same one (its RPC protocol is versioned).
+const AttrLlamaVersion = "llamaVersion"
 
 // AttrModelSizes lists each model's size on disk, "name=bytes,...":
 // placement prefers a device whose dedicated GPU memory fits the model.

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"home-harness/internal/domain"
 	"home-harness/internal/protocol"
 	"home-harness/internal/tunnel"
 )
@@ -30,6 +31,8 @@ type exposedService struct {
 type tunnels struct {
 	mu      sync.Mutex
 	exposed map[string]exposedService // session/index -> local service
+	// grants: tunnel tokens per assignment, for its run (split.go).
+	grants map[domain.WorkloadID][]protocol.TunnelGrant
 }
 
 func tunnelKey(session string, index int) string { return session + "/" + strconv.Itoa(index) }

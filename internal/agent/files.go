@@ -44,7 +44,7 @@ func handlerRunner(h tasks.Handler, wl domain.Workload) runner {
 		for i, in := range wl.Inputs {
 			names[i] = in.Name
 		}
-		return h.Run(ctx, tasks.Env{Dir: dir, Params: wl.Params, Inputs: names, Outputs: wl.Outputs, Stdout: stdout, Stderr: stderr})
+		return h.Run(ctx, tasks.Env{Dir: dir, Params: wl.Params, Inputs: names, Outputs: wl.Outputs, Stdout: stdout, Stderr: stderr, Workload: wl.ID})
 	}
 }
 

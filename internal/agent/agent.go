@@ -143,6 +143,9 @@ type Config struct {
 	// DeviceUse overrides how the agent reads the device's use (power,
 	// idle time) for its heartbeats — tests inject it. Nil: sysinfo.
 	DeviceUse func(ctx context.Context) domain.DeviceUse
+	// LlamaCppDir is where the device's own llama.cpp build is (its
+	// ggml-rpc-server and llama-server), for split sessions; empty: none.
+	LlamaCppDir string
 	// GPUs overrides the GPUs the agent reports (tests). Nil: detected.
 	GPUs func(ctx context.Context) []domain.GPU
 	// KeepAwake asks the OS not to sleep while a workload runs here (a
@@ -186,6 +189,10 @@ type Agent struct {
 	reprobe chan struct{}
 	// tun: services this device exposes through tunnels (tunnel.go).
 	tun tunnels
+	// handlers: the typed task handlers; llama: the device's llama.cpp
+	// install, if any (split.go).
+	handlers *tasks.Registry
+	llama    *llamaCpp
 
 	// pendingAddr is the address that last answered "waiting for
 	// approval": retries go straight back to it rather than paying a
@@ -246,7 +253,11 @@ func New(transport domain.Transport, cfg Config) (*Agent, error) {
 	a := &Agent{cfg: cfg, transport: transport, identity: id, startedAt: time.Now(), executor: NewExecutorWithSlots(cfg.WorkloadSlots), binaryHash: binaryHash, reprobe: make(chan struct{}, 1)}
 	a.executor.SetWorkRoot(cfg.WorkDir)
 	a.executor.SetDisabled(cfg.DisabledCapabilities)
-	a.executor.SetHandlers(tasks.NewRegistry(tasks.Options{OllamaURL: cfg.OllamaURL}))
+	a.handlers = tasks.NewRegistry(tasks.Options{OllamaURL: cfg.OllamaURL})
+	a.llama = &llamaCpp{dir: cfg.LlamaCppDir}
+	a.handlers.Register("llm.split-helper", splitHelper{a})
+	a.handlers.Register("llm.split-main", splitMain{a})
+	a.executor.SetHandlers(a.handlers)
 	if a.cfg.CapabilityProbeInterval == 0 {
 		a.cfg.CapabilityProbeInterval = 30 * time.Second
 	}
@@ -287,6 +298,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	// the Agent before taking the instance lock, and a standby copy must
 	// not clear the running one's directories.
 	cleanWorkRoot(a.cfg.WorkDir)
+	a.llama.sweep() // llama.cpp programs an earlier agent left running
 	if a.cfg.KeepAwake {
 		go a.keepAwakeWhileWorking(ctx)
 	}

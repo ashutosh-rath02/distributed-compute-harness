@@ -250,6 +250,7 @@ func (s *Server) apiOpenAIChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.touchSplit(model) // a split session's model: in use
 	// Every device with the model holding work back (on battery, in use,
 	// paused by the operator): say so now instead of leaving the app
 	// waiting in the queue. Merely busy devices still queue it.
