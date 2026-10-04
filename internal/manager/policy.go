@@ -53,6 +53,7 @@ func clonePolicy(p domain.Policy) domain.Policy {
 			labels[lk] = lv
 		}
 		v.NodeLabels = labels
+		v.AllowImages = append([]string(nil), v.AllowImages...)
 		out.Types[k] = v
 	}
 	return out
@@ -64,7 +65,9 @@ func effectivePolicy(p domain.Policy, capability domain.CapabilityName) domain.T
 		return tp
 	}
 	if t, ok := catalog.Lookup(capability); ok {
-		return domain.TypePolicy{Enabled: true, MaxRuntimeSeconds: t.DefaultMaxRuntimeSeconds}
+		// An opt-in type is off like a raw capability until it has an
+		// entry — also under a policy stored before the type existed.
+		return domain.TypePolicy{Enabled: !t.OptIn || p.AllowUnlisted, MaxRuntimeSeconds: t.DefaultMaxRuntimeSeconds}
 	}
 	return domain.TypePolicy{Enabled: p.AllowUnlisted}
 }
@@ -105,6 +108,10 @@ func validatePolicy(p domain.Policy) error {
 				return fmt.Errorf("%s: invalid node label %q=%q", name, k, v)
 			}
 		}
+		if err := canonContainerPolicy(name, &tp); err != nil {
+			return err
+		}
+		p.Types[name] = tp
 	}
 	return nil
 }

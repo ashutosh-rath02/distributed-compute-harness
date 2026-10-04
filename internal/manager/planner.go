@@ -261,6 +261,9 @@ func (s *Server) plannableTypes() []plannable {
 		if t.Name == "llm.embed" {
 			continue
 		}
+		if t.OptIn {
+			continue // containers: a model doesn't pick what image and command run
+		}
 		if s.checkPolicy(t.Name) != nil {
 			continue
 		}

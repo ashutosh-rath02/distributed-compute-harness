@@ -16,6 +16,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"home-harness/internal/catalog"
+	"home-harness/internal/container"
 	"home-harness/internal/domain"
 	"home-harness/internal/identity"
 	"home-harness/internal/protocol"
@@ -167,6 +169,10 @@ type Config struct {
 	// install locations and PATH (cmd/agent; tests leave it off).
 	ToolsDir          string
 	ToolsSearchSystem bool
+	// ContainerEngine is the docker or podman program for container
+	// tasks (internal/container's Find: a program, a folder, "auto" for
+	// the standard install locations); empty: none.
+	ContainerEngine string
 	// GPUs overrides the GPUs the agent reports (tests). Nil: detected.
 	GPUs func(ctx context.Context) []domain.GPU
 	// KeepAwake asks the OS not to sleep while a workload runs here (a
@@ -219,6 +225,8 @@ type Agent struct {
 	llama    *llamaCpp
 	// inputs: the cache of downloaded input files; nil when off.
 	inputs *inputCache
+	// containers runs container.run (nil without an engine setting).
+	containers *container.Handler
 
 	// pendingAddr is the address that last answered "waiting for
 	// approval": retries go straight back to it rather than paying a
@@ -296,6 +304,10 @@ func New(transport domain.Transport, cfg Config) (*Agent, error) {
 	a.llama = &llamaCpp{dir: cfg.LlamaCppDir}
 	a.handlers.Register("llm.split-helper", splitHelper{a})
 	a.handlers.Register("llm.split-main", splitMain{a})
+	if cfg.ContainerEngine != "" && cfg.ContainerEngine != "off" && !a.executor.Disabled(catalog.ContainerRun) {
+		a.containers = container.NewHandler(container.Options{Engine: cfg.ContainerEngine, Owner: string(id.NodeID), Start: startProgram})
+		a.handlers.Register(string(catalog.ContainerRun), a.containers)
+	}
 	a.executor.SetHandlers(a.handlers)
 	if a.cfg.CapabilityProbeInterval == 0 {
 		a.cfg.CapabilityProbeInterval = 30 * time.Second
@@ -341,6 +353,9 @@ func (a *Agent) Run(ctx context.Context) error {
 		a.inputs.load()
 	}
 	a.llama.sweep() // llama.cpp programs an earlier agent left running
+	if a.containers != nil {
+		go a.containers.Sweep(ctx) // and containers (again once the engine first answers)
+	}
 	if a.cfg.KeepAwake {
 		go a.keepAwakeWhileWorking(ctx)
 	}

@@ -302,6 +302,9 @@ func (s *Server) checkJob(spec *JobSpec) error {
 		if err := compileTyped(&t.Capability, &t.Command, &t.Args, &t.Params, append(append([]domain.ArtifactRef{}, t.Inputs...), parts...), &t.Outputs, &t.Requirements); err != nil {
 			return fmt.Errorf("%s: %w", label, err)
 		}
+		if err := s.checkContainer(t.Capability, t.Params, &t.Requirements); err != nil {
+			return fmt.Errorf("%s: %w", label, err)
+		}
 		ws := WorkloadSpec{Target: t.Target, Capability: t.Capability, Inputs: t.Inputs, Outputs: t.Outputs}
 		if err := s.prepareFiles(&ws); err != nil {
 			return fmt.Errorf("%s: %w", label, err)

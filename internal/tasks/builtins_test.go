@@ -53,8 +53,8 @@ func run(t *testing.T, name domain.CapabilityName, params map[string]string, fil
 func TestEveryCatalogTypeHasAHandler(t *testing.T) {
 	full := NewRegistry(Options{OllamaURL: "127.0.0.1:1"}) // nothing listens there
 	for _, ty := range catalog.Types() {
-		if ty.Internal {
-			continue // split-session parts: the agent registers their handlers (it owns the tunnels)
+		if ty.Internal || ty.Name == catalog.ContainerRun {
+			continue // split-session parts and containers: the agent registers their handlers (it owns the tunnels, it labels the containers)
 		}
 		if _, ok := full.Lookup(ty.Name); !ok {
 			t.Errorf("catalog type %s has no handler", ty.Name)

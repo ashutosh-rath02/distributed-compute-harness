@@ -284,6 +284,11 @@ Commands:
                         filesystem.read are off until you turn them on),
                         limit it to nodes with these labels, or bound each
                         attempt's runtime
+  policy type container.run images add|remove REF | images set REF,... | images -
+                        | tags on|off | network on|off
+                        which images containers may run (REF: a repository,
+                        name@sha256:..., or registry/namespace/*), whether by
+                        tag instead of digest, and whether with a network
   map -type T [-each FILE|GLOB ... | -count N] [key=value ...]
       [-reduce-type T2 [-reduce-param key=value ...]]
                         a job of typed tasks, e.g.

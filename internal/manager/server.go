@@ -403,6 +403,9 @@ func (s *Server) Submit(ctx context.Context, spec WorkloadSpec) (domain.Workload
 	if err := compileTyped(&spec.Capability, &spec.Command, &spec.Args, &spec.Params, spec.Inputs, &spec.Outputs, &spec.Requirements); err != nil {
 		return domain.Workload{}, err
 	}
+	if err := s.checkContainer(spec.Capability, spec.Params, &spec.Requirements); err != nil {
+		return domain.Workload{}, err
+	}
 	if t, ok := catalog.Lookup(spec.Capability); ok && t.TargetRequired && spec.Target == "" {
 		return domain.Workload{}, fmt.Errorf("%w: %s is about one device's own %s: say which device (target)", ErrInvalidWorkload, t.Name, "models")
 	}

@@ -365,8 +365,8 @@ func TestTypedSubmissionsAreValidated(t *testing.T) {
 	}
 	for _, ty := range cat.Types {
 		want := 1
-		if strings.HasPrefix(ty.Name, "llm.") {
-			want = 0 // needs a local model runtime; the test agent has none
+		if strings.HasPrefix(ty.Name, "llm.") || ty.Name == "container.run" {
+			want = 0 // needs a local model runtime or container engine; the test agent has none
 		}
 		if ty.Nodes != want {
 			t.Errorf("%s offered by %d nodes, want %d", ty.Name, ty.Nodes, want)
