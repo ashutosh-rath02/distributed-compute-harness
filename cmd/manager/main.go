@@ -39,6 +39,7 @@ func main() {
 	tlsDir := flag.String("tls-dir", "harness-manager-tls", "directory holding the manager's persistent TLS certificate")
 	operatorTokenFile := flag.String("operator-token-file", "harness-operator-token", "file holding the operator API token, created (owner-only) on first run. Every API call needs it: harnessctl reads this file, and the dashboard signs in through the login link logged at startup. Delete it and restart to revoke every client")
 	keepAwake := flag.Bool("keep-awake", true, "ask the OS not to sleep while your devices are working on tasks (and 2 minutes after): a sleeping manager stops the whole fleet. It never blocks closing the lid or choosing Sleep")
+	remoteAccessFile := flag.String("remote-access-file", "", "file holding the remote dashboard's settings and remote key (harnessctl remote), created (owner-only) when remote access is first turned on; default: \"remote-access\" next to -operator-token-file")
 	aiKeyFile := flag.String("ai-key-file", "", "file holding the AI key: the API key apps use for the OpenAI-compatible API (/v1), which opens nothing else. Created (owner-only) on first run; default: \"ai-key\" next to -operator-token-file. Delete it and restart to revoke it")
 	pairingToken := flag.String("pairing-token", "", "shared secret agents must present to register (required)")
 	heartbeatTimeout := flag.Duration("heartbeat-timeout", 15*time.Second, "how long without a heartbeat before a node is marked offline")
@@ -156,6 +157,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("manager: AI key: %v", err)
 	}
+	if *remoteAccessFile == "" {
+		*remoteAccessFile = filepath.Join(filepath.Dir(*operatorTokenFile), "remote-access")
+	}
 
 	store, err := persistent.Open(*dbPath)
 	if err != nil {
@@ -246,6 +250,7 @@ func main() {
 		JoinAddr:            *joinAddr,
 		FirstRunJoinWindow:  *joinWindow,
 		AppAPK:              *appAPK,
+		RemoteAccessFile:    *remoteAccessFile,
 	})
 	// Registered before Run (which calls transport.Listen) — puts the
 	// download on the exact address/port agents already dial, no new port
@@ -270,6 +275,10 @@ func main() {
 		relayTransport.Handle("GET "+domain.AppBinaryRoute, srv.AppBinaryHandler())
 		relayTransport.Handle("/enroll/", srv.EnrollmentHandler())
 		relayTransport.Handle("/workload-artifacts/", srv.ArtifactTransferHandler())
+		// The remote dashboard (manager/remote.go): on the relay listener
+		// only, where the relay's public gateway reaches it; off until the
+		// operator turns it on.
+		relayTransport.Handle("/remote/", srv.RemoteHandler())
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

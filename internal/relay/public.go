@@ -32,6 +32,7 @@ type PublicGateway struct {
 	mu           sync.Mutex
 	entries      map[string]publicEnrollment
 	publishToken string
+	remoteState  // the remote dashboard's connections (remote.go)
 }
 
 func NewPublicGateway(server *Server, relayAddr, publishToken string) *PublicGateway {
@@ -43,6 +44,10 @@ func (g *PublicGateway) Handler() http.Handler {
 	mux.HandleFunc("POST /_harness/enrollments", g.publish)
 	mux.HandleFunc("GET /enroll/{token}", g.proxy)
 	mux.HandleFunc("GET /enroll/{token}/{rest...}", g.proxy)
+	// The remote dashboard (remote.go).
+	mux.HandleFunc("POST /_harness/remote-dashboards", g.publishRemote)
+	mux.HandleFunc("GET /r/{token}", g.remoteRedirect)
+	mux.HandleFunc("/r/{token}/{rest...}", g.remoteProxy)
 	return mux
 }
 

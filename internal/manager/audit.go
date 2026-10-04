@@ -95,6 +95,8 @@ func (s *Server) audit(logName domain.AuditLog, kind string, nodeID domain.NodeI
 		keep = auditNoiseKeep
 	case domain.AuditAdmissions:
 		keep = auditAdmissionsKeep
+	case domain.AuditRemote:
+		keep = auditNoiseKeep // one entry per remote call (remote.go)
 	}
 	if s.store != nil {
 		if _, err := s.store.AppendAudit(e, keep); err != nil {
@@ -249,9 +251,9 @@ func (s *Server) AuditEntries(logName domain.AuditLog, limit int) ([]domain.Audi
 func (s *Server) apiListAudit(w http.ResponseWriter, r *http.Request) {
 	logName := domain.AuditLog(r.URL.Query().Get("log"))
 	switch logName {
-	case "", domain.AuditSecurity, domain.AuditAdmissions, domain.AuditNoise:
+	case "", domain.AuditSecurity, domain.AuditAdmissions, domain.AuditNoise, domain.AuditRemote:
 	default:
-		http.Error(w, "log must be security, admissions, or noise (or omitted for security+admissions)", http.StatusBadRequest)
+		http.Error(w, "log must be security, admissions, noise, or remote (or omitted for security+admissions)", http.StatusBadRequest)
 		return
 	}
 	limit := 100

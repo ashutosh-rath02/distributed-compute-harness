@@ -24,6 +24,8 @@ import (
 func main() {
 	apiAddr := flag.String("api-addr", "http://127.0.0.1:7421", "manager API base URL")
 	tokenFile := flag.String("token-file", "harness-operator-token", "the manager's operator token file (its -operator-token-file); the "+operatorTokenEnv+" environment variable overrides it")
+	remoteURL := flag.String("remote", "", "use the manager from anywhere, through its relay: the remote address \"harnessctl remote\" shows (needs -remote-key-file or "+remoteKeyEnv+")")
+	remoteKeyFile := flag.String("remote-key-file", "", "file holding the remote key, for -remote")
 	flag.Usage = usage
 	flag.Parse()
 
@@ -35,6 +37,12 @@ func main() {
 
 	client := newAPIClient(strings.TrimRight(*apiAddr, "/"), loadOperatorToken(*tokenFile))
 	var err error
+	if *remoteURL != "" {
+		if client, err = newRemoteAPIClient(*remoteURL, *remoteKeyFile); err != nil {
+			fmt.Fprintln(os.Stderr, "harnessctl:", err)
+			os.Exit(1)
+		}
+	}
 
 	switch args[0] {
 	case "nodes":
@@ -143,6 +151,8 @@ func main() {
 		err = client.cmdJoinWindow(args[1:])
 	case "standby":
 		err = client.cmdStandby(args[1:])
+	case "remote":
+		err = cmdRemote(client, args[1:])
 	case "approve":
 		err = requireArgs(args, 2, "approve <id|code>", func() error { return client.cmdDecideJoin(strings.Join(args[1:], " "), true) })
 	case "reject":
@@ -372,7 +382,18 @@ Commands:
                         serves nothing until promoted; "promote" (on the
                         standby) takes over once the primary is gone
                         (-force: while it still runs, a planned switch-over)
-  unrevoke <id>        lift a revocation; the node must then be admitted
+  remote [status | on [read-only|standard|full] | off | key | rotate | log]
+                        use the dashboard away from home, through your relay,
+                        with its own remote key: on (default standard: view
+                        and run tasks; revoking, policy, adding devices,
+                        labels and updates need full), off, key shows the
+                        address and key, rotate makes a new key (signs out
+                        every remote browser), log lists remote requests.
+                        Run on the manager's machine; never works remotely.
+                        With -remote URL (and -remote-key-file or
+                        HARNESS_REMOTE_KEY), any other command runs through
+                        the relay, sealed the same way
+  unrevoke <id>         lift a revocation; the node must then be admitted
                         afresh (its shared-token launcher does this on its
                         own; a one-time-invitation node needs a new one)
   join <manager-addr|remote> [windows|android|macos|linux]

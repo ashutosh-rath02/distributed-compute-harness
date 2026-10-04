@@ -99,6 +99,9 @@ type Config struct {
 	// PeerCheckInterval is how often an active manager asks its standby
 	// whether it took over (default 10s).
 	PeerCheckInterval time.Duration
+	// RemoteAccessFile keeps the remote dashboard's settings and key
+	// (remote.go) across restarts; empty = in memory only.
+	RemoteAccessFile string
 }
 
 // PersistentStore is the subset of persistent storage the manager needs:
@@ -205,6 +208,8 @@ type Server struct {
 	app *agentBuild
 	// failover: the term and the standby (standby.go).
 	failover *failoverState
+	// remote: the remote dashboard through the relay (remote.go).
+	remote *remoteAccess
 }
 
 // pendingCommand tracks who a dispatched command was sent to, so its
@@ -252,6 +257,7 @@ func NewServer(transport domain.Transport, store PersistentStore, cfg Config) *S
 		plans:        newPlanTable(),
 		policy:       &policyStore{p: domain.PermissivePolicy()},
 		failover:     &failoverState{},
+		remote:       newRemoteAccess(cfg.RemoteAccessFile),
 	}
 	if cfg.KeepAwake {
 		s.awake = keepawake.New("Home Harness manager: your devices are working on tasks")
