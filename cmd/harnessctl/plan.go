@@ -42,6 +42,15 @@ type planView struct {
 	JobID       string        `json:"jobId"`
 	CreatedAt   time.Time     `json:"createdAt"`
 	ExpiresAt   time.Time     `json:"expiresAt"`
+	// Follow-up steps: such a plan runs as a workflow.
+	Then       []planThenView `json:"then"`
+	WorkflowID string         `json:"workflowId"`
+}
+
+type planThenView struct {
+	planStepView
+	Mode string `json:"mode"`
+	Runs int    `json:"runs"`
 }
 
 type planList struct {
@@ -147,6 +156,10 @@ func (c *apiClient) planAction(action, id string) error {
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return err
 	}
+	if action == "approve" && p.WorkflowID != "" {
+		fmt.Printf("Approved: running as workflow %s\n  follow it: harnessctl workflow show %s\n  results:   harnessctl workflow outputs %s\n", p.WorkflowID, p.WorkflowID, p.WorkflowID)
+		return nil
+	}
 	if action == "approve" {
 		fmt.Printf("Approved: running as job %s\n  follow it: harnessctl job %s\n  results:   harnessctl job-outputs %s\n", p.JobID, p.JobID, p.JobID)
 		return nil
@@ -213,8 +226,19 @@ func printPlan(p planView) {
 				fmt.Println("       once")
 			}
 		}
+		n := 1
 		if p.Combine != nil {
-			printStep(2, "then ", p.Combine)
+			n++
+			printStep(n, "then ", p.Combine)
+		}
+		for _, t := range p.Then {
+			n++
+			printStep(n, "then ", &t.planStepView)
+			if t.Mode == "perFile" {
+				fmt.Printf("       once per file the step before made (%d runs)\n", t.Runs)
+			} else {
+				fmt.Println("       once, with every file the step before made")
+			}
 		}
 	}
 	if p.Summary != "" {
@@ -230,6 +254,10 @@ func printPlan(p planView) {
 	case "proposed":
 		fmt.Printf("\nNothing has run. Approve within an hour to run it:\n  harnessctl plan approve %s\n  harnessctl plan reject %s\n", p.ID, p.ID)
 	case "approved":
-		fmt.Printf("  running as job %s (harnessctl job %s)\n", p.JobID, p.JobID)
+		if p.WorkflowID != "" {
+			fmt.Printf("  running as workflow %s (harnessctl workflow show %s)\n", p.WorkflowID, p.WorkflowID)
+		} else {
+			fmt.Printf("  running as job %s (harnessctl job %s)\n", p.JobID, p.JobID)
+		}
 	}
 }

@@ -91,6 +91,10 @@ func main() {
 		err = cmdJobOutputs(client, args[1:])
 	case "job-cancel":
 		err = requireArgs(args, 2, "job-cancel <job-id>", func() error { return client.cmdJobCancel(args[1]) })
+	case "workflow":
+		err = cmdWorkflow(client, args[1:])
+	case "workflows":
+		err = client.cmdWorkflows()
 	case "node":
 		err = requireArgs(args, 2, "node <id>", func() error { return client.cmdNode(args[1]) })
 	case "resources":
@@ -280,6 +284,22 @@ Commands:
                         download the job's result (and each task's outputs
                         under parts/<task>/)
   job-cancel <job-id>   cancel a job and stop its running tasks
+  workflow [-in FILE|GLOB ...] -step "TYPE [once|perFile|parts=N] [key=value ...]"
+           [-combine "TYPE [key=value ...]"] -step ...
+                        steps run in order, each on the results of the step
+                        before (the first on the -in files): every step is
+                        checked before anything runs, e.g.
+                          harnessctl workflow -in "photos/*.jpg"
+                            -step "image.resize perFile width=800"
+                            -step "archive.zip name=photos.zip" -step file.hash
+  workflow [-in FILE ...] FILE.json
+                        the same from a file: {"name": "...", "files": [paths],
+                        "stages": [{"type", "params", "mode", "parts",
+                        "combine": {"type", "params"}}]}
+  workflow show|cancel <workflow-id>
+  workflow outputs <workflow-id> [dir]
+                        download a finished workflow's results
+  workflows             list workflows and how far each got
   workloads             list all known workloads
   workload <id>         show one workload's request, state, and captured output
   cancel <workload-id>  request cancellation of a running workload

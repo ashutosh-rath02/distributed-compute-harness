@@ -265,6 +265,9 @@
     <div id="policyError" class="error"></div>
   </details>
 
+  <h2>Workflows</h2>
+  <div id="workflows"></div>
+
   <h2>Jobs</h2>
   <div id="jobs"></div>
 
@@ -1018,6 +1021,61 @@
     refreshJobs();
   });
 
+  // Workflows: the five most recent, each step with its progress (one
+  // GET /workflows carries it all). Refreshes are coalesced like the jobs'.
+  let workflowsTimer = null;
+  function scheduleWorkflows() {
+    if (workflowsTimer) return;
+    workflowsTimer = setTimeout(() => { workflowsTimer = null; refreshWorkflows(); }, 1000);
+  }
+
+  const STEP_HOW = {once: "once", perFile: "once per file"};
+  async function refreshWorkflows() {
+    const el = document.getElementById("workflows");
+    try {
+      const list = await (await api("/workflows")).json();
+      const recent = (list || []).slice(-5).reverse();
+      if (!recent.length) {
+        el.innerHTML = '<p class="empty">No workflows yet: run one with harnessctl workflow, or approve a plan with more than one step.</p>';
+        return;
+      }
+      el.innerHTML = recent.map((w) => {
+        const steps = (w.stages || []).map((st) => {
+          const c = st.counts;
+          const how = st.mode === "parts" ? "in " + st.parts + " parts" : (STEP_HOW[st.mode] || "");
+          return "<li><b>" + escapeHtml(st.name || st.title || "") + "</b> <code>" + escapeHtml(st.type || "") + "</code> " + escapeHtml(how)
+            + (st.combine ? ", then " + escapeHtml(st.combine.title || "") : "")
+            + ' <span class="' + stateClass(st.state) + '">' + escapeHtml(st.state || "") + "</span>"
+            + (c ? " " + escapeHtml(c.completed + "/" + c.total + " done" + (c.failed ? ", " + c.failed + " failed" : "") + (c.active ? ", " + c.active + " running" : "")) : "")
+            + (st.waiting ? '<span class="subname">Waiting: ' + escapeHtml(st.waiting) + "</span>" : "")
+            + (st.error ? '<span class="subname">' + escapeHtml(st.error) + "</span>" : "")
+            + "</li>";
+        }).join("");
+        return '<div class="card"><div>' + escapeHtml(w.name || w.id) + ' <span class="' + stateClass(w.state) + '">' + escapeHtml(w.state || "") + "</span> "
+          + '<span class="hint">step ' + escapeHtml(String(w.stage || 0)) + " of " + escapeHtml(String((w.stages || []).length)) + "</span></div>"
+          + (w.error ? '<p class="hint">' + escapeHtml(w.error) + "</p>" : "")
+          + '<ol class="compact">' + steps + "</ol>"
+          + ((w.outputs || []).length ? "<p>Result: " + fileButtons(w.outputs) + "</p>" : "")
+          + (w.state === "RUNNING" ? '<button class="danger small cancel-workflow" data-workflow="' + escapeHtml(w.id) + '">Cancel workflow</button>' : "")
+          + "</div>";
+      }).join("");
+    } catch (e) {
+      el.innerHTML = '<p class="error">Failed to load workflows.</p>';
+    }
+  }
+
+  document.addEventListener("click", async (event) => {
+    const button = event.target.closest && event.target.closest("button.cancel-workflow");
+    if (!button || !confirm("Cancel this workflow and stop its running step?")) return;
+    try {
+      const resp = await api("/workflows/" + encodeURIComponent(button.dataset.workflow) + "/cancel", {method: "POST"});
+      if (!resp.ok) throw new Error((await resp.text()).trim() || resp.statusText);
+    } catch (e) {
+      alert("Cancel failed: " + e);
+    }
+    refreshWorkflows();
+  });
+
   // ---- Typed tasks (GET /catalog) and policy (GET/PUT /policy)
   let catalogTypes = [];
   let rawPolicy = {};
@@ -1344,6 +1402,7 @@
     scheduleRefresh(type !== "workload.progress");
     if (type === "workload.progress") return;
     if (type.startsWith("job.") || type.startsWith("workload.")) scheduleJobs();
+    if (type.startsWith("workflow.") || type.startsWith("job.") || type.startsWith("workload.")) scheduleWorkflows();
     if (type.startsWith("node.")) refreshCatalog();
     if (type.startsWith("node.") && document.getElementById("aiSection").open) refreshAI();
     if (type.startsWith("node.") && document.getElementById("modelsSection").open) refreshAIDevices();
@@ -1399,6 +1458,7 @@
     if (signedOut) return;
     refreshWorkloads();
     refreshJobs();
+    refreshWorkflows();
     refreshPlans();
     refreshCatalog();
     refreshRevoked();
@@ -1431,6 +1491,10 @@
         : p.mode === "parts" ? "In " + p.parts + " parts, spread over your devices" : "Once";
       h += "<ol><li>" + planStepHtml(p.task) + '<span class="subname">' + escapeHtml(how) + (files ? ": " + files : "") + "</span></li>";
       if (p.combine) h += "<li>Then " + planStepHtml(p.combine) + '<span class="subname">Joins every result into one file</span></li>';
+      for (const t of p.then || []) {
+        const runs = t.mode === "perFile" ? "Once per file the step before made" + (t.runs ? " (" + t.runs + " runs)" : "") : "Once, with every file the step before made";
+        h += "<li>Then " + planStepHtml(t) + '<span class="subname">' + escapeHtml(runs) + "</span></li>";
+      }
       h += "</ol>";
     }
     // The model's own words: shown as what it said, never as the plan.
@@ -1442,7 +1506,7 @@
         + '<button class="small secondary" data-plan-reject="' + escapeHtml(p.id) + '">Reject</button>';
     }
     if (p.state === "planning") h += '<button class="small secondary" data-plan-reject="' + escapeHtml(p.id) + '">Stop</button>';
-    if (p.state === "approved") h += '<div class="hint">Running as a job: see Jobs below.</div>';
+    if (p.state === "approved") h += '<div class="hint">' + (p.workflowId ? "Running as a workflow: see Workflows below." : "Running as a job: see Jobs below.") + "</div>";
     return h + "</div>";
   }
   async function refreshPlans() {

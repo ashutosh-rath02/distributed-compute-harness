@@ -62,10 +62,12 @@ func (s *Server) reconcileWorkloads(ctx context.Context) {
 			s.keepAwakeTick(time.Now())
 			s.reconcileOnce(ctx)
 			s.advanceJobs(ctx)
+			s.advanceWorkflows(ctx)
 			s.dispatchQueued(ctx) // also catches requeue backoffs expiring
 			s.sweepGrants()
 		case <-s.dispatchKick:
 			s.advanceJobs(ctx)
+			s.advanceWorkflows(ctx)
 			s.dispatchQueued(ctx)
 		}
 	}

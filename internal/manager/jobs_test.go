@@ -130,7 +130,7 @@ func TestDispatchPassNeverOversubscribes(t *testing.T) {
 // future inputs) must survive GC; a finished job's are ordinary.
 func TestJobArtifactsStayLiveWhileTheJobRuns(t *testing.T) {
 	s := newReconcileTestServer(NewRegistry(), NewWorkloadRegistry())
-	s.jobs = newJobTable()
+	s.jobs, s.workflows = newJobTable(), newWorkflowTable()
 	in, shared, part := "aa", "bb", "cc"
 	job := domain.Job{ID: "j", State: domain.JobRunning, MaxAttempts: 1,
 		Tasks:  []domain.TaskSpec{{Command: "x", Inputs: []domain.ArtifactRef{{Name: "in", SHA256: in}}}},

@@ -57,6 +57,10 @@ type Job struct {
 	Error       string     `json:"error,omitempty"`
 	CreatedAt   time.Time  `json:"createdAt"`
 	FinishedAt  time.Time  `json:"finishedAt,omitempty"`
+	// Workflow and Stage (from 0) are set on a workflow stage's job
+	// (workflow.go): the workflow's progress is derived from them.
+	Workflow WorkflowID `json:"workflow,omitempty"`
+	Stage    int        `json:"stage,omitempty"`
 }
 
 // ReduceTask is the task key of a job's fan-in step.

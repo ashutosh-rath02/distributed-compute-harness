@@ -122,6 +122,10 @@ func (s *Server) toNodeView(rec *NodeRecord, relations map[domain.NodeID]hostRel
 //	GET  /jobs                       list jobs with progress counts
 //	GET  /jobs/{id}                  one job: every task's state, attempts, node, outputs
 //	POST /jobs/{id}/cancel           cancel a job and its in-flight attempts
+//	POST /workflows                  submit a workflow: steps run in order, each on the step before's results (workflows.go)
+//	GET  /workflows                  list workflows with each step's progress
+//	GET  /workflows/{id}             one workflow: its steps, their jobs and results
+//	POST /workflows/{id}/cancel      cancel a workflow and its running step's job
 //	GET  /ai-info                    the OpenAI-compatible API's base URL and AI key, for setting up apps
 //	GET  /v1/models                  OpenAI-compatible: the models READY devices can chat with (openai.go)
 //	POST /v1/chat/completions        OpenAI-compatible chat, streamed or not; also takes the AI key
@@ -188,6 +192,10 @@ func (s *Server) NewHTTPHandler() http.Handler {
 	mux.HandleFunc("GET /jobs", s.apiListJobs)
 	mux.HandleFunc("GET /jobs/{id}", s.apiGetJob)
 	mux.HandleFunc("POST /jobs/{id}/cancel", s.apiCancelJob)
+	mux.HandleFunc("POST /workflows", s.apiPostWorkflow)
+	mux.HandleFunc("GET /workflows", s.apiListWorkflows)
+	mux.HandleFunc("GET /workflows/{id}", s.apiGetWorkflow)
+	mux.HandleFunc("POST /workflows/{id}/cancel", s.apiCancelWorkflow)
 	mux.HandleFunc("POST /plans", s.apiPostPlan)
 	mux.HandleFunc("GET /plans", s.apiListPlans)
 	mux.HandleFunc("GET /plans/{id}", s.apiGetPlan)
