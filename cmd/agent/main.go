@@ -49,6 +49,7 @@ func main() {
 	deviceStateFile := flag.String("device-state-file", "", "a file another program keeps current with this device's charging and screen state (the Android app writes one); it overrides what the agent reads itself while it is fresh")
 	priority := flag.String("priority", "low", "low: run tasks below normal priority, so the owner's own apps come first; normal: don't")
 	llamaDir := flag.String("llama-cpp-dir", agent.DefaultLlamaCppDir(), "where this device's own llama.cpp build is (ggml-rpc-server, llama-server): lets it take part in models split across devices. Never downloaded by the agent")
+	toolsDir := flag.String("tools-dir", agent.DefaultToolsDir(), "where this device's own ffmpeg, whisper.cpp (whisper-cli, models in models/ggml-<name>.bin), poppler (pdftotext, pdftoppm) and tesseract are, for converting media, transcribing and reading documents; standard install locations and PATH are searched too. Never downloaded by the agent")
 	keepAwake := flag.Bool("keep-awake", true, "ask the OS not to sleep while a task runs here (it never blocks closing the lid or choosing Sleep)")
 	noSelfUpdate := flag.Bool("no-self-update", false, "don't offer self-update (this binary can't be replaced in place; it is updated some other way, e.g. with the Android app)")
 	appAPK := flag.String("app-apk", "", "the installed app this agent is part of (the Android app passes its own APK): its hash tells the manager which app version runs here")
@@ -151,6 +152,8 @@ func main() {
 		DeviceStateFile:      *deviceStateFile,
 		KeepAwake:            *keepAwake,
 		LlamaCppDir:          *llamaDir,
+		ToolsDir:             *toolsDir,
+		ToolsSearchSystem:    true,
 	}
 	switch *priority {
 	case "low":

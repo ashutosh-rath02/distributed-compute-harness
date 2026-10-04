@@ -264,7 +264,10 @@ func (s *Server) plannableTypes() []plannable {
 					choices[p.Name] = map[string]bool{}
 				}
 				for _, v := range attrValues(rec, t.Name, p.ChoicesAttr) {
-					choices[p.Name][catalog.NormalizeModel(v)] = true
+					if p.ChoicesAttr == catalog.AttrModels {
+						v = catalog.NormalizeModel(v)
+					}
+					choices[p.Name][v] = true
 				}
 			}
 		}

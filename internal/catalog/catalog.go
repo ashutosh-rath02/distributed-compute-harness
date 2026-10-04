@@ -301,7 +301,101 @@ var builtins = []Type{
 		Name: "llm.inventory", Version: "1", Title: "List local AI models",
 		Description: "List the models the device's local runtime (Ollama) has.",
 	},
+	// Home media and documents (roadmap-after-9 item 14). image.upscale is
+	// pure Go; the others run a program the device owner installed
+	// (ffmpeg, whisper.cpp, poppler, tesseract) with arguments built by the
+	// agent, and are offered only where it is found (tasks/tools.go).
+	{
+		Name: "image.upscale", Version: "1", Title: "Upscale an image",
+		Description: "Enlarge a JPEG, PNG or GIF 2, 3 or 4 times with a smooth, sharp resampler (Catmull-Rom). The result may have at most 40 million pixels.",
+		Params: []Param{
+			{Name: "scale", Type: Int, Title: "Scale (times)", Default: "2", Min: num(2), Max: num(4)},
+			{Name: "format", Type: Enum, Title: "Output format", Default: "png", Enum: []string{"png", "jpg"}},
+			{Name: "quality", Type: Int, Title: "JPEG quality", Default: "92", Min: num(1), Max: num(100)},
+		},
+		Inputs:                   Inputs{Min: 1, Max: 1, Extensions: []string{"jpg", "jpeg", "png", "gif"}, Description: "one image"},
+		Outputs:                  []string{"{{in.stem}}-x{{scale}}.{{format}}"},
+		Requirements:             domain.ResourceRequirements{MinMemoryBytes: 512 << 20},
+		DefaultMaxRuntimeSeconds: 600,
+	},
+	{
+		Name: "media.transcode", Version: "1", Title: "Convert a video or audio file",
+		Description: "Convert with ffmpeg to a fixed preset: 720p.mp4 or 1080p.mp4 (H.264 video, never enlarged), audio.mp3, audio.m4a, or clip.gif (a short animated GIF, at most 30 seconds). Optionally only a part: start and length in seconds. Offered by devices that have ffmpeg.",
+		Params: []Param{
+			{Name: "preset", Type: Enum, Title: "Convert to", Default: "720p.mp4", Enum: TranscodePresets},
+			{Name: "start", Type: Int, Title: "Start at (seconds)", Default: "0", Min: num(0), Max: num(86400)},
+			{Name: "duration", Type: Int, Title: "Length (seconds, 0 = to the end; a GIF: 10)", Default: "0", Min: num(0), Max: num(14400)},
+		},
+		Inputs:       Inputs{Min: 1, Max: 1, Extensions: MediaExtensions, Description: "one video or audio file"},
+		Outputs:      []string{"{{in.stem}}-{{preset}}"},
+		Requirements: domain.ResourceRequirements{MinMemoryBytes: 512 << 20},
+		// ffmpeg uses every core: one at a time per device.
+		MaxPerNode:               1,
+		DefaultMaxRuntimeSeconds: 3600,
+	},
+	{
+		Name: "audio.transcribe", Version: "1", Title: "Transcribe speech to text",
+		Description: "Write down what is said in a recording with whisper.cpp, on the device: transcript.txt and subtitles (transcript.srt). A .wav works anywhere it is offered; other audio and video files need ffmpeg on that device too. Offered by devices with whisper.cpp and a model.",
+		Params: []Param{
+			{Name: "model", Type: String, Title: "Model", Required: true, Pattern: WhisperModelPattern, MaxLength: 64, ChoicesAttr: AttrWhisperModels},
+			{Name: "language", Type: String, Title: "Spoken language (auto, or a code like en, de, fr)", Default: "auto", Pattern: `auto|[a-z]{2,3}`},
+		},
+		Inputs:       Inputs{Min: 1, Max: 1, Extensions: AudioExtensions, Description: "one recording"},
+		Outputs:      []string{"transcript.txt", "transcript.srt"},
+		Requirements: domain.ResourceRequirements{MinMemoryBytes: 1 << 30},
+		MaxPerNode:   1,
+		// Segments are reported as they are recognized.
+		Streams:                  true,
+		DefaultMaxRuntimeSeconds: 3600,
+	},
+	{
+		Name: "doc.text", Version: "1", Title: "Get the text out of a PDF or picture",
+		Description: "Write a PDF's or a scanned page's text to text.txt. text: the PDF's own text (poppler's pdftotext); ocr: recognize it in the picture or the PDF's pages (tesseract); auto: the PDF's text where it has some, recognition otherwise. Offered by devices with pdftotext or tesseract.",
+		Params: []Param{
+			{Name: "method", Type: Enum, Title: "How to read it", Default: "auto", Enum: []string{"auto", "text", "ocr"}, ChoicesAttr: AttrDocMethods},
+			{Name: "language", Type: String, Title: "Language for recognition (e.g. eng, deu, eng+fra)", Default: "eng", Pattern: OCRLanguagePattern},
+		},
+		Inputs:                   Inputs{Min: 1, Max: 1, Extensions: []string{"pdf", "png", "jpg", "jpeg"}, Description: "one PDF or picture"},
+		Outputs:                  []string{"text.txt"},
+		Requirements:             domain.ResourceRequirements{MinMemoryBytes: 512 << 20},
+		DefaultMaxRuntimeSeconds: 1800,
+	},
 }
+
+// TranscodePresets are media.transcode's fixed conversions, each named
+// after the file it makes (so the output name carries its extension).
+var TranscodePresets = []string{"720p.mp4", "1080p.mp4", "audio.mp3", "audio.m4a", "clip.gif"}
+
+// MediaExtensions are the files media.transcode takes; AudioExtensions
+// the recordings audio.transcribe takes (video too: its sound).
+var (
+	MediaExtensions = []string{"mp4", "m4v", "mov", "mkv", "webm", "avi", "mpg", "mpeg", "ts", "mts", "m2ts", "flv", "wmv", "3gp", "gif",
+		"mp3", "m4a", "aac", "wav", "flac", "ogg", "opus", "wma"}
+	AudioExtensions = []string{"wav", "mp3", "m4a", "aac", "flac", "ogg", "opus", "wma", "webm", "mp4", "m4v", "mov", "mkv"}
+)
+
+// AttrFFmpegVersion is the ffmpeg build a device's media.transcode runs.
+const AttrFFmpegVersion = "ffmpegVersion"
+
+// AttrWhisperModels lists the whisper.cpp models a device has, by name
+// (ggml-<name>.bin in its tools folder's models/). Matched exactly.
+const AttrWhisperModels = "whisperModels"
+
+// WhisperModelPattern matches a whisper.cpp model name ("base.en",
+// "large-v3-turbo-q5_0").
+const WhisperModelPattern = `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`
+
+// AttrDocMethods lists the doc.text methods a device can run (auto, text,
+// ocr), so work that needs recognition goes where tesseract is;
+// AttrDocTools names the programs it found, for people.
+const (
+	AttrDocMethods = "docMethods"
+	AttrDocTools   = "docTools"
+)
+
+// OCRLanguagePattern matches tesseract languages: "eng", "chi_sim",
+// "eng+deu" (up to four).
+const OCRLanguagePattern = `[a-z]{3}(_[a-z]{3,4})?(\+[a-z]{3}(_[a-z]{3,4})?){0,3}`
 
 // AttrModels is the capability attribute listing a node's local models
 // (comma-separated, normalized by NormalizeModel).
@@ -347,8 +441,9 @@ func NormalizeModel(name string) string {
 }
 
 // Offers reports whether a node whose capability carries attrs can take
-// params for t: every parameter with ChoicesAttr must be in that list.
-// (False with the missing value as the reason.)
+// params for t: every parameter with ChoicesAttr must be in that list
+// (models compared in their normal form, other values exactly). (False
+// with the missing value as the reason.)
 func (t Type) Offers(attrs map[string]string, params map[string]string) (bool, string) {
 	for _, p := range t.Params {
 		if p.Needs != "" && params[p.Name] != "" && attrs[p.Needs] == "" {
@@ -357,10 +452,14 @@ func (t Type) Offers(attrs map[string]string, params map[string]string) (bool, s
 		if p.ChoicesAttr == "" {
 			continue
 		}
-		want := NormalizeModel(params[p.Name])
+		norm := func(v string) string { return v }
+		if p.ChoicesAttr == AttrModels {
+			norm = NormalizeModel
+		}
+		want := norm(params[p.Name])
 		have := false
 		for _, v := range strings.Split(attrs[p.ChoicesAttr], ",") {
-			have = have || (v != "" && NormalizeModel(v) == want)
+			have = have || (v != "" && norm(v) == want)
 		}
 		if !have {
 			return false, fmt.Sprintf("has no %s %q", p.Name, params[p.Name])
