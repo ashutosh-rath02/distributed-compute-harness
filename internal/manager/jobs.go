@@ -290,7 +290,9 @@ func (s *Server) checkJob(spec *JobSpec) error {
 			return fmt.Errorf("%s: %w", label, err)
 		}
 		t.Inputs = ws.Inputs
-		w := domain.Workload{Target: t.Target, Pinned: t.Target != "", Capability: t.Capability, Requirements: t.Requirements, Inputs: append(t.Inputs, parts...), Outputs: t.Outputs, TimeoutSeconds: s.policyFor(t.Capability).MaxRuntimeSeconds}
+		// Params too: placement matches a model parameter against the
+		// devices' models (without them every model task read as model "").
+		w := domain.Workload{Target: t.Target, Pinned: t.Target != "", Capability: t.Capability, Params: t.Params, Requirements: t.Requirements, Inputs: append(t.Inputs, parts...), Outputs: t.Outputs, TimeoutSeconds: s.policyFor(t.Capability).MaxRuntimeSeconds}
 		if _, _, err := s.resolve(placementFor(w), usage); err != nil && !errors.Is(err, errNoRoom) {
 			return fmt.Errorf("%s: %w", label, err)
 		}
@@ -312,6 +314,9 @@ func (s *Server) checkJob(spec *JobSpec) error {
 			for _, out := range t.Outputs {
 				parts = append(parts, domain.ArtifactRef{Name: domain.ReducePartName(domain.TaskKey(i), out), SHA256: placeholder})
 			}
+		}
+		if namesParts(r.Capability) { // taskindex.go
+			parts = append(parts, domain.ArtifactRef{Name: catalog.TaskIndexName, SHA256: placeholder})
 		}
 		if err := check("reduce", &r, parts[len(r.Inputs):]); err != nil {
 			return err
@@ -441,6 +446,14 @@ func (s *Server) advanceJob(ctx context.Context, job domain.Job, byTask map[stri
 			}
 		}
 		if *budget > 0 {
+			if namesParts(job.Reduce.Capability) { // taskindex.go
+				index, err := s.storeTaskIndex(job)
+				if err != nil {
+					s.jobs.setWaiting(job.ID, domain.ReduceTask, err.Error())
+					return
+				}
+				parts = append(parts, index)
+			}
 			*budget--
 			s.submitAttempt(ctx, job, domain.ReduceTask, *job.Reduce, parts, rp)
 		}

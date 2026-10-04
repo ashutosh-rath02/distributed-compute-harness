@@ -141,7 +141,7 @@ func runTool(t *testing.T, r *Registry, name domain.CapabilityName, params map[s
 	return env, stdout.String(), stderr.String(), err
 }
 
-func advertised(r *Registry) map[domain.CapabilityName]map[string]string {
+func toolsAdvertised(r *Registry) map[domain.CapabilityName]map[string]string {
 	out := map[domain.CapabilityName]map[string]string{}
 	for _, c := range r.Capabilities(context.Background()) {
 		out[c.Name] = c.Attributes
@@ -153,7 +153,7 @@ func TestToolTypesAreOfferedOnlyWhereTheirProgramsAre(t *testing.T) {
 	tool := []domain.CapabilityName{"media.transcode", "audio.transcribe", "doc.text"}
 	// No tools folder and no system search: nothing, whatever this
 	// machine has installed.
-	none := advertised(NewRegistry(Options{OllamaURL: "127.0.0.1:1"}))
+	none := toolsAdvertised(NewRegistry(Options{OllamaURL: "127.0.0.1:1"}))
 	for _, n := range tool {
 		if _, ok := none[n]; ok {
 			t.Fatalf("%s offered with no tools", n)
@@ -165,7 +165,7 @@ func TestToolTypesAreOfferedOnlyWhereTheirProgramsAre(t *testing.T) {
 
 	// ffmpeg in an unpacked release's bin, one folder down.
 	dir := toolsDir(t, "ffmpeg-7.1-essentials_build/bin", "ffmpeg")
-	got := advertised(toolRegistry(dir))
+	got := toolsAdvertised(toolRegistry(dir))
 	if got["media.transcode"][catalog.AttrFFmpegVersion] != "7.1-fake" {
 		t.Fatalf("media.transcode: %v", got["media.transcode"])
 	}
@@ -185,13 +185,13 @@ func TestToolTypesAreOfferedOnlyWhereTheirProgramsAre(t *testing.T) {
 	dir = toolsDir(t, "", "ffmpeg")
 	os.WriteFile(filepath.Join(dir, "ffmpeg.broken"), nil, 0o600)
 	broken := toolRegistry(dir)
-	if _, ok := advertised(broken)["media.transcode"]; ok {
+	if _, ok := toolsAdvertised(broken)["media.transcode"]; ok {
 		t.Fatal("a broken ffmpeg was offered")
 	}
 	// Fixed (say, its DLLs copied in afterwards): seen at the next look,
 	// not only after a restart.
 	os.Remove(filepath.Join(dir, "ffmpeg.broken"))
-	if _, ok := advertised(broken)["media.transcode"]; !ok {
+	if _, ok := toolsAdvertised(broken)["media.transcode"]; !ok {
 		t.Fatal("a fixed ffmpeg wasn't offered")
 	}
 
@@ -201,12 +201,12 @@ func TestToolTypesAreOfferedOnlyWhereTheirProgramsAre(t *testing.T) {
 	os.MkdirAll(models, 0o755)
 	os.WriteFile(filepath.Join(models, "ggml-silero-v5.1.2.bin"), []byte("vad"), 0o600)
 	os.WriteFile(filepath.Join(models, "notes.txt"), []byte("x"), 0o600)
-	if _, ok := advertised(toolRegistry(dir))["audio.transcribe"]; ok {
+	if _, ok := toolsAdvertised(toolRegistry(dir))["audio.transcribe"]; ok {
 		t.Fatal("audio.transcribe offered without a model")
 	}
 	os.WriteFile(filepath.Join(models, "ggml-small.bin"), []byte("model"), 0o600)
 	os.WriteFile(filepath.Join(models, "ggml-base.en.bin"), []byte("model"), 0o600)
-	if got := advertised(toolRegistry(dir))["audio.transcribe"][catalog.AttrWhisperModels]; got != "base.en,small" {
+	if got := toolsAdvertised(toolRegistry(dir))["audio.transcribe"][catalog.AttrWhisperModels]; got != "base.en,small" {
 		t.Fatalf("whisper models %q", got)
 	}
 
@@ -220,12 +220,12 @@ func TestToolTypesAreOfferedOnlyWhereTheirProgramsAre(t *testing.T) {
 		{[]string{"pdftotext", "tesseract"}, "ocr,text", "pdftotext,tesseract"},
 		{[]string{"pdftotext", "pdftoppm", "tesseract"}, "auto,ocr,text", "pdftoppm,pdftotext,tesseract"},
 	} {
-		attrs, ok := advertised(toolRegistry(toolsDir(t, "", c.tools...)))["doc.text"]
+		attrs, ok := toolsAdvertised(toolRegistry(toolsDir(t, "", c.tools...)))["doc.text"]
 		if !ok || attrs[catalog.AttrDocMethods] != c.methods || attrs[catalog.AttrDocTools] != c.found {
 			t.Errorf("%v: offered %v %v, want methods %q", c.tools, ok, attrs, c.methods)
 		}
 	}
-	if _, ok := advertised(toolRegistry(toolsDir(t, "", "pdftoppm")))["doc.text"]; ok {
+	if _, ok := toolsAdvertised(toolRegistry(toolsDir(t, "", "pdftoppm")))["doc.text"]; ok {
 		t.Fatal("doc.text offered with only pdftoppm")
 	}
 }

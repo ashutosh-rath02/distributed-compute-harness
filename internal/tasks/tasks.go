@@ -93,6 +93,7 @@ func builtinHandlers() map[domain.CapabilityName]Handler {
 		"render.fractal":  renderFractal{},
 		"image.stack":     imageStack{},
 		"image.upscale":   imageUpscale{},
+		"report.collect":  reportCollect{},
 	}
 }
 
@@ -113,6 +114,8 @@ func NewRegistry(opts Options) *Registry {
 	r.handlers["llm.pull"] = ollamaPull{o}
 	r.handlers["llm.remove"] = ollamaRemove{o}
 	r.handlers["llm.inventory"] = ollamaInventory{o}
+	r.handlers["llm.classify"] = ollamaClassify{o}
+	r.handlers["llm.embed"] = ollamaEmbed{o}
 	r.ollama = o
 	t := newTools(opts)
 	r.handlers["media.transcode"] = mediaTranscode{t}

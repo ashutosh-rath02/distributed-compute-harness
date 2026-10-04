@@ -1079,10 +1079,17 @@
       document.getElementById("typedFiles").accept = exts.join(",");
       document.getElementById("typedFilesLabel").textContent = "Input files (" + t.inputs.description
         + (exts.length ? ": " + exts.join(", ") : "") + ")";
-      document.getElementById("typedBatchBox").hidden = t.inputs.max !== 1;
-      if (t.inputs.max !== 1) document.getElementById("typedBatch").checked = false;
+      document.getElementById("typedBatchBox").hidden = !runsPerFile(t);
+      if (!runsPerFile(t)) document.getElementById("typedBatch").checked = false;
     }
     renderReduceBox();
+  }
+
+  // A type can run once per file (a job) when one run takes one file and
+  // it isn't itself a combine step: a resize, or a summary prompt per
+  // document (llm.generate takes 0-16 files).
+  function runsPerFile(t) {
+    return !!t.inputs && t.inputs.min <= 1 && t.inputs.max >= 1 && !t.reduce;
   }
 
   function renderReduceBox() {
@@ -1138,10 +1145,11 @@
     const params = readParams(document.getElementById("typedParams"));
     const target = document.getElementById("typedTarget").value;
     const files = Array.from(document.getElementById("typedFiles").files || []);
-    const batch = document.getElementById("typedBatch").checked && t.inputs.max === 1;
+    const batch = document.getElementById("typedBatch").checked && runsPerFile(t);
     button.disabled = true;
     try {
       if (files.length < (t.inputs.min || 0)) throw new Error("Pick the input file(s): this task needs at least " + t.inputs.min + ".");
+      if (batch && !files.length) throw new Error("Pick the files to run it on: once per file needs at least one.");
       const inputs = [];
       for (const f of files) inputs.push(await uploadFile(f, progress));
       let resp;

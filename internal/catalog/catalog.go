@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"home-harness/internal/domain"
 )
@@ -68,6 +69,9 @@ type Param struct {
 	// AnswerFormat: the value is "json" or a JSON object (a JSON schema
 	// the answer must follow).
 	AnswerFormat bool `json:"answerFormat,omitempty"`
+	// LabelList: the value is a comma-separated list of labels
+	// (ParseLabels), kept as their canonical form.
+	LabelList bool `json:"labelList,omitempty"`
 }
 
 // Inputs bounds the files a task type takes.
@@ -117,6 +121,10 @@ type Type struct {
 	// DefaultMaxRuntimeSeconds is the per-attempt limit when policy sets
 	// none for this type.
 	DefaultMaxRuntimeSeconds int `json:"defaultMaxRuntimeSeconds,omitempty"`
+	// PartNames: as a job's reduce, the type also gets TaskIndexName, which
+	// names each task, so its result can say which file a part came from
+	// (a part's path, parts/<task>/<name>, only numbers it).
+	PartNames bool `json:"partNames,omitempty"`
 }
 
 func num(v float64) *float64 { return &v }
@@ -360,6 +368,91 @@ var builtins = []Type{
 		Requirements:             domain.ResourceRequirements{MinMemoryBytes: 512 << 20},
 		DefaultMaxRuntimeSeconds: 1800,
 	},
+	// Batch AI over a folder (roadmap-after-9 item 11): run once per file
+	// as a job, then report.collect joins the results.
+	{
+		Name: "llm.classify", Version: "1", Title: "Sort a text file into one of your labels",
+		Description: "A local AI model (Ollama) reads one text file and picks the one label that fits it best from yours (e.g. invoice, receipt, letter); writes label.json. Run it once per file as a job and collect the labels into one table with report.collect.",
+		Params: []Param{
+			{Name: "model", Type: String, Title: "Model", Required: true, Pattern: ModelPattern, MaxLength: 128, ChoicesAttr: AttrModels},
+			{Name: "labels", Type: String, Title: "Labels (2-32, separated by commas)", Required: true, MaxLength: 2048, LabelList: true},
+		},
+		Inputs:                   Inputs{Min: 1, Max: 1, Description: "one text file (UTF-8, at most 32 KiB)"},
+		Outputs:                  []string{"label.json"},
+		Requirements:             domain.ResourceRequirements{MinMemoryBytes: 256 << 20},
+		MaxPerNode:               1,
+		DefaultMaxRuntimeSeconds: 600,
+	},
+	{
+		Name: "llm.embed", Version: "1", Title: "Embed text with a local AI model",
+		Description: "Turn text files into embeddings: lists of numbers that place texts with similar meaning close together, for search and grouping. Needs an embedding model (Ollama, e.g. embeddinggemma or nomic-embed-text) on some device; writes embeddings.json. Each file must fit the model's context.",
+		Params: []Param{
+			// The llm.embed capability lists only the device's embedding
+			// models, so placement matches the model against those.
+			{Name: "model", Type: String, Title: "Embedding model", Required: true, Pattern: ModelPattern, MaxLength: 128, ChoicesAttr: AttrModels},
+		},
+		Inputs:                   Inputs{Min: 1, Max: 16, Description: "text files (UTF-8, at most 32 KiB each)"},
+		Outputs:                  []string{"embeddings.json"},
+		Requirements:             domain.ResourceRequirements{MinMemoryBytes: 256 << 20},
+		MaxPerNode:               1,
+		Streams:                  true,
+		DefaultMaxRuntimeSeconds: 600,
+	},
+	{
+		Name: "report.collect", Version: "1", Title: "Collect results into one report",
+		Description: "Join a job's per-file results into one file, by the file each came from: answers and summaries (.txt), labels (label.json) and embeddings (embeddings.json). The report's extension picks the format: .md (Markdown), .csv (a table) or .json; embeddings join into .json only. Use it as the combine step of a per-file AI job.",
+		Params: []Param{
+			{Name: "name", Type: String, Title: "Report file (.md, .csv or .json)", Default: "report.md", Pattern: `[A-Za-z0-9._-]{1,60}\.(md|csv|json)`},
+		},
+		Inputs:    Inputs{Min: 1, Max: domain.MaxWorkloadInputs, Extensions: []string{"txt", "md", "json"}, Description: "per-file results: .txt answers, label.json, embeddings.json"},
+		Outputs:   []string{"{{name}}"},
+		Reduce:    true,
+		PartNames: true,
+	},
+}
+
+// TaskIndexName is the extra input a PartNames reduce gets: JSON
+// {"tasks": [{"key": "0000", "name": "a.txt"}, ...]}, each task's key and
+// the name it was given (the file it ran on, for a job run per file).
+const TaskIndexName = "parts/tasks.json"
+
+// Label bounds (llm.classify's labels).
+const (
+	MaxLabels     = 32
+	MaxLabelBytes = 60
+)
+
+// ParseLabels reads a comma-separated list of labels: 2-MaxLabels of
+// them, distinct (ignoring case), each up to MaxLabelBytes of letters,
+// digits, spaces and _.-'&/(), starting with a letter or digit — so a
+// label is never mistaken for an option or a spreadsheet formula.
+func ParseLabels(v string) ([]string, error) {
+	var labels []string
+	seen := map[string]bool{}
+	for _, l := range strings.Split(v, ",") {
+		l = strings.TrimSpace(l)
+		if l == "" {
+			return nil, errors.New("an empty label (two commas in a row?)")
+		}
+		if len(l) > MaxLabelBytes {
+			return nil, fmt.Errorf("label %q is longer than %d bytes", l, MaxLabelBytes)
+		}
+		for i, r := range l {
+			ok := unicode.IsLetter(r) || unicode.IsDigit(r) || (i > 0 && strings.ContainsRune(" _.-'&/()", r))
+			if !ok {
+				return nil, fmt.Errorf("label %q: use letters, digits, spaces and _.-'&/(), starting with a letter or digit", l)
+			}
+		}
+		if seen[strings.ToLower(l)] {
+			return nil, fmt.Errorf("label %q is given twice", l)
+		}
+		seen[strings.ToLower(l)] = true
+		labels = append(labels, l)
+	}
+	if len(labels) < 2 || len(labels) > MaxLabels {
+		return nil, fmt.Errorf("give 2-%d labels separated by commas, not %d", MaxLabels, len(labels))
+	}
+	return labels, nil
 }
 
 // TranscodePresets are media.transcode's fixed conversions, each named
@@ -625,6 +718,13 @@ func (p Param) check(v string) (string, error) {
 		}
 		if p.AnswerFormat {
 			return answerFormat(v)
+		}
+		if p.LabelList {
+			labels, err := ParseLabels(v)
+			if err != nil {
+				return "", err
+			}
+			return strings.Join(labels, ","), nil
 		}
 		return v, nil
 	}
