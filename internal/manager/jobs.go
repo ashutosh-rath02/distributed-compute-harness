@@ -224,6 +224,8 @@ type JobSpec struct {
 	Tasks       []domain.TaskSpec
 	Reduce      *domain.TaskSpec
 	MaxAttempts int
+	// Priority is every attempt's (empty = normal).
+	Priority domain.Priority
 }
 
 // SubmitJob validates and records a job; the reconcile loop submits its
@@ -241,7 +243,7 @@ func (s *Server) SubmitJob(ctx context.Context, spec JobSpec) (domain.Job, error
 	}
 	job := domain.Job{
 		ID: domain.JobID(id), Name: spec.Name, Tasks: spec.Tasks, Reduce: spec.Reduce,
-		MaxAttempts: spec.MaxAttempts, State: domain.JobRunning, CreatedAt: time.Now().UTC(),
+		MaxAttempts: spec.MaxAttempts, State: domain.JobRunning, CreatedAt: time.Now().UTC(), Priority: spec.Priority,
 	}
 	if s.store != nil {
 		if err := s.store.UpsertJob(job); err != nil {
@@ -268,6 +270,11 @@ func (s *Server) checkJob(spec *JobSpec) error {
 	if spec.MaxAttempts < 1 || spec.MaxAttempts > domain.MaxJobAttempts {
 		return fmt.Errorf("%w: maxAttempts must be 1-%d", ErrInvalidWorkload, domain.MaxJobAttempts)
 	}
+	priority, err := domain.ParsePriority(string(spec.Priority))
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidWorkload, err)
+	}
+	spec.Priority = priority
 	usage := s.Workloads.usageByNode()
 	// check validates one task as Submit will (policy, typed compile,
 	// files) and that some node could ever run it. parts stands in for a
@@ -464,7 +471,7 @@ func (s *Server) submitAttempt(ctx context.Context, job domain.Job, key string, 
 	spec := WorkloadSpec{
 		Target: t.Target, Command: t.Command, Args: t.Args, Capability: t.Capability, Params: t.Params,
 		Requirements: t.Requirements, RestartPolicy: domain.RestartNever, Inputs: inputs, Outputs: t.Outputs,
-		Job: job.ID, Task: key, Attempt: tp.attempts + 1, AvoidNodes: tp.avoid,
+		Job: job.ID, Task: key, Attempt: tp.attempts + 1, AvoidNodes: tp.avoid, Priority: job.Priority,
 	}
 	if _, typed := catalog.Lookup(t.Capability); typed {
 		spec.Outputs = nil // the type names them again for these inputs

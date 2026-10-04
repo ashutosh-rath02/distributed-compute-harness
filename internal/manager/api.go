@@ -379,6 +379,8 @@ type workloadSummaryView struct {
 	Capability domain.CapabilityName `json:"capability,omitempty"`
 	// Waiting says why a QUEUED workload hasn't started yet.
 	Waiting string `json:"waiting,omitempty"`
+	// Priority is high, normal or low (queue.go).
+	Priority domain.Priority `json:"priority"`
 }
 
 // workloadView is the JSON shape for a single workload — the summary plus
@@ -432,6 +434,7 @@ func toWorkloadSummaryView(rec WorkloadRecord) workloadSummaryView {
 		State:      rec.Status.State,
 		ExitCode:   exitCode(rec.Status),
 		Capability: capability,
+		Priority:   rec.Workload.Priority.Canonical(),
 	}
 	if rec.Status.State == domain.WorkloadQueued {
 		v.Waiting = rec.waiting
@@ -487,6 +490,8 @@ type workloadRequest struct {
 		SHA256 string `json:"sha256"`
 	} `json:"inputs,omitempty"`
 	Outputs []string `json:"outputs,omitempty"`
+	// Priority: high, normal (default) or low.
+	Priority string `json:"priority,omitempty"`
 }
 
 func (s *Server) apiPostWorkload(w http.ResponseWriter, r *http.Request) {
@@ -513,6 +518,7 @@ func (s *Server) apiPostWorkload(w http.ResponseWriter, r *http.Request) {
 	spec := WorkloadSpec{
 		Target: req.Target, Command: req.Command, Args: req.Args, Capability: domain.CapabilityName(req.Capability),
 		Params: req.Params, Requirements: req.Requirements, RestartPolicy: restartPolicy, Outputs: req.Outputs,
+		Priority: domain.Priority(req.Priority),
 	}
 	for _, in := range req.Inputs {
 		spec.Inputs = append(spec.Inputs, domain.ArtifactRef{Name: in.Name, SHA256: in.SHA256})

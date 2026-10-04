@@ -33,6 +33,9 @@ type NodeRecord struct {
 	// a workload, whichever is first (queue.go).
 	slotsN    int
 	busyUntil time.Time
+	// cached is which input files the node says it holds (locality.go):
+	// SHA-256 prefixes, replaced whole by each report, never mutated.
+	cached map[string]struct{}
 	// LastMetrics is the most recently reported live CPU/memory figures
 	// from a HEARTBEAT, distinct from the static Resources declared at
 	// registration (v1.md §13's runtime vs persistent state split).
@@ -118,6 +121,7 @@ func (r *Registry) Upsert(manifest domain.Manifest, conn domain.Conn) (rec *Node
 	existing.GPUs = manifest.GPUs
 	existing.slotsN = manifest.Slots()
 	existing.busyUntil = time.Time{} // a fresh process starts with free slots
+	existing.cached = nil            // until this connection reports it
 	existing.Conn = conn
 	// Not READY until the manager has acknowledged the registration on
 	// this connection (handleRegister), even if the old one still was.

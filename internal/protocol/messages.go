@@ -34,6 +34,9 @@ type RegisterPayload struct {
 	// operator's availability rule applies from the moment it connects,
 	// before its first heartbeat (domain.FeatureAvailability).
 	Use *domain.DeviceUse `json:"use,omitempty"`
+	// Cache is which input files the agent holds (domain.FeatureInputCache),
+	// so placement can prefer it for work on them from the start.
+	Cache *domain.InputCacheReport `json:"cache,omitempty"`
 }
 
 // PairingCode is the short code a device and its manager both show while
@@ -81,6 +84,9 @@ type RegisterRejectPayload struct {
 // HeartbeatPayload carries the sending node's current runtime state.
 type HeartbeatPayload struct {
 	RuntimeState domain.RuntimeState `json:"runtimeState"`
+	// Cache replaces what the agent last said it holds
+	// (domain.FeatureInputCache); nil: unchanged since then.
+	Cache *domain.InputCacheReport `json:"cache,omitempty"`
 }
 
 // StateUpdatePayload is an out-of-band runtime state push (distinct from a

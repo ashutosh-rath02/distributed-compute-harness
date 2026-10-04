@@ -109,6 +109,22 @@ func selectNode(candidates []*NodeRecord, capability domain.CapabilityName, req 
 // slots. Whether work fits at all is hasRoom's and nodeFits' call; this
 // only ranks the nodes it fits on.
 func selectNodeWithUsage(candidates []*NodeRecord, usage map[domain.NodeID]nodeUsage, capability domain.CapabilityName, req domain.ResourceRequirements) (*NodeRecord, error) {
+	return selectNodeLocal(candidates, usage, nil, capability, req)
+}
+
+// selectNodeLocal is selectNodeWithUsage that, between equally busy nodes,
+// prefers the one already holding more bytes of the workload's input files
+// (local, by node: locality.go). The full order:
+//
+//  1. least busy: the smallest share of its slots in use;
+//  2. most bytes of the workload's inputs already on the node;
+//  3. most memory left after reservations;
+//  4. lowest NodeID.
+//
+// Spreading stays first on purpose: a job's tasks on one big file still go
+// to every device with a free slot, and the file's device only wins among
+// equals (on an idle fleet: the first task, or a second job on the file).
+func selectNodeLocal(candidates []*NodeRecord, usage map[domain.NodeID]nodeUsage, local map[domain.NodeID]int64, capability domain.CapabilityName, req domain.ResourceRequirements) (*NodeRecord, error) {
 	var best *NodeRecord
 	var reasons []string
 
@@ -132,12 +148,21 @@ func selectNodeWithUsage(candidates []*NodeRecord, usage map[domain.NodeID]nodeU
 		rf, bf := free(rec, ru), free(best, bu)
 		// running/slots compared without division.
 		rl, bl := ru.running*best.slots(), bu.running*rec.slots()
+		rh, bh := local[rec.Node.Identity.NodeID], local[best.Node.Identity.NodeID]
 		switch {
-		case rl < bl:
-			best = rec
-		case rl == bl && rf > bf:
-			best = rec
-		case rl == bl && rf == bf && rec.Node.Identity.NodeID < best.Node.Identity.NodeID:
+		case rl != bl:
+			if rl < bl {
+				best = rec
+			}
+		case rh != bh:
+			if rh > bh {
+				best = rec
+			}
+		case rf != bf:
+			if rf > bf {
+				best = rec
+			}
+		case rec.Node.Identity.NodeID < best.Node.Identity.NodeID:
 			best = rec
 		}
 	}

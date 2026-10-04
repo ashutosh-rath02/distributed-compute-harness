@@ -229,7 +229,11 @@ Commands:
                         run one typed task, e.g.
                           harnessctl do -in photo.jpg image.resize width=800
                           harnessctl do cpu.burn seconds=30
-  models                list the local AI models (Ollama) the fleet's devices
+                        run, invoke, do and map take -priority high|normal|low
+                        (default normal): when every device is busy, waiting
+                        high-priority work starts first; waiting raises it
+                        over time, and running work is never stopped
+  models               list the local AI models (Ollama) the fleet's devices
                         have, and where
   ask [-model M] [-in FILE ...] [-target ID] "question"
                         ask a local model on whichever device has it; the
@@ -342,11 +346,12 @@ func cmdRun(client *apiClient, args []string) error {
 	minCores := fs.Float64("min-cores", 0, "minimum declared CPU cores required on the target node")
 	maxCPU := fs.Float64("max-cpu", 0, "maximum acceptable live CPU load percent on the target node")
 	restart := fs.String("restart", "never", `restart policy: "never" (default), "on-failure", or "always" — a non-"never" policy makes this a v3 "service" the manager keeps restarting after it stops`)
+	priority := priorityFlag(fs)
 	var inputs, outputs fileList
 	fs.Var(&inputs, "in", `input file, repeatable: "name=path", "path" (named after its base name), or "name=sha256:<hex>" for a stored file`)
 	fs.Var(&outputs, "out", "output file the workload must produce in its working directory, repeatable (e.g. out/result.csv)")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: harnessctl run [-min-mem SIZE] [-min-cores N] [-max-cpu PCT] [-restart POLICY] [-in FILE ...] [-out NAME ...] <id|-> <command> [args...]")
+		fmt.Fprintln(os.Stderr, "usage: harnessctl run [-min-mem SIZE] [-min-cores N] [-max-cpu PCT] [-restart POLICY] [-priority high|normal|low] [-in FILE ...] [-out NAME ...] <id|-> <command> [args...]")
 	}
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -376,12 +381,16 @@ func cmdRun(client *apiClient, args []string) error {
 	if _, err := domain.ParseRestartPolicy(*restart); err != nil {
 		return err
 	}
+	prio, err := checkPriority(*priority)
+	if err != nil {
+		return err
+	}
 	in, err := client.resolveInputs(inputs)
 	if err != nil {
 		return err
 	}
 
-	return client.cmdRunWorkload(target, rest[1], rest[2:], "", nil, req, *restart, in, outputs)
+	return client.cmdRunWorkload(target, rest[1], rest[2:], "", nil, req, *restart, in, outputs, prio)
 }
 
 // cmdInvoke mirrors cmdRun's flag-parsing structure exactly, for a workload
@@ -394,8 +403,9 @@ func cmdInvoke(client *apiClient, args []string) error {
 	minCores := fs.Float64("min-cores", 0, "minimum declared CPU cores required on the target node")
 	maxCPU := fs.Float64("max-cpu", 0, "maximum acceptable live CPU load percent on the target node")
 	restart := fs.String("restart", "never", `restart policy: "never" (default), "on-failure", or "always"`)
+	priority := priorityFlag(fs)
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: harnessctl invoke [-min-mem SIZE] [-min-cores N] [-max-cpu PCT] [-restart POLICY] <id|-> <capability> [key=value ...]")
+		fmt.Fprintln(os.Stderr, "usage: harnessctl invoke [-min-mem SIZE] [-min-cores N] [-max-cpu PCT] [-restart POLICY] [-priority high|normal|low] <id|-> <capability> [key=value ...]")
 	}
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -431,8 +441,12 @@ func cmdInvoke(client *apiClient, args []string) error {
 	if _, err := domain.ParseRestartPolicy(*restart); err != nil {
 		return err
 	}
+	prio, err := checkPriority(*priority)
+	if err != nil {
+		return err
+	}
 
-	return client.cmdRunWorkload(target, "", nil, capability, params, req, *restart, nil, nil)
+	return client.cmdRunWorkload(target, "", nil, capability, params, req, *restart, nil, nil, prio)
 }
 
 // parseParams turns a list of "key=value" positional args into a map, for
@@ -716,15 +730,16 @@ type workloadView struct {
 	Outputs       []string                    `json:"outputs,omitempty"`
 	OutputFiles   []domain.ArtifactRef        `json:"outputFiles,omitempty"`
 	// Waiting: why a QUEUED workload hasn't started.
-	Waiting string `json:"waiting,omitempty"`
+	Waiting  string          `json:"waiting,omitempty"`
+	Priority domain.Priority `json:"priority,omitempty"`
 }
 
-func (c *apiClient) cmdRunWorkload(target, command string, args []string, capability string, params map[string]string, req domain.ResourceRequirements, restartPolicy string, inputs []map[string]string, outputs []string) error {
+func (c *apiClient) cmdRunWorkload(target, command string, args []string, capability string, params map[string]string, req domain.ResourceRequirements, restartPolicy string, inputs []map[string]string, outputs []string, priority string) error {
 	reqBody, err := json.Marshal(map[string]any{
 		"target": target, "command": command, "args": args,
 		"capability": capability, "params": params,
 		"requirements": req, "restartPolicy": restartPolicy,
-		"inputs": inputs, "outputs": outputs,
+		"inputs": inputs, "outputs": outputs, "priority": priority,
 	})
 	if err != nil {
 		return err
@@ -771,6 +786,7 @@ func (c *apiClient) cmdWorkloads() error {
 		if w.Capability != "" {
 			command = string(w.Capability)
 		}
+		command += priorityNote(w.Priority)
 		if w.Waiting != "" {
 			command += "  (waiting: " + w.Waiting + ")"
 		}
@@ -795,6 +811,9 @@ func (c *apiClient) cmdWorkload(id string) error {
 		fmt.Printf("Command        %s %s\n", w.Command, strings.Join(w.Args, " "))
 	}
 	fmt.Printf("State          %s\n", w.State)
+	if w.Priority != "" {
+		fmt.Printf("Priority       %s\n", w.Priority)
+	}
 	if !w.Requirements.IsEmpty() {
 		var parts []string
 		if w.Requirements.MinCPUCores > 0 {

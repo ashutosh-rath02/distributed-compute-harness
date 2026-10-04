@@ -57,6 +57,9 @@ type Job struct {
 	Error       string     `json:"error,omitempty"`
 	CreatedAt   time.Time  `json:"createdAt"`
 	FinishedAt  time.Time  `json:"finishedAt,omitempty"`
+	// Priority is every attempt's queue priority (priority.go); empty =
+	// normal.
+	Priority Priority `json:"priority,omitempty"`
 }
 
 // ReduceTask is the task key of a job's fan-in step.

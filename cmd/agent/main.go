@@ -42,6 +42,7 @@ func main() {
 	ollamaURL := flag.String("ollama-url", "", "where this device's Ollama listens, for the local-model task types (default $OLLAMA_HOST, else http://127.0.0.1:11434); they're offered only while it answers")
 	disable := flag.String("disable-capabilities", "", "comma-separated capabilities this device won't offer, e.g. system.execute,filesystem.read to allow only the sandboxed built-in task types")
 	workDir := flag.String("work-dir", "", "where workloads that take input/output files get their working directories (default: the user cache dir); never inside -identity-dir")
+	inputCacheSize := flag.String("input-cache-size", "1GiB", "keep up to this much of the input files tasks downloaded (under -work-dir), so more work on the same file copies it from this device instead of downloading it again, and the manager prefers this device for it; 0 keeps none")
 	relayToken := flag.String("relay-token", "", "the manager's relay session token (required if -relay-addr is set)")
 	pair := flag.Bool("pair", false, "join by approval on the manager instead of a pairing token: this device waits, showing a pairing code, until someone approves it there")
 	pairCode := flag.Bool("pair-code", false, "print this device's pairing code (for -manager-fingerprint, creating the identity if needed) and exit")
@@ -152,6 +153,11 @@ func main() {
 		KeepAwake:            *keepAwake,
 		LlamaCppDir:          *llamaDir,
 	}
+	cacheBytes, err := domain.ParseByteSize(*inputCacheSize)
+	if err != nil || cacheBytes > 1<<50 {
+		log.Fatalf("agent: -input-cache-size %q: give a size like 1GiB, or 0 for none", *inputCacheSize)
+	}
+	cfg.InputCacheBytes = int64(cacheBytes)
 	switch *priority {
 	case "low":
 		if err := sysinfo.LowerPriority(); err != nil {

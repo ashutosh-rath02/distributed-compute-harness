@@ -377,6 +377,8 @@ type WorkloadSpec struct {
 	Task       string
 	Attempt    int
 	AvoidNodes []domain.NodeID
+	// Priority orders the queue (queue.go); empty = normal.
+	Priority domain.Priority
 }
 
 // ErrInvalidWorkload is a submission that can never be valid as given
@@ -406,6 +408,10 @@ func (s *Server) Submit(ctx context.Context, spec WorkloadSpec) (domain.Workload
 	if spec.Attempt < 0 || (spec.Job == "") != (spec.Task == "") {
 		return domain.Workload{}, fmt.Errorf("%w: job, task and attempt go together", ErrInvalidWorkload)
 	}
+	priority, err := domain.ParsePriority(string(spec.Priority))
+	if err != nil {
+		return domain.Workload{}, fmt.Errorf("%w: %v", ErrInvalidWorkload, err)
+	}
 	pinned := target != ""
 	id, err := newRandomID()
 	if err != nil {
@@ -413,7 +419,7 @@ func (s *Server) Submit(ctx context.Context, spec WorkloadSpec) (domain.Workload
 	}
 	newWorkload := func(target domain.NodeID) domain.Workload {
 		return domain.Workload{ID: domain.WorkloadID(id), Target: target, Pinned: pinned, Command: command, Args: args, Capability: capability, Params: params, Requirements: req, RestartPolicy: restartPolicy, Inputs: spec.Inputs, Outputs: spec.Outputs,
-			Job: spec.Job, Task: spec.Task, Attempt: spec.Attempt, AvoidNodes: spec.AvoidNodes, TimeoutSeconds: timeout}
+			Job: spec.Job, Task: spec.Task, Attempt: spec.Attempt, AvoidNodes: spec.AvoidNodes, TimeoutSeconds: timeout, Priority: priority}
 	}
 	s.placeMu.Lock()
 	rec, resolved, err := s.resolve(placementFor(newWorkload(target)), nil)
@@ -468,10 +474,11 @@ type placement struct {
 	features   []string        // agent features required (requiredFeatures)
 	avoid      []domain.NodeID // prefer other nodes (a job task's failed attempts)
 	params     map[string]string
+	inputs     []domain.ArtifactRef // among equals, prefer nodes holding them (locality.go)
 }
 
 func placementFor(w domain.Workload) placement {
-	p := placement{capability: w.EffectiveCapability(), req: w.Requirements, features: requiredFeatures(w), avoid: w.AvoidNodes, params: w.Params}
+	p := placement{capability: w.EffectiveCapability(), req: w.Requirements, features: requiredFeatures(w), avoid: w.AvoidNodes, params: w.Params, inputs: w.Inputs}
 	if w.Pinned {
 		p.target = w.Target
 	}
@@ -616,7 +623,8 @@ func (s *Server) resolve(p placement, usage map[domain.NodeID]nodeUsage) (*NodeR
 		withRoom = append(withRoom, rec)
 		room[id] = u
 	}
-	best, err := selectNodeWithUsage(preferGPUFit(withRoom, p), room, p.capability, p.req)
+	ranked := preferGPUFit(withRoom, p)
+	best, err := selectNodeLocal(ranked, room, s.Registry.localBytes(ranked, p.inputs), p.capability, p.req)
 	if err != nil {
 		return nil, "", &noRoomError{detail: fmt.Sprint(notNow), reasons: why}
 	}
@@ -984,6 +992,7 @@ func (s *Server) handleRegister(ctx context.Context, conn domain.Conn, env *prot
 	// commands waits for READY.
 	_, isNew := s.Registry.Upsert(payload.Manifest, conn)
 	s.Registry.SetUse(claimedID, payload.Use)
+	s.Registry.setCached(claimedID, payload.Cache)
 
 	if s.store != nil {
 		if err := s.store.UpsertNode(payload.Manifest); err != nil {
@@ -1062,6 +1071,7 @@ func (s *Server) handleHeartbeat(nodeID domain.NodeID, env *protocol.Envelope) {
 		before, _ = s.availableNow(rec, time.Now())
 	}
 	s.Registry.RecordHeartbeat(nodeID, payload.RuntimeState)
+	s.Registry.setCached(nodeID, payload.Cache)
 	s.noteAvailability(nodeID, before)
 }
 

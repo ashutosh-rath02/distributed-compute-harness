@@ -40,6 +40,9 @@ func (a *Agent) handleWorkloadAssign(ctx context.Context, conn domain.Conn, env 
 			})
 			return
 		}
+		if a.inputs != nil {
+			xfer = &cachingTransfer{ArtifactTransfer: xfer, cache: a.inputs, node: a.identity.NodeID, workload: wl.ID}
+		}
 	}
 	err := a.executor.StartWithFiles(ctx, wl, xfer, func(status domain.WorkloadStatus) {
 		a.sendWorkloadStatus(ctx, conn, status)

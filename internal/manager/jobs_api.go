@@ -40,6 +40,8 @@ type jobRequest struct {
 	Tasks       []jobTaskRequest `json:"tasks"`
 	Reduce      *jobTaskRequest  `json:"reduce,omitempty"`
 	MaxAttempts int              `json:"maxAttempts,omitempty"`
+	// Priority: high, normal (default) or low, for every task.
+	Priority string `json:"priority,omitempty"`
 }
 
 func (s *Server) apiPostJob(w http.ResponseWriter, r *http.Request) {
@@ -49,7 +51,7 @@ func (s *Server) apiPostJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	spec := JobSpec{Name: req.Name, MaxAttempts: req.MaxAttempts}
+	spec := JobSpec{Name: req.Name, MaxAttempts: req.MaxAttempts, Priority: domain.Priority(req.Priority)}
 	for _, t := range req.Tasks {
 		spec.Tasks = append(spec.Tasks, t.spec())
 	}
@@ -143,6 +145,8 @@ type jobView struct {
 	Reduce      *jobTaskView    `json:"reduce,omitempty"`
 	// Outputs is the job's result: the reduce's outputs when it has one.
 	Outputs []domain.ArtifactRef `json:"outputs,omitempty"`
+	// Priority is high, normal or low (queue.go).
+	Priority domain.Priority `json:"priority"`
 }
 
 func (s *Server) toJobView(job domain.Job, withTasks bool) jobView {
@@ -163,7 +167,7 @@ func (s *Server) nodeDisplayName(id domain.NodeID) string {
 }
 
 func (s *Server) jobView(job domain.Job, byTask map[string][]WorkloadRecord, withTasks bool) jobView {
-	v := jobView{ID: job.ID, Name: job.Name, State: job.State, Error: job.Error, MaxAttempts: job.MaxAttempts, CreatedAt: job.CreatedAt, FinishedAt: job.FinishedAt}
+	v := jobView{ID: job.ID, Name: job.Name, State: job.State, Error: job.Error, MaxAttempts: job.MaxAttempts, CreatedAt: job.CreatedAt, FinishedAt: job.FinishedAt, Priority: job.Priority.Canonical()}
 	view := func(key, name string) jobTaskView {
 		tp := deriveTask(byTask[key], job.MaxAttempts)
 		tv := jobTaskView{Key: key, Name: name, State: tp.state, Attempts: tp.attempts, Outputs: tp.outputs, Error: tp.err}
