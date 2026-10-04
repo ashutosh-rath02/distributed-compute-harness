@@ -381,6 +381,9 @@ func (s *Server) Submit(ctx context.Context, spec WorkloadSpec) (domain.Workload
 	if err := compileTyped(&spec.Capability, &spec.Command, &spec.Args, &spec.Params, spec.Inputs, &spec.Outputs, &spec.Requirements); err != nil {
 		return domain.Workload{}, err
 	}
+	if t, ok := catalog.Lookup(spec.Capability); ok && t.TargetRequired && spec.Target == "" {
+		return domain.Workload{}, fmt.Errorf("%w: %s is about one device's own %s: say which device (target)", ErrInvalidWorkload, t.Name, "models")
+	}
 	if err := s.prepareFiles(&spec); err != nil {
 		return domain.Workload{}, err
 	}
@@ -599,7 +602,7 @@ func (s *Server) resolve(p placement, usage map[domain.NodeID]nodeUsage) (*NodeR
 		withRoom = append(withRoom, rec)
 		room[id] = u
 	}
-	best, err := selectNodeWithUsage(withRoom, room, p.capability, p.req)
+	best, err := selectNodeWithUsage(preferGPUFit(withRoom, p), room, p.capability, p.req)
 	if err != nil {
 		return nil, "", &noRoomError{detail: fmt.Sprint(notNow), reasons: why}
 	}

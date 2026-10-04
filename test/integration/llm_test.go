@@ -46,9 +46,33 @@ func startFakeOllama(t *testing.T, f *fakeOllama) string {
 		case "/api/tags":
 			var list []map[string]any
 			for _, m := range models {
-				list = append(list, map[string]any{"name": m})
+				list = append(list, map[string]any{"name": m, "size": 2_000_000_000})
 			}
 			json.NewEncoder(w).Encode(map[string]any{"models": list})
+		case "/api/pull":
+			var req struct{ Model string }
+			json.NewDecoder(r.Body).Decode(&req)
+			if req.Model == "" {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			w.Write([]byte(`{"status":"pulling manifest"}` + "\n" + `{"status":"pulling 1234","total":100,"completed":100}` + "\n"))
+			f.mu.Lock()
+			f.models = append(f.models, req.Model)
+			f.mu.Unlock()
+			w.Write([]byte(`{"status":"success"}` + "\n"))
+		case "/api/delete":
+			var req struct{ Model string }
+			json.NewDecoder(r.Body).Decode(&req)
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			for i, m := range f.models {
+				if m == req.Model && r.Method == http.MethodDelete {
+					f.models = append(f.models[:i], f.models[i+1:]...)
+					return
+				}
+			}
+			w.WriteHeader(http.StatusNotFound)
 		case "/api/generate":
 			var req struct{ Model string }
 			json.NewDecoder(r.Body).Decode(&req)

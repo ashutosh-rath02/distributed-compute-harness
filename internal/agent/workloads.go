@@ -42,6 +42,9 @@ func (a *Agent) handleWorkloadAssign(ctx context.Context, conn domain.Conn, env 
 	}
 	err := a.executor.StartWithFiles(ctx, wl, xfer, func(status domain.WorkloadStatus) {
 		a.sendWorkloadStatus(ctx, conn, status)
+		if status.State != domain.WorkloadRunning && changesModels(wl.EffectiveCapability()) {
+			a.requestReprobe() // the manager learns the new model list now, not in 30 s
+		}
 	})
 	if err != nil {
 		// Rejected before it ever ran — report FAILED rather than leaving

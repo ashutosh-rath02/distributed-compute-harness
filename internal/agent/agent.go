@@ -143,6 +143,8 @@ type Config struct {
 	// DeviceUse overrides how the agent reads the device's use (power,
 	// idle time) for its heartbeats — tests inject it. Nil: sysinfo.
 	DeviceUse func(ctx context.Context) domain.DeviceUse
+	// GPUs overrides the GPUs the agent reports (tests). Nil: detected.
+	GPUs func(ctx context.Context) []domain.GPU
 	// KeepAwake asks the OS not to sleep while a workload runs here (a
 	// sleeping device loses its task). Never blocks a sleep the user asks
 	// for.
@@ -180,6 +182,8 @@ type Agent struct {
 	advMu      sync.Mutex
 	advertised []domain.Capability
 	probeLoops atomic.Int32 // running capability probes: one per live connection
+	// reprobe asks the capability probe to look again right away.
+	reprobe chan struct{}
 
 	// pendingAddr is the address that last answered "waiting for
 	// approval": retries go straight back to it rather than paying a
@@ -237,7 +241,7 @@ func New(transport domain.Transport, cfg Config) (*Agent, error) {
 	if within(cfg.WorkDir, cfg.IdentityDir) || within(cfg.IdentityDir, cfg.WorkDir) {
 		return nil, fmt.Errorf("agent: -work-dir %s and the identity directory %s must not contain each other", cfg.WorkDir, cfg.IdentityDir)
 	}
-	a := &Agent{cfg: cfg, transport: transport, identity: id, startedAt: time.Now(), executor: NewExecutorWithSlots(cfg.WorkloadSlots), binaryHash: binaryHash}
+	a := &Agent{cfg: cfg, transport: transport, identity: id, startedAt: time.Now(), executor: NewExecutorWithSlots(cfg.WorkloadSlots), binaryHash: binaryHash, reprobe: make(chan struct{}, 1)}
 	a.executor.SetWorkRoot(cfg.WorkDir)
 	a.executor.SetDisabled(cfg.DisabledCapabilities)
 	a.executor.SetHandlers(tasks.NewRegistry(tasks.Options{OllamaURL: cfg.OllamaURL}))
@@ -476,6 +480,7 @@ func (a *Agent) buildManifest(ctx context.Context) domain.Manifest {
 		},
 		Resources:    resources,
 		Capabilities: capabilities,
+		GPUs:         a.gpus(ctx),
 		// Lets the manager tell this build apart from agents that can only
 		// download the legacy /agent-binary route (manager/selfupdate.go).
 		AgentFeatures: a.agentFeatures(),
@@ -623,6 +628,7 @@ func (a *Agent) capabilityLoop(ctx context.Context, conn domain.Conn) {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
+		case <-a.reprobe:
 		}
 		resources, caps, err := a.capabilities(ctx)
 		if err != nil {

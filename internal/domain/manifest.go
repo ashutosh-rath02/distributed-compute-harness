@@ -22,6 +22,9 @@ type Manifest struct {
 	// WorkloadSlots is how many workloads this agent runs at once. Absent
 	// (an older agent) means 1, which is exactly how those agents behave.
 	WorkloadSlots int `json:"workloadSlots,omitempty"`
+	// GPUs the device has (gpu.go): AI work prefers a device whose
+	// dedicated GPU memory fits the model. Absent from older agents.
+	GPUs []GPU `json:"gpus,omitempty"`
 }
 
 // Slots is the manifest's workload slot count, treating absent as 1.

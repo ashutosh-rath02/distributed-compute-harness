@@ -95,6 +95,9 @@ type Type struct {
 	// Streams: the agent reports output while the task runs, not only at
 	// the end (a model's answer, token by token).
 	Streams bool `json:"streams,omitempty"`
+	// TargetRequired: the task is about one particular device (its own
+	// models), so a submission must name it — never placed anywhere.
+	TargetRequired bool `json:"targetRequired,omitempty"`
 	// DefaultMaxRuntimeSeconds is the per-attempt limit when policy sets
 	// none for this type.
 	DefaultMaxRuntimeSeconds int `json:"defaultMaxRuntimeSeconds,omitempty"`
@@ -228,6 +231,27 @@ var builtins = []Type{
 		DefaultMaxRuntimeSeconds: 600,
 	},
 	{
+		Name: "llm.pull", Version: "1", Title: "Download a local AI model",
+		Description: "Download a model into one device's own Ollama (ollama pull), showing its progress. Models are stored per device, so name the device.",
+		Params: []Param{
+			{Name: "model", Type: String, Title: "Model (e.g. llama3.2:1b)", Required: true, Pattern: ModelPattern, MaxLength: 128},
+		},
+		TargetRequired: true,
+		MaxPerNode:     1,
+		Streams:        true,
+		// A few GB over home Wi-Fi.
+		DefaultMaxRuntimeSeconds: 4 * 3600,
+	},
+	{
+		Name: "llm.remove", Version: "1", Title: "Remove a local AI model",
+		Description: "Delete a model from one device's own Ollama (ollama rm), freeing its disk space.",
+		Params: []Param{
+			{Name: "model", Type: String, Title: "Model", Required: true, Pattern: ModelPattern, MaxLength: 128, ChoicesAttr: AttrModels},
+		},
+		TargetRequired:           true,
+		DefaultMaxRuntimeSeconds: 120,
+	},
+	{
 		Name: "llm.inventory", Version: "1", Title: "List local AI models",
 		Description: "List the models the device's local runtime (Ollama) has.",
 	},
@@ -236,6 +260,10 @@ var builtins = []Type{
 // AttrModels is the capability attribute listing a node's local models
 // (comma-separated, normalized by NormalizeModel).
 const AttrModels = "models"
+
+// AttrModelSizes lists each model's size on disk, "name=bytes,...":
+// placement prefers a device whose dedicated GPU memory fits the model.
+const AttrModelSizes = "modelSizes"
 
 // ModelPattern matches an Ollama model reference ("llama3.2",
 // "qwen2.5:7b-instruct-q4_K_M", "hf.co/user/repo:tag").

@@ -28,6 +28,10 @@ type fakeOllama struct {
 	sent    []string // the model names generate requests named
 	chats   []fakeChat
 	reason  string // done_reason of the last chat chunk ("" = stop)
+	// Model management: what pulls and deletes named, and an error for
+	// the next pull to end with.
+	pulled, deleted []string
+	pullError       string
 }
 
 // fakeChat is one /api/chat request as the fake received it.
@@ -89,6 +93,65 @@ func (f *fakeOllama) server(t *testing.T) *httptest.Server {
 				fl.Flush()
 			}
 			w.Write([]byte(`{"response":"","done":true,"eval_count":7,"eval_duration":1000000000,"done_reason":"stop"}` + "\n"))
+		case "/api/pull":
+			// Shapes from Ollama's API doc: POST {"model", "stream"}; a
+			// stream of {"status", "digest", "total", "completed"} ending
+			// with {"status":"success"}, or an {"error"} line.
+			var req struct {
+				Model  string `json:"model"`
+				Stream *bool  `json:"stream"`
+			}
+			if r.Method != http.MethodPost || json.NewDecoder(r.Body).Decode(&req) != nil || req.Model == "" {
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprint(w, `{"error":"model is required"}`)
+				return
+			}
+			f.mu.Lock()
+			f.pulled = append(f.pulled, req.Model)
+			fail := f.pullError
+			f.mu.Unlock()
+			fl := w.(http.Flusher)
+			line := func(v map[string]any) { b, _ := json.Marshal(v); w.Write(append(b, '\n')); fl.Flush() }
+			line(map[string]any{"status": "pulling manifest"})
+			if fail != "" {
+				line(map[string]any{"error": fail})
+				return
+			}
+			// A 4 GB layer reported in 1000 small steps, then a small one.
+			for _, layer := range []struct {
+				digest string
+				total  int64
+				steps  int
+			}{{"sha256:aaaa", 4 << 30, 1000}, {"sha256:bbbb", 10 << 20, 50}} {
+				for i := 0; i <= layer.steps; i++ {
+					line(map[string]any{"status": "pulling " + layer.digest[7:], "digest": layer.digest, "total": layer.total, "completed": layer.total * int64(i) / int64(layer.steps)})
+				}
+			}
+			line(map[string]any{"status": "verifying sha256 digest"})
+			line(map[string]any{"status": "writing manifest"})
+			f.mu.Lock()
+			f.models = append(f.models, req.Model)
+			f.mu.Unlock()
+			line(map[string]any{"status": "success"})
+		case "/api/delete":
+			var req struct {
+				Model string `json:"model"`
+			}
+			if r.Method != http.MethodDelete || json.NewDecoder(r.Body).Decode(&req) != nil || req.Model == "" {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			f.deleted = append(f.deleted, req.Model)
+			for i, m := range f.models {
+				if m == req.Model {
+					f.models = append(f.models[:i], f.models[i+1:]...)
+					return // 200, no body
+				}
+			}
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprintf(w, `{"error":"model '%s' not found"}`, req.Model)
 		case "/api/chat":
 			var req fakeChat
 			json.NewDecoder(r.Body).Decode(&req)
@@ -203,8 +266,9 @@ func TestOllamaAvailabilityAndModelAttributes(t *testing.T) {
 		}
 		return out
 	}
-	if strings.Contains(strings.Join(names(), ","), "llm.") {
-		t.Fatal("llm types advertised while Ollama has no models")
+	// Ollama without models: only a download can do anything.
+	if got := strings.Join(names(), ","); !strings.Contains(got, "llm.pull") || strings.Contains(strings.ReplaceAll(got, "llm.pull", ""), "llm.") {
+		t.Fatalf("with no models: %s (want llm.pull only)", got)
 	}
 	f.setModels("Qwen2.5:7B", "llama3.2", "llama3.2:latest")
 	var gen map[string]string
@@ -215,6 +279,9 @@ func TestOllamaAvailabilityAndModelAttributes(t *testing.T) {
 	}
 	if gen[catalog.AttrModels] != "llama3.2:latest,qwen2.5:7b" {
 		t.Fatalf("models attribute %q (want normalized, deduplicated, sorted)", gen[catalog.AttrModels])
+	}
+	if gen[catalog.AttrModelSizes] != "llama3.2:latest=2000000000,qwen2.5:7b=2000000000" {
+		t.Fatalf("model sizes %q", gen[catalog.AttrModelSizes])
 	}
 	if !strings.Contains(strings.Join(names(), ","), "llm.inventory") {
 		t.Fatal("llm.inventory not advertised")

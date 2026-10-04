@@ -22,9 +22,11 @@ type NodeRecord struct {
 	// AgentFeatures is the manifest's agent-protocol feature list (see
 	// domain.Manifest.AgentFeatures); empty for an agent predating it.
 	AgentFeatures []string
-	State         domain.NodeState
-	LastSeen      time.Time
-	Conn          domain.Conn
+	// GPUs the device reported (domain.Manifest.GPUs).
+	GPUs     []domain.GPU
+	State    domain.NodeState
+	LastSeen time.Time
+	Conn     domain.Conn
 	// slotsN is the node's advertised workload slot count (Manifest.Slots:
 	// absent = 1). busyUntil holds placement off a node that just refused
 	// work for lack of a free slot: until then, or until it next finishes
@@ -100,6 +102,7 @@ func (r *Registry) Upsert(manifest domain.Manifest, conn domain.Conn) (rec *Node
 			Resources:     manifest.Resources,
 			Capabilities:  manifest.Capabilities,
 			AgentFeatures: manifest.AgentFeatures,
+			GPUs:          manifest.GPUs,
 			slotsN:        manifest.Slots(),
 			State:         domain.NodeConnected,
 			LastSeen:      time.Now(),
@@ -112,6 +115,7 @@ func (r *Registry) Upsert(manifest domain.Manifest, conn domain.Conn) (rec *Node
 	existing.Resources = manifest.Resources
 	existing.Capabilities = manifest.Capabilities
 	existing.AgentFeatures = manifest.AgentFeatures
+	existing.GPUs = manifest.GPUs
 	existing.slotsN = manifest.Slots()
 	existing.busyUntil = time.Time{} // a fresh process starts with free slots
 	existing.Conn = conn
@@ -279,6 +283,7 @@ func (r *Registry) Seed(manifest domain.Manifest) {
 		Resources:     manifest.Resources,
 		Capabilities:  manifest.Capabilities,
 		AgentFeatures: manifest.AgentFeatures,
+		GPUs:          manifest.GPUs,
 		slotsN:        manifest.Slots(),
 		State:         domain.NodeOffline,
 	}

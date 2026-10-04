@@ -42,6 +42,8 @@ type nodeView struct {
 	// Availability: the operator's rule, and whether the node takes new
 	// work right now and why not (availability.go).
 	Availability availabilityView `json:"availability"`
+	// GPUs the device reported.
+	GPUs []domain.GPU `json:"gpus,omitempty"`
 }
 
 func (s *Server) toNodeView(rec *NodeRecord, relations map[domain.NodeID]hostRelation) nodeView {
@@ -67,6 +69,7 @@ func (s *Server) toNodeView(rec *NodeRecord, relations map[domain.NodeID]hostRel
 		SameHostAs:            rel.sameHostAs,
 		HostConflict:          rel.conflict,
 		Availability:          s.availabilityView(rec.Node.Identity.NodeID),
+		GPUs:                  rec.GPUs,
 	}
 }
 
@@ -113,6 +116,7 @@ func (s *Server) toNodeView(rec *NodeRecord, relations map[domain.NodeID]hostRel
 //	GET  /catalog                    the typed task types, their schemas, policy, and how many nodes offer each (policy.go)
 //	GET  /policy, PUT /policy        what the fleet may run: per-type enable, node labels, max runtime
 //	GET  /models                     the local AI models READY nodes have, and where
+//	GET  /ai-devices                 devices whose Ollama answers: their models (with sizes) and GPUs (aidevices.go)
 //	POST /jobs                       submit a batch job: {"tasks":[...],"reduce":{...},"maxAttempts":3} (jobs.go)
 //	GET  /jobs                       list jobs with progress counts
 //	GET  /jobs/{id}                  one job: every task's state, attempts, node, outputs
@@ -173,6 +177,7 @@ func (s *Server) NewHTTPHandler() http.Handler {
 	mux.HandleFunc("DELETE /artifacts/{sha}", s.apiDeleteArtifact)
 	mux.HandleFunc("GET /catalog", s.apiGetCatalog)
 	mux.HandleFunc("GET /models", s.apiListModels)
+	mux.HandleFunc("GET /ai-devices", s.apiListAIDevices)
 	mux.HandleFunc("GET /policy", s.apiGetPolicy)
 	mux.HandleFunc("PUT /policy", s.apiPutPolicy)
 	mux.HandleFunc("POST /jobs", s.apiPostJob)

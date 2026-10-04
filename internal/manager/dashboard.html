@@ -149,6 +149,12 @@
       <div id="aiExample" class="output"></div>
     </div>
   </details>
+  <details id="modelsSection">
+    <summary><h2 style="display:inline">AI models on your devices</h2></summary>
+    <p class="hint">Each device keeps its own models in its own Ollama. Download one to the device that should run it (big models want a big GPU or lots of memory), or remove one to free its disk space.
+      AI tasks go to a device that has the model, preferring one whose graphics card can hold it. A device shows here once Ollama runs on it.</p>
+    <div id="aiDevices"></div>
+  </details>
 
   <h2>Run a task</h2>
   <div class="card">
@@ -384,6 +390,14 @@
     }[c]));
   }
 
+  // A device's GPUs, as the agent reported them (escaped): a card's own
+  // memory is what an AI model can fit in; integrated ones share RAM.
+  function gpuText(gpus) {
+    if (!gpus || !gpus.length) return "";
+    return '<span class="subname">' + gpus.map((g) => escapeHtml("GPU: " + g.name
+      + (g.integrated ? " (shares system memory)" : g.memoryBytes ? " · " + fmtBytes(g.memoryBytes) : ""))).join("<br>") + "</span>";
+  }
+
   // When a device takes new work: whether it does now (and why not), what
   // it reported about its use, and the operator's rule as a picker. The
   // reason and the use come from the manager and the agent: escaped.
@@ -463,7 +477,8 @@
       // same-machine notes come from agents or the operator: all escaped.
       const display = n.alias || n.name || n.nodeId;
       const subname = n.alias ? '<span class="subname">' + escapeHtml(n.name || n.nodeId) + "</span>" : "";
-      const chips = Object.entries(n.labels || {}).map(([k, v]) => '<span class="chip">' + escapeHtml(k + "=" + v) + "</span>").join("");
+      const chips = Object.entries(n.labels || {}).map(([k, v]) => '<span class="chip">' + escapeHtml(k + "=" + v) + "</span>").join("")
+        + gpuText(n.gpus);
       const peers = (n.sameHostAs || []).map((id) => {
         const other = currentNodes.find((o) => o.nodeId === id);
         const seen = other && other.lastSeen ? " (last seen " + new Date(other.lastSeen).toLocaleString() + ")" : "";
@@ -762,6 +777,86 @@
   }
   document.getElementById("aiSection").addEventListener("toggle", (event) => {
     if (event.target.open) refreshAI();
+  });
+
+  // AI models per device: list, download (llm.pull), remove (llm.remove).
+  // Model names and GPU names come from agents: escaped.
+  const modelTasks = {}; // nodeId -> text of its running download/removal
+  async function refreshAIDevices() {
+    const el = document.getElementById("aiDevices");
+    let devices;
+    try {
+      const resp = await api("/ai-devices");
+      if (!resp.ok) throw new Error(resp.status);
+      devices = await resp.json();
+    } catch (e) {
+      el.innerHTML = '<p class="error">Failed to load.</p>';
+      return;
+    }
+    if (!devices.length) {
+      el.innerHTML = '<p class="empty">No device runs Ollama yet. Install it on a device (ollama.com); it shows up here within a minute.</p>';
+      return;
+    }
+    el.innerHTML = "<table><thead><tr><th>Device</th><th>Models</th><th>Download a model</th></tr></thead><tbody>"
+      + devices.map((d) => {
+        const online = d.state === "READY";
+        const models = !d.models.length ? '<span class="subname">none yet</span>'
+          : d.models.map((m) => '<div>' + escapeHtml(m.name) + (m.sizeBytes ? ' <span class="subname" style="display:inline">' + escapeHtml(fmtBytes(m.sizeBytes)) + "</span>" : "")
+            + (online ? ' <button class="small secondary" data-rm-model="' + escapeHtml(m.name) + '" data-node="' + escapeHtml(d.nodeId) + '">Remove</button>' : "") + "</div>").join("");
+        const fit = d.dedicatedGpuBytes ? '<span class="subname">GPU memory for models: ' + escapeHtml(fmtBytes(d.dedicatedGpuBytes)) + "</span>" : "";
+        const busy = modelTasks[d.nodeId] ? '<div class="output">' + escapeHtml(modelTasks[d.nodeId]) + "</div>" : "";
+        const pull = !online ? '<span class="subname">offline</span>'
+          : '<input class="pull-model" data-node="' + escapeHtml(d.nodeId) + '" placeholder="e.g. llama3.2:1b" style="width:12em"> '
+            + '<button class="small" data-pull="' + escapeHtml(d.nodeId) + '">Download</button>';
+        return "<tr><td>" + escapeHtml(d.name || d.nodeId) + gpuText(d.gpus) + fit + "</td><td>" + models + "</td><td>" + pull + busy + "</td></tr>";
+      }).join("") + "</tbody></table>";
+  }
+
+  // Runs a model task on one device and shows its last line of output
+  // under that device until it ends.
+  async function runModelTask(nodeId, capability, model) {
+    try {
+      const resp = await api("/workloads", {method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({capability: capability, target: nodeId, params: {model: model}})});
+      const text = await resp.text();
+      if (!resp.ok) throw new Error(text.trim() || resp.statusText);
+      const id = JSON.parse(text).id;
+      modelTasks[nodeId] = (capability === "llm.pull" ? "Downloading " : "Removing ") + model + "…";
+      refreshAIDevices();
+      for (let i = 0; i < 4 * 3600; i++) {
+        await new Promise((r) => setTimeout(r, 1000));
+        const w = await (await api("/workloads/" + encodeURIComponent(id))).json();
+        const lines = (w.stdout || "").trim().split("\n");
+        modelTasks[nodeId] = model + ": " + (w.waiting ? "waiting: " + w.waiting : lines[lines.length - 1] || w.state);
+        if (["COMPLETED", "FAILED", "CANCELED"].includes(w.state)) {
+          modelTasks[nodeId] = model + ": " + (w.state === "COMPLETED" ? (capability === "llm.pull" ? "downloaded" : "removed") : "failed: " + (w.error || w.state));
+          break;
+        }
+        if (document.getElementById("modelsSection").open && i % 2 === 0) refreshAIDevices();
+      }
+    } catch (e) {
+      modelTasks[nodeId] = model + ": " + e.message;
+    }
+    refreshAIDevices();
+  }
+
+  document.getElementById("aiDevices").addEventListener("click", (event) => {
+    const pull = event.target.closest("button[data-pull]");
+    if (pull) {
+      const input = document.querySelector('input.pull-model[data-node="' + CSS.escape(pull.dataset.pull) + '"]');
+      const model = input ? input.value.trim() : "";
+      if (!model) return;
+      if (!confirm("Download " + model + " to this device? Models are large (often 1-10 GB).")) return;
+      runModelTask(pull.dataset.pull, "llm.pull", model);
+      return;
+    }
+    const rm = event.target.closest("button[data-rm-model]");
+    if (rm && confirm("Remove " + rm.dataset.rmModel + " from this device?")) {
+      runModelTask(rm.dataset.node, "llm.remove", rm.dataset.rmModel);
+    }
+  });
+  document.getElementById("modelsSection").addEventListener("toggle", (event) => {
+    if (event.target.open) refreshAIDevices();
   });
   document.getElementById("aiShowKey").addEventListener("click", () => {
     if (aiInfo) document.getElementById("aiKey").textContent = aiInfo.apiKey || "(no AI key set)";
@@ -1167,6 +1262,7 @@
     if (type.startsWith("job.") || type.startsWith("workload.")) scheduleJobs();
     if (type.startsWith("node.")) refreshCatalog();
     if (type.startsWith("node.") && document.getElementById("aiSection").open) refreshAI();
+    if (type.startsWith("node.") && document.getElementById("modelsSection").open) refreshAIDevices();
     if (type === "node.revoked" || type === "node.unrevoked") refreshRevoked();
     if (type === "node.join-requested" || type === "node.join-decided" || type === "node.registered") refreshJoinRequests();
     if (type === "join.window") refreshJoinWindow();

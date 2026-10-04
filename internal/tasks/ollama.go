@@ -104,6 +104,13 @@ func (o *ollama) tags(ctx context.Context) ([]ollamaModel, error) {
 	return models, err
 }
 
+// invalidate drops the cached model list (after a pull or remove).
+func (o *ollama) invalidate() {
+	o.mu.Lock()
+	o.cachedAt = time.Time{}
+	o.mu.Unlock()
+}
+
 func (o *ollama) fetchTags(ctx context.Context) ([]ollamaModel, error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
@@ -153,15 +160,21 @@ func (g ollamaGenerate) Attributes(ctx context.Context) map[string]string {
 		return nil
 	}
 	names := make([]string, 0, len(models))
-	seen := map[string]bool{}
+	sizes := map[string]int64{}
 	for _, m := range models {
-		if n := catalog.NormalizeModel(m.Name); n != "" && !seen[n] {
-			seen[n] = true
-			names = append(names, n)
+		if n := catalog.NormalizeModel(m.Name); n != "" {
+			if _, seen := sizes[n]; !seen {
+				names = append(names, n)
+			}
+			sizes[n] = m.Size
 		}
 	}
 	sort.Strings(names)
-	return map[string]string{catalog.AttrModels: strings.Join(names, ",")}
+	withSizes := make([]string, 0, len(names))
+	for _, n := range names {
+		withSizes = append(withSizes, n+"="+strconv.FormatInt(sizes[n], 10))
+	}
+	return map[string]string{catalog.AttrModels: strings.Join(names, ","), catalog.AttrModelSizes: strings.Join(withSizes, ",")}
 }
 
 func (g ollamaGenerate) Run(ctx context.Context, env Env) error {

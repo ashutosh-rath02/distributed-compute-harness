@@ -147,7 +147,40 @@ func cmdAsk(c *apiClient, args []string) error {
 	if wl.State == "QUEUED" {
 		fmt.Fprintf(os.Stderr, "(queued: every device with %s is busy)\n", *model)
 	}
+	return c.followWorkload(wl.ID)
+}
 
+// cmdModelTask downloads (llm.pull) or removes (llm.remove) a model on
+// one device, showing its progress until it ends.
+func (c *apiClient) cmdModelTask(capability, target, model string) error {
+	body, _ := json.Marshal(map[string]any{"capability": capability, "target": target, "params": map[string]string{"model": model}})
+	resp, err := c.http.Post(c.base+"/workloads", "application/json", strings.NewReader(string(body)))
+	if err != nil {
+		return err
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		return fmt.Errorf("manager returned %s: %s", resp.Status, strings.TrimSpace(string(raw)))
+	}
+	var wl struct {
+		ID    string `json:"id"`
+		State string `json:"state"`
+	}
+	json.Unmarshal(raw, &wl)
+	if wl.State == "QUEUED" {
+		var w workloadView
+		if c.get("/workloads/"+wl.ID, &w) == nil && w.Waiting != "" {
+			fmt.Fprintf(os.Stderr, "(waiting: %s)\n", w.Waiting)
+		}
+	}
+	return c.followWorkload(wl.ID)
+}
+
+// followWorkload prints a workload's output as it arrives until it ends;
+// Ctrl-C cancels it.
+func (c *apiClient) followWorkload(id string) error {
+	wl := struct{ ID string }{id}
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt)
 	defer signal.Stop(interrupt)

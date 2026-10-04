@@ -63,6 +63,14 @@ func main() {
 		err = client.cmdModels()
 	case "ai":
 		err = client.cmdAI()
+	case "pull":
+		err = requireArgs(args, 3, "pull <device-id> <model>", func() error {
+			return client.cmdModelTask("llm.pull", args[1], args[2])
+		})
+	case "rm-model":
+		err = requireArgs(args, 3, "rm-model <device-id> <model>", func() error {
+			return client.cmdModelTask("llm.remove", args[1], args[2])
+		})
 	case "ask":
 		err = cmdAsk(client, args[1:])
 	case "do":
@@ -222,6 +230,11 @@ Commands:
                         answer streams back as it is written (Ctrl-C cancels)
   ai                    the base URL and API key for apps that speak OpenAI's
                         chat API (/v1/chat/completions), and the models now
+  pull <device-id> <model>
+                        download a model into that device's Ollama, e.g.
+                          harnessctl pull node-1234 llama3.2:1b
+  rm-model <device-id> <model>
+                        remove a model from that device's Ollama
   policy                show what the fleet may run
   policy type <name> on|off | labels key=value,...|- | max-runtime 10m|0
                         enable/disable a type (raw system.execute and
@@ -524,6 +537,7 @@ type nodeView struct {
 		Available bool                `json:"available"`
 		Reason    string              `json:"reason"`
 	} `json:"availability"`
+	GPUs []domain.GPU `json:"gpus"`
 }
 
 // displayName is the operator's alias when set, else the agent's name.
@@ -590,6 +604,13 @@ func (c *apiClient) cmdNode(id string) error {
 	fmt.Printf("CPU usage      %.1f%%\n", n.Metrics.CPUPercent)
 	fmt.Printf("Mem available  %s\n", humanBytes(n.Metrics.MemoryAvailableBytes))
 	fmt.Printf("Takes work     %s\n", describeAvailability(n))
+	for _, g := range n.GPUs {
+		mem := humanBytes(g.MemoryBytes)
+		if g.Integrated {
+			mem = "shares system memory"
+		}
+		fmt.Printf("GPU            %s (%s)\n", g.Name, mem)
+	}
 	if u := n.Metrics.Use; u != nil {
 		fmt.Printf("Use            %s\n", describeUse(*u))
 	}
