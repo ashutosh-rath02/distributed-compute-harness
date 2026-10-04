@@ -102,10 +102,12 @@ func selectNode(candidates []*NodeRecord, capability domain.CapabilityName, req 
 }
 
 // selectNodeWithUsage is selectNode that, given current reservations,
-// prefers the node with the most memory left after them, then the fewest
-// running workloads — spreading a burst of submissions across nodes
-// instead of piling onto whichever had the most free memory a heartbeat
-// ago.
+// prefers the least busy node (the smallest share of its slots in use),
+// then the one with the most memory left after them — spreading a burst
+// of submissions (a job's tasks) over the fleet instead of piling onto
+// whichever device has the most memory to spare while it still has free
+// slots. Whether work fits at all is hasRoom's and nodeFits' call; this
+// only ranks the nodes it fits on.
 func selectNodeWithUsage(candidates []*NodeRecord, usage map[domain.NodeID]nodeUsage, capability domain.CapabilityName, req domain.ResourceRequirements) (*NodeRecord, error) {
 	var best *NodeRecord
 	var reasons []string
@@ -128,12 +130,14 @@ func selectNodeWithUsage(candidates []*NodeRecord, usage map[domain.NodeID]nodeU
 			return r.LastMetrics.MemoryAvailableBytes - u.memory
 		}
 		rf, bf := free(rec, ru), free(best, bu)
+		// running/slots compared without division.
+		rl, bl := ru.running*best.slots(), bu.running*rec.slots()
 		switch {
-		case rf > bf:
+		case rl < bl:
 			best = rec
-		case rf == bf && ru.running < bu.running:
+		case rl == bl && rf > bf:
 			best = rec
-		case rf == bf && ru.running == bu.running && rec.Node.Identity.NodeID < best.Node.Identity.NodeID:
+		case rl == bl && rf == bf && rec.Node.Identity.NodeID < best.Node.Identity.NodeID:
 			best = rec
 		}
 	}

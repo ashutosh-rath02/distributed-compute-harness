@@ -252,3 +252,42 @@ func TestResolveWorkloadTargetIntegratesWithRegistry(t *testing.T) {
 		t.Fatalf("expected ErrNoEligibleNode when ready nodes exist but none declare the capability, got %v", err)
 	}
 }
+
+// A job's tasks spread over the fleet even when one device has far more
+// memory to spare: the least busy device first, then the most memory.
+// (Found live: three photos all went to the PC with more free memory
+// while the other sat idle.)
+func TestSelectNodeSpreadsABurstByLoadBeforeMemory(t *testing.T) {
+	big := nodeWithProfile("node-big", 8, 12<<30, 5, true)
+	small := nodeWithProfile("node-small", 8, 3<<30, 5, true)
+	big.slotsN, small.slotsN = 6, 8
+	usage := map[domain.NodeID]nodeUsage{}
+	got := map[domain.NodeID]int{}
+	req := domain.ResourceRequirements{MinMemoryBytes: 512 << 20}
+	for i := 0; i < 3; i++ {
+		rec, err := selectNodeWithUsage([]*NodeRecord{big, small}, usage, domain.CapabilitySystemExecute, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id := rec.Node.Identity.NodeID
+		got[id]++
+		u := usage[id]
+		u.running++
+		u.memory += 512 << 20
+		usage[id] = u
+	}
+	if got["node-big"] == 0 || got["node-small"] == 0 {
+		t.Fatalf("three tasks on two idle devices: %v", got)
+	}
+	// Idle, the one with more memory goes first.
+	if rec, _ := selectNodeWithUsage([]*NodeRecord{small, big}, nil, domain.CapabilitySystemExecute, req); rec.Node.Identity.NodeID != "node-big" {
+		t.Fatalf("idle fleet: %s", rec.Node.Identity.NodeID)
+	}
+	// Busy shares are compared per slot: 2 of 8 is less busy than 1 of 2.
+	few := nodeWithProfile("node-few", 8, 12<<30, 5, true)
+	few.slotsN = 2
+	usage = map[domain.NodeID]nodeUsage{"node-few": {running: 1}, "node-small": {running: 2}}
+	if rec, _ := selectNodeWithUsage([]*NodeRecord{few, small}, usage, domain.CapabilitySystemExecute, domain.ResourceRequirements{}); rec.Node.Identity.NodeID != "node-small" {
+		t.Fatalf("per-slot load: %s", rec.Node.Identity.NodeID)
+	}
+}
