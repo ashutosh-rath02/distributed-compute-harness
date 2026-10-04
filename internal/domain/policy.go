@@ -10,12 +10,20 @@ type TypePolicy struct {
 	// MaxRuntimeSeconds bounds each attempt (Workload.TimeoutSeconds);
 	// 0 = no limit.
 	MaxRuntimeSeconds int `json:"maxRuntimeSeconds,omitempty"`
+	// For container.run only (manager/container.go): AllowImages are the
+	// images it may run — a repository, one digest or tag of it, or
+	// "registry/namespace/*"; empty allows none. AllowTags lets an image
+	// be named by a tag instead of pinned by digest; AllowNetwork lets a
+	// task ask for network=bridge.
+	AllowImages  []string `json:"allowImages,omitempty"`
+	AllowTags    bool     `json:"allowTags,omitempty"`
+	AllowNetwork bool     `json:"allowNetwork,omitempty"`
 }
 
 // Policy decides what the fleet may be asked to run. A catalog task type
-// without an entry is enabled; raw capabilities (system.execute,
-// filesystem.read) and any capability outside the catalog without an
-// entry follow AllowUnlisted.
+// without an entry is enabled (except opt-in ones, container.run);
+// those, raw capabilities (system.execute, filesystem.read) and any
+// capability outside the catalog without an entry follow AllowUnlisted.
 type Policy struct {
 	Types         map[CapabilityName]TypePolicy `json:"types,omitempty"`
 	AllowUnlisted bool                          `json:"allowUnlisted,omitempty"`

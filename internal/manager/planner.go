@@ -246,6 +246,9 @@ func (s *Server) plannableTypes() []plannable {
 		if t.Internal || t.TargetRequired || t.Name == capLLMChat || t.Name == "llm.inventory" {
 			continue
 		}
+		if t.OptIn {
+			continue // containers: a model doesn't pick what image and command run
+		}
 		if s.checkPolicy(t.Name) != nil {
 			continue
 		}

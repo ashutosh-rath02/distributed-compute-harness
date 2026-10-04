@@ -97,7 +97,7 @@ func (s *Server) restartWorkload(ctx context.Context, rec WorkloadRecord) {
 
 	// Policy may have changed since it was submitted: a type that is now
 	// disabled is not brought back (CANCELED is never restarted).
-	if err := s.checkPolicy(rec.Workload.EffectiveCapability()); err != nil {
+	if err := s.restartAllowed(rec.Workload); err != nil {
 		if blocked, ok := s.Workloads.blockRestart(rec.Workload.ID, err.Error()); ok {
 			s.persistWorkloadRecord(blocked)
 			log.Printf("workload.canceled: %s (restart %v)", blocked.Workload.ID, err)

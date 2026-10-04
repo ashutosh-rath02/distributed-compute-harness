@@ -84,6 +84,9 @@ func printType(t catalogEntry) {
 	if t.Policy.MaxRuntimeSeconds > 0 {
 		fmt.Printf(", at most %ds per attempt", t.Policy.MaxRuntimeSeconds)
 	}
+	if t.Name == catalog.ContainerRun {
+		fmt.Printf("\n         %s", containerPolicyLine(t.Policy))
+	}
 	fmt.Printf("\nNodes    %d ready node(s) offer it\n", t.Nodes)
 	if t.Inputs.Max > 0 {
 		ext := "any"
@@ -197,10 +200,15 @@ func cmdPolicy(c *apiClient, args []string) error {
 		for _, name := range []domain.CapabilityName{domain.CapabilitySystemExecute, domain.CapabilityFilesystemRead} {
 			show(name, cat.Raw[name])
 		}
+		for _, t := range cat.Types {
+			if t.Name == catalog.ContainerRun {
+				fmt.Printf("\n%s: %s\n", t.Name, containerPolicyLine(t.Policy))
+			}
+		}
 		return nil
 	}
 	if len(args) < 3 || args[0] != "type" {
-		return errors.New("usage: harnessctl policy [type <name> on|off | labels key=value,...|- | max-runtime DURATION]")
+		return errors.New("usage: harnessctl policy [type <name> on|off | labels key=value,...|- | max-runtime DURATION]\n       " + containerPolicyUsage)
 	}
 	name := domain.CapabilityName(args[1])
 	if p.Types == nil {
@@ -253,7 +261,9 @@ func cmdPolicy(c *apiClient, args []string) error {
 		}
 		tp.MaxRuntimeSeconds = int(d / time.Second)
 	default:
-		return fmt.Errorf("unknown policy setting %q", args[2])
+		if err := setContainerPolicy(name, &tp, args[2], args[3:]); err != nil {
+			return err
+		}
 	}
 	p.Types[name] = tp
 	body, _ := json.Marshal(p)
@@ -271,6 +281,9 @@ func cmdPolicy(c *apiClient, args []string) error {
 	fmt.Printf("Policy for %s updated.\n", name)
 	if name == domain.CapabilitySystemExecute && tp.Enabled && len(tp.NodeLabels) == 0 {
 		fmt.Println("Raw commands now run on every device that offers them. Limit them with: harnessctl policy type system.execute labels raw=ok")
+	}
+	if name == catalog.ContainerRun {
+		fmt.Println(containerPolicyLine(tp))
 	}
 	return nil
 }

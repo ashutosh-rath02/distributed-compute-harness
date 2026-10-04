@@ -68,6 +68,15 @@ type Param struct {
 	// AnswerFormat: the value is "json" or a JSON object (a JSON schema
 	// the answer must follow).
 	AnswerFormat bool `json:"answerFormat,omitempty"`
+	// Image: the value is a container image reference, canonicalized
+	// with its registry explicit (container.go). Argv: the value is a
+	// JSON list of strings, a container's command line.
+	Image bool `json:"image,omitempty"`
+	Argv  bool `json:"argv,omitempty"`
+	// MatchAttr names a capability attribute that must equal the value
+	// exactly, when one is given (e.g. a container's platform); empty
+	// matches every node.
+	MatchAttr string `json:"matchAttr,omitempty"`
 }
 
 // Inputs bounds the files a task type takes.
@@ -117,6 +126,12 @@ type Type struct {
 	// DefaultMaxRuntimeSeconds is the per-attempt limit when policy sets
 	// none for this type.
 	DefaultMaxRuntimeSeconds int `json:"defaultMaxRuntimeSeconds,omitempty"`
+	// OptIn: off until the operator's policy turns it on, like raw
+	// commands (it runs programs the catalog doesn't define).
+	OptIn bool `json:"optIn,omitempty"`
+	// OutputsFrom names a parameter holding more output names
+	// (comma-separated), for a type whose outputs the submitter chooses.
+	OutputsFrom string `json:"outputsFrom,omitempty"`
 }
 
 func num(v float64) *float64 { return &v }
@@ -301,6 +316,25 @@ var builtins = []Type{
 		Name: "llm.inventory", Version: "1", Title: "List local AI models",
 		Description: "List the models the device's local runtime (Ollama) has.",
 	},
+	{
+		Name: ContainerRun, Version: "1", Title: "Run a container",
+		Description: "Run a container image with the device's own Docker or Podman: no network unless allowed, a read-only filesystem, no privileges, CPU, memory and process limits. Input files are at /in (read-only); the files it writes to /out that you name come back. Off until policy turns it on and allows the image.",
+		Params: []Param{
+			{Name: "image", Type: String, Title: "Image (pinned: name@sha256:...)", Required: true, Pattern: ImagePattern, MaxLength: 512, Image: true},
+			{Name: "args", Type: String, Title: `Command as a JSON list, e.g. ["sh","-c","wc -l /in/*"] (empty = the image's own)`, MaxLength: MaxContainerArgv, AllowDash: true, Argv: true},
+			{Name: "outputs", Type: String, Title: "Files to bring back from /out (comma-separated)", Pattern: `[A-Za-z0-9._/-]+(?:,[A-Za-z0-9._/-]+)*`, MaxLength: 2200},
+			{Name: "cpus", Type: Number, Title: "CPUs", Default: "1", Min: num(0.1), Max: num(64)},
+			{Name: "memory_mb", Type: Int, Title: "Memory limit (MB)", Default: "512", Min: num(16), Max: num(65536)},
+			{Name: "network", Type: Enum, Title: "Network", Default: "none", Enum: []string{"none", "bridge"}},
+			{Name: "timeout", Type: Int, Title: "Time limit (seconds)", Default: "600", Min: num(1), Max: num(86400)},
+			{Name: "platform", Type: String, Title: "Platform, e.g. linux/arm64 (empty = any)", Pattern: PlatformPattern, MaxLength: 32, MatchAttr: AttrPlatform},
+		},
+		Inputs:                   Inputs{Min: 0, Max: domain.MaxWorkloadInputs, Description: "files for /in (read-only)"},
+		OutputsFrom:              "outputs",
+		Streams:                  true,
+		OptIn:                    true,
+		DefaultMaxRuntimeSeconds: 3600,
+	},
 }
 
 // AttrModels is the capability attribute listing a node's local models
@@ -354,6 +388,9 @@ func (t Type) Offers(attrs map[string]string, params map[string]string) (bool, s
 		if p.Needs != "" && params[p.Name] != "" && attrs[p.Needs] == "" {
 			return false, fmt.Sprintf("its agent predates the %s parameter (update it)", p.Name)
 		}
+		if p.MatchAttr != "" && params[p.Name] != "" && attrs[p.MatchAttr] != params[p.Name] {
+			return false, fmt.Sprintf("its %s is %q, not %q", p.MatchAttr, attrs[p.MatchAttr], params[p.Name])
+		}
 		if p.ChoicesAttr == "" {
 			continue
 		}
@@ -373,7 +410,7 @@ func (t Type) Offers(attrs map[string]string, params map[string]string) (bool, s
 // against node attributes.
 func (t Type) HasChoices() bool {
 	for _, p := range t.Params {
-		if p.ChoicesAttr != "" || p.Needs != "" {
+		if p.ChoicesAttr != "" || p.Needs != "" || p.MatchAttr != "" {
 			return true
 		}
 	}
@@ -466,6 +503,18 @@ func (t Type) Compile(params map[string]string, inputs []domain.ArtifactRef) (ma
 		}
 		outputs = append(outputs, name)
 	}
+	if names := out[t.OutputsFrom]; t.OutputsFrom != "" && names != "" {
+		list := strings.Split(names, ",")
+		if len(list) > domain.MaxWorkloadOutputs {
+			return nil, nil, fmt.Errorf("%w: %s: at most %d %s", ErrInvalid, t.Name, domain.MaxWorkloadOutputs, t.OutputsFrom)
+		}
+		for _, name := range list {
+			if err := domain.ValidArtifactName(name); err != nil {
+				return nil, nil, fmt.Errorf("%w: %s: %s: %v", ErrInvalid, t.Name, t.OutputsFrom, err)
+			}
+		}
+		outputs = append(outputs, list...)
+	}
 	return out, outputs, nil
 }
 
@@ -526,6 +575,12 @@ func (p Param) check(v string) (string, error) {
 		}
 		if p.AnswerFormat {
 			return answerFormat(v)
+		}
+		if p.Image {
+			return canonImage(v)
+		}
+		if p.Argv {
+			return canonArgv(v)
 		}
 		return v, nil
 	}

@@ -1195,8 +1195,21 @@
         const labels = Object.entries(p.nodeLabels || {}).map(([k, v]) => k + "=" + v).join(",");
         return '<tr data-cap="' + escapeHtml(n) + '"><td>' + escapeHtml(n) + (n.indexOf(".") > 0 && (n === "system.execute" || n === "filesystem.read") ? " <em>(raw)</em>" : "")
           + '</td><td><input type="checkbox" class="pol-on"' + (p.enabled ? " checked" : "") + '></td><td><input class="pol-labels" placeholder="raw=ok" value="'
-          + escapeHtml(labels) + '"></td><td><input type="number" min="0" class="pol-max" value="' + escapeHtml(String(p.maxRuntimeSeconds || 0)) + '"></td></tr>';
+          + escapeHtml(labels) + '"></td><td><input type="number" min="0" class="pol-max" value="' + escapeHtml(String(p.maxRuntimeSeconds || 0)) + '"></td></tr>'
+          + (imageTypes().includes(n) ? imagePolicyRow(n, p) : "");
       }).join("") + "</tbody></table>";
+  }
+
+  // Types that run container images (container.run) also have a list of
+  // the images they may run, and switches for tags and network.
+  function imageTypes() {
+    return catalogTypes.filter((t) => (t.params || []).some((p) => p.image)).map((t) => t.name);
+  }
+  function imagePolicyRow(n, p) {
+    return '<tr data-images-for="' + escapeHtml(n) + '"><td colspan="4"><label>Images ' + escapeHtml(n) + ' may run (comma-separated: a repository, name@sha256:..., or registry/namespace/*; none = nothing runs)'
+      + '<input class="pol-images" placeholder="docker.io/library/alpine@sha256:..., ghcr.io/me/*" value="' + escapeHtml((p.allowImages || []).join(", ")) + '"></label>'
+      + '<label class="inline"><input type="checkbox" class="pol-tags"' + (p.allowTags ? " checked" : "") + '> also by tag (not pinned by digest)</label> '
+      + '<label class="inline"><input type="checkbox" class="pol-net"' + (p.allowNetwork ? " checked" : "") + "> may use the network</label></td></tr>";
   }
 
   document.getElementById("savePolicy").addEventListener("click", async () => {
@@ -1210,8 +1223,16 @@
         if (i <= 0) { error.textContent = "Labels must be key=value: " + kv; return; }
         labels[kv.slice(0, i)] = kv.slice(i + 1);
       }
-      types[row.dataset.cap] = {enabled: row.querySelector(".pol-on").checked, nodeLabels: labels,
-        maxRuntimeSeconds: Number(row.querySelector(".pol-max").value) || 0};
+      // Settings this table doesn't show are kept as they were.
+      const entry = Object.assign({}, ((currentPolicy && currentPolicy.types) || {})[row.dataset.cap] || {}, {enabled: row.querySelector(".pol-on").checked, nodeLabels: labels,
+        maxRuntimeSeconds: Number(row.querySelector(".pol-max").value) || 0});
+      const images = Array.from(document.querySelectorAll("#policy tr[data-images-for]")).find((r) => r.dataset.imagesFor === row.dataset.cap);
+      if (images) {
+        entry.allowImages = images.querySelector(".pol-images").value.split(/[\s,]+/).filter((s) => s);
+        entry.allowTags = images.querySelector(".pol-tags").checked;
+        entry.allowNetwork = images.querySelector(".pol-net").checked;
+      }
+      types[row.dataset.cap] = entry;
     }
     const raw = types["system.execute"];
     if (raw && raw.enabled && !Object.keys(raw.nodeLabels).length
