@@ -128,7 +128,13 @@ func TestPhotoJobResizesAcrossNodesAndZips(t *testing.T) {
 	defer cancel()
 	for _, name := range []string{"photo-a", "photo-b"} {
 		a := startFileAgentWithSlots(t, ctx, m, addr, name, 2) // 4 photos, 2 slots each: must spread
-		waitFor(t, 5*time.Second, func() bool { rec, ok := m.srv.Registry.Get(a.NodeID()); return ok && rec.State == domain.NodeReady })
+		// Wait for the first heartbeat too: until then placement can't
+		// use the node, and the queue would drain onto whichever node
+		// reported first, two photos at a time.
+		waitFor(t, 5*time.Second, func() bool {
+			rec, ok := m.srv.Registry.Get(a.NodeID())
+			return ok && rec.State == domain.NodeReady && !rec.LastMetrics.LastHeartbeat.IsZero()
+		})
 	}
 	var tasks []map[string]any
 	for i, name := range []string{"beach.png", "city.png", "dog.png", "tree.png"} {

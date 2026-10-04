@@ -60,7 +60,7 @@ func startLlamaAgent(t *testing.T, ctx context.Context, m artifactManager, addr,
 	if use == nil {
 		use = pluggedIn
 	}
-	a, err := agent.New(ws.New(), agent.Config{DeviceUse: use, LlamaCppDir: llamaDir,
+	a, err := agent.New(ws.New(), agent.Config{DeviceUse: use, LlamaCppDir: llamaDir, LlamaCacheDir: t.TempDir(),
 		ManagerAddr: addr, PairingToken: pairingToken, IdentityDir: filepath.Join(t.TempDir(), name), WorkDir: filepath.Join(t.TempDir(), name+"-work"),
 		Name: name, HeartbeatInterval: 100 * time.Millisecond, HostFingerprint: "-", Insecure: true, OllamaURL: "127.0.0.1:1",
 		CapabilityProbeInterval: time.Minute,

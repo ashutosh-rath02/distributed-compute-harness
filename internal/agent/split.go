@@ -73,7 +73,12 @@ func (l *llamaCpp) bin(name string) string {
 	return p
 }
 
-var llamaVersionLine = regexp.MustCompile(`version:\s*(\S+)(?:\s*\((\w+)\))?`)
+var (
+	// "version: 0.5.0-dev (build 11382, commit 11fe02151)" (2026 builds)
+	llamaBuildLine = regexp.MustCompile(`build (\d+)(?:, commit (\w+))?`)
+	// "version: 4567 (abc1234)" (older builds)
+	llamaVersionLine = regexp.MustCompile(`version:\s*(\S+)(?:\s*\((\w+)\))?`)
+)
 
 // buildVersion is the installed build ("11382-abc1234"), read once:
 // every part of a session must run the same one.
@@ -90,14 +95,28 @@ func (l *llamaCpp) buildVersion(ctx context.Context) string {
 		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 		out, _ := exec.CommandContext(ctx, bin, "--version").CombinedOutput()
-		if m := llamaVersionLine.FindStringSubmatch(string(out)); m != nil {
-			l.version = m[1]
-			if m[2] != "" {
-				l.version += "-" + m[2]
-			}
+		if v := parseLlamaVersion(string(out)); v != "" {
+			l.version = v
 		}
 	})
 	return l.version
+}
+
+// parseLlamaVersion reads the build from `llama-server --version`:
+// "11382-11fe02151" from today's "build 11382, commit 11fe02151", or the
+// older "version: 4567 (abc1234)" form; "" if neither is there.
+func parseLlamaVersion(out string) string {
+	m := llamaBuildLine.FindStringSubmatch(out)
+	if m == nil {
+		m = llamaVersionLine.FindStringSubmatch(out)
+	}
+	if m == nil {
+		return ""
+	}
+	if m[2] != "" {
+		return m[1] + "-" + m[2]
+	}
+	return m[1]
 }
 
 // sweep stops llama.cpp programs still running from this
@@ -259,7 +278,10 @@ func (h splitHelper) Run(ctx context.Context, env tasks.Env) error {
 	if err != nil {
 		return err
 	}
-	cache := rpcCacheDir()
+	cache := h.a.cfg.LlamaCacheDir
+	if cache == "" {
+		cache = rpcCacheDir()
+	}
 	os.MkdirAll(cache, 0o700)
 	cmd := exec.CommandContext(ctx, h.a.llama.bin("ggml-rpc-server"), "-H", "127.0.0.1", "-p", strconv.Itoa(port), "-c")
 	cmd.Env = append(os.Environ(), "LLAMA_CACHE="+cache, "GGML_RPC_NO_RDMA=1")

@@ -146,6 +146,10 @@ type Config struct {
 	// LlamaCppDir is where the device's own llama.cpp build is (its
 	// ggml-rpc-server and llama-server), for split sessions; empty: none.
 	LlamaCppDir string
+	// LlamaCacheDir is where a split helper's ggml-rpc-server keeps the
+	// model pieces it was sent; empty: the user cache dir's
+	// HomeHarness/llama-rpc-cache (tests use their own).
+	LlamaCacheDir string
 	// GPUs overrides the GPUs the agent reports (tests). Nil: detected.
 	GPUs func(ctx context.Context) []domain.GPU
 	// KeepAwake asks the OS not to sleep while a workload runs here (a

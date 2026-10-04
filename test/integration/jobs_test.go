@@ -106,10 +106,14 @@ func TestMapJobSpreadsAcrossNodesAndReduces(t *testing.T) {
 	defer cancel()
 	a := startFileAgentWithSlots(t, ctx, m, addr, "job-agent-a", 2) // 6 tasks, 2 slots each: must spread
 	b := startFileAgentWithSlots(t, ctx, m, addr, "job-agent-b", 2)
+	// Both heartbeating, not just READY: placement can't use a node
+	// before its first heartbeat, and quick tasks would all drain onto
+	// whichever node reported first.
 	waitFor(t, 5*time.Second, func() bool {
 		ra, okA := m.srv.Registry.Get(a.NodeID())
 		rb, okB := m.srv.Registry.Get(b.NodeID())
-		return okA && okB && ra.State == domain.NodeReady && rb.State == domain.NodeReady
+		return okA && okB && ra.State == domain.NodeReady && rb.State == domain.NodeReady &&
+			!ra.LastMetrics.LastHeartbeat.IsZero() && !rb.LastMetrics.LastHeartbeat.IsZero()
 	})
 
 	cmd, args := upperCommand()
