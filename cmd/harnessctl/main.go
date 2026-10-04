@@ -141,6 +141,8 @@ func main() {
 		err = client.cmdJoinRequests()
 	case "join-window":
 		err = client.cmdJoinWindow(args[1:])
+	case "standby":
+		err = client.cmdStandby(args[1:])
 	case "approve":
 		err = requireArgs(args, 2, "approve <id|code>", func() error { return client.cmdDecideJoin(strings.Join(args[1:], " "), true) })
 	case "reject":
@@ -363,7 +365,14 @@ Commands:
                         whether new devices may join: open it (default 15
                         minutes) while adding a device, close it after.
                         Known devices always reconnect
-  unrevoke <id>         lift a revocation; the node must then be admitted
+  standby [add | status | promote [-force] | remove]
+                        a standby manager: "add" (on the active manager)
+                        prints the command that makes another machine its
+                        standby — it copies this manager's whole state and
+                        serves nothing until promoted; "promote" (on the
+                        standby) takes over once the primary is gone
+                        (-force: while it still runs, a planned switch-over)
+  unrevoke <id>        lift a revocation; the node must then be admitted
                         afresh (its shared-token launcher does this on its
                         own; a one-time-invitation node needs a new one)
   join <manager-addr|remote> [windows|android|macos|linux]

@@ -67,7 +67,8 @@ func main() {
 	importState := flag.String("import-state", "", "unpack a state zip made by -export-state into -state-dir and exit (refuses to replace an existing database without -force)")
 	stateDir := flag.String("state-dir", "", "the state directory for -export-state / -import-state")
 	withArtifacts := flag.Bool("with-artifacts", false, "with -export-state: include stored workload files (can be large)")
-	force := flag.Bool("force", false, "with -import-state: replace an existing state")
+	force := flag.Bool("force", false, "with -import-state: replace an existing state; with -standby-of: replace this manager's database and identity with the primary's")
+	standby := registerStandbyFlags()
 	flag.Parse()
 
 	if *exportState != "" || *importState != "" {
@@ -104,8 +105,11 @@ func main() {
 		return
 	}
 
-	if *pairingToken == "" {
+	if *pairingToken == "" && !standby.configured(*dbPath) {
 		log.Fatal("manager: -pairing-token is required")
+	}
+	if *insecure && standby.configured(*dbPath) {
+		log.Fatal("manager: a standby needs TLS: drop -insecure")
 	}
 	if *relayAddr != "" && *relayToken == "" {
 		log.Fatal("manager: -relay-token is required when -relay-addr is set")
@@ -136,6 +140,17 @@ func main() {
 	}
 	if *aiKeyFile == "" {
 		*aiKeyFile = filepath.Join(filepath.Dir(*operatorTokenFile), "ai-key")
+	}
+	// A standby copies the active manager until promoted (standby.go).
+	standbyPhase := standbySetup{flags: standby, db: *dbPath, tlsDir: *tlsDir, aiKeyFile: *aiKeyFile, apiAddr: *apiAddr, advert: *advertiseAddr,
+		operatorToken: operatorToken, force: *force, artifactDir: *artifactDir, artifactMax: *artifactMax, artifactSize: *artifactTotal}
+	if outcome, ok := standbyPhase.run(); !ok {
+		return
+	} else if outcome.PairingToken != "" {
+		*pairingToken = outcome.PairingToken // the fleet's, copied from the primary
+	}
+	if *pairingToken == "" {
+		log.Fatal("manager: -pairing-token is required")
 	}
 	aiKey, err := manager.LoadOrCreateOperatorToken(*aiKeyFile)
 	if err != nil {
@@ -207,7 +222,10 @@ func main() {
 			log.Printf("manager: workload file store at %s (%d of %d bytes used)", *artifactDir, used, total)
 		}
 	}
+	stepped := &stepDown{db: *dbPath, fingerprint: fingerprint}
 	srv := manager.NewServer(finalTransport, store, manager.Config{
+		TLSCert:             cert,
+		StepDown:            stepped.request,
 		Addr:                *addr,
 		PairingToken:        *pairingToken,
 		HeartbeatTimeout:    *heartbeatTimeout,
@@ -244,6 +262,8 @@ func main() {
 	transport.Handle("/enroll/", srv.EnrollmentHandler())
 	// Workload file transfers, authorized per assignment (manager/artifacts.go).
 	transport.Handle("/workload-artifacts/", srv.ArtifactTransferHandler())
+	// The standby link: direct pinned TLS only, never through the relay.
+	transport.Handle("/standby/", srv.StandbyHandler())
 	if relayTransport != nil {
 		relayTransport.Handle("/agent-binary", srv.AgentBinaryHandler())
 		relayTransport.Handle("GET /agent-binaries/{os}/{arch}", srv.AgentBinariesHandler())
@@ -254,6 +274,7 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	ctx = stepped.wrap(ctx) // ends when a newer manager supersedes this one
 
 	if !*disableDiscovery {
 		port, err := portOf(*addr)
@@ -327,6 +348,7 @@ func main() {
 	if err := srv.Run(ctx); err != nil && ctx.Err() == nil {
 		log.Fatalf("manager: %v", err)
 	}
+	standbyPhase.afterRun(stepped, store.Close)
 }
 
 // agentBinaryFlags collects repeated -agent-binary values.

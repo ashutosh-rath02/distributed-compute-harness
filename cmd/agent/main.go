@@ -157,6 +157,9 @@ func main() {
 		ToolsDir:             *toolsDir,
 		ToolsSearchSystem:    true,
 		ContainerEngine:      *containerEngine,
+		// Follow a standby manager when the primary is gone; not through a
+		// relay, where the standby link doesn't reach.
+		Failover: *relayAddr == "",
 	}
 	cacheBytes, err := domain.ParseByteSize(*inputCacheSize)
 	if err != nil || cacheBytes > 1<<50 {

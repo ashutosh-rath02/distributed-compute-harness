@@ -40,6 +40,10 @@ const (
 	MsgPing       MessageType = "PING"
 	MsgPong       MessageType = "PONG"
 	MsgError      MessageType = "ERROR"
+
+	// MANAGERS tells failover.v1 agents the pair's addresses and the
+	// current term when they change (a standby added or removed).
+	MsgManagers MessageType = "MANAGERS"
 )
 
 // Envelope is the outer frame for every Harness Protocol message.
