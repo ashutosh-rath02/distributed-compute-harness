@@ -30,7 +30,9 @@ platform="$(ls -d "$sdk"/platforms/android-* | sort -V | tail -1)/android.jar"
 tool() { for c in "$bt/$1" "$bt/$1.exe" "$bt/$1.bat"; do [[ -e "$c" ]] && { echo "$c"; return; }; done; echo "missing $1 in $bt" >&2; exit 1; }
 aapt2="$(tool aapt2)"; d8="$(tool d8)"; zipalign="$(tool zipalign)"; apksigner="$(tool apksigner)"
 
-version_code="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
+# HARNESS_ANDROID_VERSION_CODE overrides the version code (the commit
+# count): to build successive versions from one commit to test updates.
+version_code="${HARNESS_ANDROID_VERSION_CODE:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}"
 version_name="$(git describe --always --dirty 2>/dev/null || echo dev)"
 out="build/android"
 rm -rf "$out"

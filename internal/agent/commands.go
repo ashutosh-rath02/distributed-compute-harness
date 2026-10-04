@@ -32,12 +32,14 @@ func (a *Agent) handleCommand(ctx context.Context, conn domain.Conn, env *protoc
 	// launching the goroutine, makes the ordering explicit rather than
 	// timing-dependent.
 	if payload.Command.Name == domain.CommandSelfUpdate {
-		result := domain.CommandResult{CommandID: payload.Command.ID, Success: true, Output: map[string]string{"status": "update started"}}
+		result, run := a.selfUpdateCommand(payload.Command)
 		if err := a.send(ctx, conn, protocol.MsgCommandResult, env.Source, protocol.CommandResultPayload{Result: result}); err != nil {
 			errCh <- fmt.Errorf("send COMMAND_RESULT: %w", err)
 			return
 		}
-		go a.performSelfUpdate(payload.Command.Args["sha256"], payload.Command.Args["path"])
+		if run != nil {
+			go run()
+		}
 		return
 	}
 

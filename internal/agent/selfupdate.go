@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"home-harness/internal/domain"
 	"home-harness/internal/mtls"
 )
 
@@ -72,6 +73,91 @@ func (a *Agent) selfUpdateScheme() string {
 	return "https"
 }
 
+// selfUpdateCommand answers a SELF_UPDATE: the result to send at once and
+// the update to run after it (nil when refused). The app route updates
+// the app this agent is part of; any other path replaces this binary,
+// which an agent updated with its app can't do (its binary sits in the
+// app's read-only install).
+func (a *Agent) selfUpdateCommand(cmd domain.Command) (domain.CommandResult, func()) {
+	sha, path := cmd.Args["sha256"], cmd.Args["path"]
+	refuse := func(why string) (domain.CommandResult, func()) {
+		log.Printf("agent %s: self-update refused: %s", a.identity.NodeID, why)
+		return domain.CommandResult{CommandID: cmd.ID, Success: false, Error: why}, nil
+	}
+	switch {
+	case path == domain.AppBinaryRoute:
+		if !a.appUpdates() {
+			return refuse("this agent isn't part of an app it can update")
+		}
+		return domain.CommandResult{CommandID: cmd.ID, Success: true, Output: map[string]string{"status": "app update started"}},
+			func() { a.performAppUpdate(sha) }
+	case a.cfg.SelfUpdateDisabled:
+		return refuse("this agent can't replace itself: it is updated with its app")
+	}
+	return domain.CommandResult{CommandID: cmd.ID, Success: true, Output: map[string]string{"status": "update started"}},
+		func() { a.performSelfUpdate(sha, path) }
+}
+
+// appUpdates reports whether this agent updates with its app.
+func (a *Agent) appUpdates() bool {
+	return a.cfg.AppAPK != "" && a.cfg.AppUpdateFile != "" && a.appHash != ""
+}
+
+// appUpdateTimeout bounds the app download: the Android app is tens of
+// megabytes, far more than an agent binary.
+const appUpdateTimeout = 15 * time.Minute
+
+// performAppUpdate downloads the app this agent is part of, checks it
+// against the hash the manager named, and leaves it at AppUpdateFile —
+// renamed into place only once complete and checked — for the app to
+// install. The agent can't install it: the app does, and restarts it.
+func (a *Agent) performAppUpdate(expectedSHA256 string) {
+	client, base, err := a.updateSource()
+	if err != nil {
+		log.Printf("agent %s: app update: %v", a.identity.NodeID, err)
+		return
+	}
+	c := *client
+	c.Timeout = appUpdateTimeout
+	dest := a.cfg.AppUpdateFile
+	download := dest + selfUpdateDownloadSuffix
+	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
+		log.Printf("agent %s: app update: %v", a.identity.NodeID, err)
+		return
+	}
+	if err := downloadFile(&c, base+domain.AppBinaryRoute, download); err != nil {
+		log.Printf("agent %s: app update: download failed: %v", a.identity.NodeID, err)
+		os.Remove(download)
+		return
+	}
+	got, err := hashFile(download)
+	if err != nil || got != expectedSHA256 {
+		log.Printf("agent %s: app update: hash mismatch (got %s, want %s), discarding download", a.identity.NodeID, got, expectedSHA256)
+		os.Remove(download)
+		return
+	}
+	if err := os.Rename(download, dest); err != nil {
+		log.Printf("agent %s: app update: %v", a.identity.NodeID, err)
+		os.Remove(download)
+		return
+	}
+	log.Printf("agent %s: app update downloaded (%s); the app installs it", a.identity.NodeID, expectedSHA256)
+}
+
+// updateSource is the client and base URL updates download with: the
+// configured override (tests, a relay), else the manager this agent is
+// connected to, over a connection pinned to its certificate.
+func (a *Agent) updateSource() (*http.Client, string, error) {
+	if a.cfg.SelfUpdateHTTPClient != nil && a.cfg.SelfUpdateBaseURL != "" {
+		return a.cfg.SelfUpdateHTTPClient, a.cfg.SelfUpdateBaseURL, nil
+	}
+	addr := a.getCurrentManagerAddr()
+	if addr == "" {
+		return nil, "", fmt.Errorf("no known manager address")
+	}
+	return a.selfUpdateHTTPClient(), fmt.Sprintf("%s://%s", a.selfUpdateScheme(), addr), nil
+}
+
 // performSelfUpdate downloads, verifies, and swaps in a new agent binary,
 // then relaunches with the exact flags this process was started with. Any
 // failure before the swap (download error, hash mismatch) leaves the
@@ -118,16 +204,10 @@ func (a *Agent) performSelfUpdateAt(exePath, expectedSHA256, path string) {
 		log.Printf("agent %s: self-update: %v", a.identity.NodeID, err)
 		return
 	}
-	client := a.cfg.SelfUpdateHTTPClient
-	base := a.cfg.SelfUpdateBaseURL
-	if client == nil || base == "" {
-		addr := a.getCurrentManagerAddr()
-		if addr == "" {
-			log.Printf("agent %s: self-update: no known manager address, aborting", a.identity.NodeID)
-			return
-		}
-		client = a.selfUpdateHTTPClient()
-		base = fmt.Sprintf("%s://%s", a.selfUpdateScheme(), addr)
+	client, base, err := a.updateSource()
+	if err != nil {
+		log.Printf("agent %s: self-update: %v, aborting", a.identity.NodeID, err)
+		return
 	}
 	url := base + path
 	downloadPath := exePath + selfUpdateDownloadSuffix

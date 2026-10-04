@@ -293,7 +293,8 @@ func (s *Server) apiPostUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "node not found", http.StatusNotFound)
 		return
 	}
-	if s.agents.empty() {
+	app := rec.hasAgentFeature(domain.FeatureAppUpdate)
+	if !app && s.agents.empty() {
 		http.Error(w, "manager: self-update disabled (-agent-binary not set)", http.StatusConflict)
 		return
 	}
@@ -303,7 +304,9 @@ func (s *Server) apiPostUpdate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "already-up-to-date"})
 		return
 	case UpdateUnknown:
-		if rec.Node.BinaryHash == "" {
+		if app {
+			http.Error(w, "this device updates with its app, and this manager has no app to offer (start it with -app-apk)", http.StatusConflict)
+		} else if rec.Node.BinaryHash == "" {
 			http.Error(w, "node has not reported its agent binary hash, so there is nothing to compare an update against", http.StatusConflict)
 		} else {
 			http.Error(w, fmt.Sprintf("no agent build for %s/%s is loaded — restart the manager with an -agent-binary for that platform", rec.Node.Platform.OS, rec.Node.Platform.Architecture), http.StatusConflict)
@@ -329,7 +332,7 @@ func (s *Server) apiPostUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(domain.AuditSecurity, "agent.update-dispatched", nodeID, actorFrom(r.Context()), map[string]any{
-		"platform": build.platform(), "from": rec.Node.BinaryHash, "to": build.SHA256,
+		"platform": build.platform(), "from": map[bool]string{false: rec.Node.BinaryHash, true: rec.Node.AppHash}[app], "to": build.SHA256, "app": app,
 	})
 	writeJSON(w, http.StatusOK, result)
 }

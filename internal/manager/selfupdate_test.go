@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"home-harness/internal/domain"
 )
@@ -114,5 +115,72 @@ func TestUpdateAPIRefusesCrossPlatformBuild(t *testing.T) {
 	case msg := <-conn.sent:
 		t.Fatalf("expected no SELF_UPDATE to be dispatched to the Android node, but sent: %s", msg)
 	default:
+	}
+}
+
+// An agent that is part of the Android app is current when its app is
+// the one the manager offers — whatever agent build it holds, since two
+// app builds can carry the same agent.
+func TestUpdateStatusForAppWorkers(t *testing.T) {
+	// Both catalogs hold the PC (primary) and phone agent builds.
+	withApp := testServerWithBuilds(windowsBuild, androidBuild)
+	withApp.app = &agentBuild{OS: "android", Arch: "app", SHA256: "app-v2", route: domain.AppBinaryRoute}
+	noApp := testServerWithBuilds(windowsBuild, androidBuild)
+	appNode := func(appHash string) *NodeRecord {
+		rec := nodeOn("linux", "arm64", "android-hash", domain.FeatureAppUpdate)
+		rec.Node.AppHash = appHash
+		return rec
+	}
+	for name, tc := range map[string]struct {
+		s    *Server
+		rec  *NodeRecord
+		want UpdateStatus
+	}{
+		"same app":                        {withApp, appNode("app-v2"), UpdateCurrent},
+		"older app, same agent inside":    {withApp, appNode("app-v1"), UpdateAvailable},
+		"no app offered":                  {noApp, appNode("app-v1"), UpdateUnknown},
+		"app hash not reported":           {withApp, appNode(""), UpdateUnknown},
+		"old app worker (no app updates)": {withApp, nodeOn("linux", "arm64", "old"), UpdateReinstallRequired},
+	} {
+		got, build := tc.s.updateTarget(tc.rec)
+		if got != tc.want {
+			t.Errorf("%s: %s, want %s", name, got, tc.want)
+		}
+		if got == UpdateAvailable && build.downloadPath() != domain.AppBinaryRoute {
+			t.Errorf("%s: downloads from %s", name, build.downloadPath())
+		}
+	}
+}
+
+// Updating an app worker sends it the app's hash and route, even with no
+// agent builds loaded (a phone manager serves the app, not a catalog).
+func TestUpdateAPISendsAppWorkersTheApp(t *testing.T) {
+	s := NewServer(nil, nil, Config{})
+	s.app = &agentBuild{OS: "android", Arch: "app", SHA256: "app-v2", route: domain.AppBinaryRoute}
+	conn := &recordingConn{sent: make(chan []byte, 4)}
+	s.Registry.Upsert(domain.Manifest{
+		Node:          domain.Node{Identity: domain.Identity{NodeID: "node-phone"}, Platform: domain.Platform{OS: "linux", Architecture: "arm64"}, BinaryHash: "agent", AppHash: "app-v1"},
+		AgentFeatures: []string{domain.FeatureAppUpdate},
+	}, conn)
+	s.Registry.SetState("node-phone", domain.NodeReady)
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /nodes/{id}/update", s.apiPostUpdate)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/nodes/node-phone/update", nil).WithContext(ctx))
+	}()
+	// The command waits for the device's answer: stop waiting once it is
+	// sent, and let the handler finish before the test ends.
+	defer func() { cancel(); <-done }()
+	select {
+	case msg := <-conn.sent:
+		if !strings.Contains(string(msg), `"sha256":"app-v2"`) || !strings.Contains(string(msg), `"path":"`+domain.AppBinaryRoute+`"`) {
+			t.Fatalf("SELF_UPDATE sent: %s", msg)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no SELF_UPDATE was sent")
 	}
 }

@@ -136,6 +136,13 @@ type Config struct {
 	// features: this binary can't be replaced in place (the Android app's
 	// worker, updated with the app).
 	SelfUpdateDisabled bool
+	// AppAPK is the installed app this agent is part of (the Android app's
+	// own APK): its hash is reported as Node.AppHash. With AppUpdateFile
+	// set too, the agent offers FeatureAppUpdate: a SELF_UPDATE for the
+	// app downloads it to AppUpdateFile (checked against the hash the
+	// manager named) and the app installs it from there.
+	AppAPK        string
+	AppUpdateFile string
 	// DeviceStateFile is a file another program keeps current with what
 	// the agent can't see itself (the Android app: charging and screen
 	// state); see sysinfo.DeviceUse.
@@ -174,6 +181,9 @@ type Agent struct {
 	// reported as-is, an empty BinaryHash just means the manager can never
 	// consider this node up to date, never a crash.
 	binaryHash string
+
+	// appHash is AppAPK's SHA-256, computed once in New.
+	appHash string
 
 	// hostFingerprint/hostFingerprintSource are computed once in New.
 	hostFingerprint, hostFingerprintSource string
@@ -245,6 +255,15 @@ func New(transport domain.Transport, cfg Config) (*Agent, error) {
 		}
 	}
 
+	appHash := ""
+	if cfg.AppAPK != "" {
+		if h, err := hashFile(cfg.AppAPK); err != nil {
+			log.Printf("agent %s: could not hash the app %s, app updates unavailable: %v", id.NodeID, cfg.AppAPK, err)
+		} else {
+			appHash = h
+		}
+	}
+
 	if cfg.WorkloadSlots < 1 {
 		cfg.WorkloadSlots = defaultSlots()
 	}
@@ -254,7 +273,7 @@ func New(transport domain.Transport, cfg Config) (*Agent, error) {
 	if within(cfg.WorkDir, cfg.IdentityDir) || within(cfg.IdentityDir, cfg.WorkDir) {
 		return nil, fmt.Errorf("agent: -work-dir %s and the identity directory %s must not contain each other", cfg.WorkDir, cfg.IdentityDir)
 	}
-	a := &Agent{cfg: cfg, transport: transport, identity: id, startedAt: time.Now(), executor: NewExecutorWithSlots(cfg.WorkloadSlots), binaryHash: binaryHash, reprobe: make(chan struct{}, 1)}
+	a := &Agent{cfg: cfg, transport: transport, identity: id, startedAt: time.Now(), executor: NewExecutorWithSlots(cfg.WorkloadSlots), binaryHash: binaryHash, appHash: appHash, reprobe: make(chan struct{}, 1)}
 	a.executor.SetWorkRoot(cfg.WorkDir)
 	a.executor.SetDisabled(cfg.DisabledCapabilities)
 	a.handlers = tasks.NewRegistry(tasks.Options{OllamaURL: cfg.OllamaURL})
@@ -492,6 +511,7 @@ func (a *Agent) buildManifest(ctx context.Context) domain.Manifest {
 			Platform:     domain.Platform{OS: runtime.GOOS, Architecture: runtime.GOARCH},
 			AgentVersion: a.cfg.AgentVersion,
 			BinaryHash:   a.binaryHash,
+			AppHash:      a.appHash,
 
 			HostFingerprint:       a.hostFingerprint,
 			HostFingerprintSource: a.hostFingerprintSource,
@@ -674,6 +694,9 @@ func (a *Agent) agentFeatures() []string {
 	features := []string{domain.FeatureArtifacts, domain.FeatureTimeout, domain.FeatureAvailability}
 	if !a.cfg.SelfUpdateDisabled {
 		features = append([]string{domain.FeatureSelfUpdatePath}, features...)
+	}
+	if a.appUpdates() {
+		features = append(features, domain.FeatureAppUpdate)
 	}
 	return features
 }

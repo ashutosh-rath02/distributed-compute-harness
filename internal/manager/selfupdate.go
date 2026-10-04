@@ -58,6 +58,18 @@ const (
 // the manager named that very file, and the agent could never start
 // again.)
 func (s *Server) updateTarget(rec *NodeRecord) (UpdateStatus, agentBuild) {
+	// An agent that is part of the Android app updates with the app: what
+	// counts is which app is installed, not the agent inside it (two app
+	// builds can hold the same agent).
+	if rec.hasAgentFeature(domain.FeatureAppUpdate) {
+		switch {
+		case s.app == nil || rec.Node.AppHash == "":
+			return UpdateUnknown, agentBuild{}
+		case rec.Node.AppHash == s.app.SHA256:
+			return UpdateCurrent, *s.app
+		}
+		return UpdateAvailable, *s.app
+	}
 	build, ok := s.agents.forPlatform(rec.Node.Platform.OS, rec.Node.Platform.Architecture)
 	if !ok || rec.Node.BinaryHash == "" {
 		return UpdateUnknown, agentBuild{}

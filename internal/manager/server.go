@@ -181,6 +181,8 @@ type Server struct {
 	// agents is the loaded agent-build catalog (agentcatalog.go), built
 	// once at startup from cfg.AgentBinaries — never nil.
 	agents *agentCatalog
+	// app: the Android app offered to agents updated with it (nil = none).
+	app *agentBuild
 }
 
 // pendingCommand tracks who a dispatched command was sent to, so its
@@ -246,6 +248,9 @@ func NewServer(transport domain.Transport, store PersistentStore, cfg Config) *S
 		for _, b := range catalog.builds {
 			log.Printf("manager: serving agent build %s (%s)", b.platform(), b.Path)
 		}
+	}
+	if s.app = loadApp(cfg.AppAPK); s.app != nil {
+		log.Printf("manager: offering the Android app to app workers (%s)", s.app.SHA256[:12])
 	}
 
 	return s

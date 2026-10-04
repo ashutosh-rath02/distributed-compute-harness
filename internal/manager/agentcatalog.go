@@ -2,8 +2,11 @@ package manager
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
+
+	"home-harness/internal/domain"
 )
 
 // AgentBinary names one agent build the manager serves. OS/Arch are
@@ -17,15 +20,53 @@ type AgentBinary struct {
 	Path string
 }
 
-// agentBuild is one loaded catalog entry.
+// agentBuild is one loaded catalog entry (or the Android app, which
+// agents updated with it download from route).
 type agentBuild struct {
 	OS, Arch, Path, SHA256 string
+	route                  string
 }
 
 func (b agentBuild) platform() string { return b.OS + "/" + b.Arch }
 
 // downloadPath is the agent-transport route serving this build.
-func (b agentBuild) downloadPath() string { return "/agent-binaries/" + b.OS + "/" + b.Arch }
+func (b agentBuild) downloadPath() string {
+	if b.route != "" {
+		return b.route
+	}
+	return "/agent-binaries/" + b.OS + "/" + b.Arch
+}
+
+// loadApp hashes the Android app the manager offers to agents that update
+// with it (nil if none is configured or it can't be read).
+func loadApp(path string) *agentBuild {
+	if path == "" {
+		return nil
+	}
+	hash, err := hashFile(path)
+	if err != nil {
+		log.Printf("manager: app %s: %v (apps won't be offered updates)", path, err)
+		return nil
+	}
+	return &agentBuild{OS: "android", Arch: "app", Path: path, SHA256: hash, route: domain.AppBinaryRoute}
+}
+
+// AppBinaryHandler serves the Android app at domain.AppBinaryRoute on the
+// agent-facing listeners, for agents updated with the app. Like the agent
+// builds, unauthenticated: the SELF_UPDATE naming its exact hash arrives
+// over the authenticated connection, and Android installs only an APK
+// signed with the installed app's key.
+func (s *Server) AppBinaryHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.app == nil {
+			http.NotFound(w, r)
+			return
+		}
+		logAgentDownload(r, *s.app)
+		w.Header().Set("Content-Type", "application/vnd.android.package-archive")
+		http.ServeFile(w, r, s.app.Path)
+	}
+}
 
 // agentCatalog is the set of agent builds this manager serves, keyed by
 // GOOS/GOARCH — one per platform, so onboarding and self-update always

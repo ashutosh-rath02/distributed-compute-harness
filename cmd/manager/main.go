@@ -229,12 +229,14 @@ func main() {
 	// listener as everything else agents reach.
 	transport.Handle("/tunnel/", srv.TunnelHandler())
 	transport.Handle("GET /agent-binaries/{os}/{arch}", srv.AgentBinariesHandler())
+	transport.Handle("GET "+domain.AppBinaryRoute, srv.AppBinaryHandler())
 	transport.Handle("/enroll/", srv.EnrollmentHandler())
 	// Workload file transfers, authorized per assignment (manager/artifacts.go).
 	transport.Handle("/workload-artifacts/", srv.ArtifactTransferHandler())
 	if relayTransport != nil {
 		relayTransport.Handle("/agent-binary", srv.AgentBinaryHandler())
 		relayTransport.Handle("GET /agent-binaries/{os}/{arch}", srv.AgentBinariesHandler())
+		relayTransport.Handle("GET "+domain.AppBinaryRoute, srv.AppBinaryHandler())
 		relayTransport.Handle("/enroll/", srv.EnrollmentHandler())
 		relayTransport.Handle("/workload-artifacts/", srv.ArtifactTransferHandler())
 	}

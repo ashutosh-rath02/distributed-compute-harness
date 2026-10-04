@@ -130,7 +130,9 @@ final class Harness {
 
     /** The worker's command line: the agent joins by approval on the
      *  manager (-pair), finding it on the LAN unless an address was typed.
-     *  No self-update: its binary is part of the app, updated with it. */
+     *  Its binary is part of the app, so it updates with the app: it
+     *  reports which app it is part of, downloads a newer one when the
+     *  manager offers it, and AppUpdater installs that. */
     static List<String> workerCommand(Context c) {
         File dir = workerDir(c);
         dir.mkdirs();
@@ -147,6 +149,10 @@ final class Harness {
         // Charging and screen state, kept current by DeviceState.
         cmd.add("-device-state-file");
         cmd.add(deviceStateFile(c).getAbsolutePath());
+        cmd.add("-app-apk");
+        cmd.add(c.getApplicationInfo().sourceDir);
+        cmd.add("-app-update-file");
+        cmd.add(AppUpdater.updateFile(c).getAbsolutePath());
         String addr = prefs(c).getString(KEY_MANAGER_ADDR, "");
         if (!addr.isEmpty()) {
             cmd.add("-manager-addr");

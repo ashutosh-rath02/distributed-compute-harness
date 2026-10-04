@@ -40,6 +40,16 @@ func (m Manifest) Slots() int {
 // rather than always from the legacy single /agent-binary route.
 const FeatureSelfUpdatePath = "self-update.path"
 
+// FeatureAppUpdate means the agent is part of an app it can't replace
+// itself in (the Android app): a SELF_UPDATE naming AppBinaryRoute makes
+// it download the app, and the app installs it. Node.AppHash says which
+// app is installed.
+const FeatureAppUpdate = "app-update.v1"
+
+// AppBinaryRoute is where the manager serves the Android app to agents
+// that update with it (on the agent-facing listener, like /agent-binaries).
+const AppBinaryRoute = "/app-binaries/android"
+
 // FeatureTimeout means the agent enforces Workload.TimeoutSeconds.
 // Placement only sends a workload with a timeout to agents advertising
 // it: an older agent would silently run it without one.

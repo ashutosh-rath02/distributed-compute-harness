@@ -34,8 +34,8 @@ public class WorkerActivity extends Activity {
     private static final Pattern CONNECTED = Pattern.compile("registered with manager at (\\S+)");
 
     private final Handler ui = new Handler(Looper.getMainLooper());
-    private TextView status, code, detail;
-    private Button toggle;
+    private TextView status, code, detail, update;
+    private Button toggle, install;
     private final Runnable refresher = new Runnable() {
         @Override
         public void run() {
@@ -78,6 +78,19 @@ public class WorkerActivity extends Activity {
         detail.setPadding(0, 0, 0, pad);
         box.addView(detail);
 
+        // An app update from the manager waiting for the owner's OK.
+        update = new TextView(this);
+        update.setTextSize(14);
+        update.setTypeface(Typeface.DEFAULT_BOLD);
+        box.addView(update);
+        install = new Button(this);
+        install.setText("Install the update");
+        install.setOnClickListener(v -> {
+            android.content.Intent screen = AppUpdater.confirm;
+            if (screen != null) startActivity(screen);
+        });
+        box.addView(install);
+
         Button addr = new Button(this);
         addr.setText("Manager's address…");
         addr.setOnClickListener(v -> askAddress());
@@ -115,6 +128,10 @@ public class WorkerActivity extends Activity {
     /** Shows the state the agent's log ends in (newest relevant line wins). */
     private void refresh() {
         toggle.setText(ManagerService.running ? "Stop the worker" : "Start the worker");
+        String u = AppUpdater.status;
+        update.setText(u);
+        update.setVisibility(u.isEmpty() ? View.GONE : View.VISIBLE);
+        install.setVisibility(AppUpdater.confirm != null ? View.VISIBLE : View.GONE);
         code.setVisibility(View.GONE);
         if (!ManagerService.running) {
             status.setText("Stopped");

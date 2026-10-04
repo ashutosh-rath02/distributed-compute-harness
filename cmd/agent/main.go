@@ -51,6 +51,8 @@ func main() {
 	llamaDir := flag.String("llama-cpp-dir", agent.DefaultLlamaCppDir(), "where this device's own llama.cpp build is (ggml-rpc-server, llama-server): lets it take part in models split across devices. Never downloaded by the agent")
 	keepAwake := flag.Bool("keep-awake", true, "ask the OS not to sleep while a task runs here (it never blocks closing the lid or choosing Sleep)")
 	noSelfUpdate := flag.Bool("no-self-update", false, "don't offer self-update (this binary can't be replaced in place; it is updated some other way, e.g. with the Android app)")
+	appAPK := flag.String("app-apk", "", "the installed app this agent is part of (the Android app passes its own APK): its hash tells the manager which app version runs here")
+	appUpdateFile := flag.String("app-update-file", "", "where to download a newer app when the manager offers one, for the app to install (with -app-apk)")
 	flag.Parse()
 
 	// Without -manager-fingerprint, a device that paired before pins the
@@ -144,6 +146,8 @@ func main() {
 		Pairing:              *pair,
 		ManagerAddrFallback:  *addrFallback,
 		SelfUpdateDisabled:   *noSelfUpdate,
+		AppAPK:               *appAPK,
+		AppUpdateFile:        *appUpdateFile,
 		DeviceStateFile:      *deviceStateFile,
 		KeepAwake:            *keepAwake,
 		LlamaCppDir:          *llamaDir,

@@ -56,6 +56,10 @@ type Node struct {
 	// (see internal/manager's NeedsUpdate): a content hash needs no human
 	// to remember to bump a version number.
 	BinaryHash string `json:"binaryHash,omitempty"`
+	// AppHash is the SHA-256 (hex) of the installed app this agent ships
+	// inside (the Android app's APK), for an agent that is updated with
+	// its app (FeatureAppUpdate). Empty otherwise.
+	AppHash string `json:"appHash,omitempty"`
 	// HostFingerprint is a salted hash of the machine's own ID (see
 	// internal/sysinfo.HostFingerprint), letting the manager notice two
 	// identities on one machine. Agent-asserted, so only ever a hint.
