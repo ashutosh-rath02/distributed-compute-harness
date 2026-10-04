@@ -60,11 +60,16 @@ func (s *Server) reconcileWorkloads(ctx context.Context) {
 			s.expireWorkloads()
 		case <-ticker.C:
 			s.keepAwakeTick(time.Now())
+			// The queue first: a slot that just freed goes to waiting work
+			// in priority order, before a restart or a job's next attempt
+			// (each placed at once when there is room) could take it.
+			s.dispatchQueued(ctx)
 			s.reconcileOnce(ctx)
 			s.advanceJobs(ctx)
 			s.dispatchQueued(ctx) // also catches requeue backoffs expiring
 			s.sweepGrants()
 		case <-s.dispatchKick:
+			s.dispatchQueued(ctx)
 			s.advanceJobs(ctx)
 			s.dispatchQueued(ctx)
 		}

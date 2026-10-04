@@ -29,6 +29,7 @@ func cmdMap(c *apiClient, args []string) error {
 	reduce := fs.String("reduce", "", `fan-in step run after every task succeeds, e.g. "python merge.py" (split on spaces); it gets each task's outputs at parts/<task>/<name>`)
 	typ := fs.String("type", "", "run this typed task type per file (see harnessctl tasks); the arguments are then its key=value parameters")
 	reduceType := fs.String("reduce-type", "", "typed fan-in step, e.g. archive.zip")
+	priority := priorityFlag(fs)
 	var reduceParams fileList
 	fs.Var(&reduceParams, "reduce-param", "key=value parameter of the -reduce-type step, repeatable")
 	var each, shared, outs, reduceOuts, reduceShared fileList
@@ -38,7 +39,7 @@ func cmdMap(c *apiClient, args []string) error {
 	fs.Var(&reduceOuts, "reduce-out", "output file the reduce must produce (the job's result), repeatable")
 	fs.Var(&reduceShared, "reduce-shared", "file the reduce gets besides the parts, repeatable")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: harnessctl map [-each FILE|GLOB ... | -count N] [-shared FILE ...] [-out NAME ...] [-attempts N] [-reduce \"cmd args\" [-reduce-out NAME ...]] <cmd> [args, with {in} or {i}]")
+		fmt.Fprintln(os.Stderr, "usage: harnessctl map [-each FILE|GLOB ... | -count N] [-shared FILE ...] [-out NAME ...] [-attempts N] [-priority high|normal|low] [-reduce \"cmd args\" [-reduce-out NAME ...]] <cmd> [args, with {in} or {i}]")
 	}
 	// A raw command keeps everything after it as its own arguments, even
 	// ones that look like flags ("find . -type f"); only when map's own
@@ -71,6 +72,10 @@ func cmdMap(c *apiClient, args []string) error {
 	}
 	if (len(files) == 0) == (*count == 0) {
 		return errors.New("give either -each files or -count N")
+	}
+	prio, err := checkPriority(*priority)
+	if err != nil {
+		return err
 	}
 	var req domain.ResourceRequirements
 	if *minMem != "" {
@@ -138,7 +143,7 @@ func cmdMap(c *apiClient, args []string) error {
 			}
 		}
 	}
-	body := map[string]any{"name": *name, "tasks": tasks, "maxAttempts": *attempts}
+	body := map[string]any{"name": *name, "tasks": tasks, "maxAttempts": *attempts, "priority": prio}
 	if *reduceType != "" {
 		params, err := parseParams(reduceParams)
 		if err != nil {
@@ -198,9 +203,10 @@ type jobView struct {
 	Counts      struct {
 		Total, Completed, Active, Waiting, Failed, Canceled int
 	} `json:"counts"`
-	Tasks   []jobTaskView        `json:"tasks"`
-	Reduce  *jobTaskView         `json:"reduce"`
-	Outputs []domain.ArtifactRef `json:"outputs"`
+	Tasks    []jobTaskView        `json:"tasks"`
+	Reduce   *jobTaskView         `json:"reduce"`
+	Outputs  []domain.ArtifactRef `json:"outputs"`
+	Priority domain.Priority      `json:"priority"`
 }
 
 func (c *apiClient) cmdJobs() error {
@@ -214,7 +220,7 @@ func (c *apiClient) cmdJobs() error {
 	}
 	fmt.Printf("%-34s %-10s %-9s %-7s %s\n", "JOB ID", "STATE", "DONE", "FAILED", "NAME")
 	for _, j := range jobs {
-		fmt.Printf("%-34s %-10s %-9s %-7d %s\n", j.ID, j.State, fmt.Sprintf("%d/%d", j.Counts.Completed, j.Counts.Total), j.Counts.Failed, j.Name)
+		fmt.Printf("%-34s %-10s %-9s %-7d %s\n", j.ID, j.State, fmt.Sprintf("%d/%d", j.Counts.Completed, j.Counts.Total), j.Counts.Failed, j.Name+priorityNote(j.Priority))
 	}
 	return nil
 }
@@ -241,6 +247,9 @@ func (c *apiClient) cmdJob(id string) error {
 		return err
 	}
 	fmt.Printf("Job       %s %s\n", j.ID, j.Name)
+	if j.Priority != "" {
+		fmt.Printf("Priority  %s\n", j.Priority)
+	}
 	fmt.Printf("State     %s", j.State)
 	if j.Error != "" {
 		fmt.Printf(" (%s)", j.Error)

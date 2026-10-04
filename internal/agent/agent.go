@@ -58,9 +58,13 @@ type Config struct {
 	// WorkDir holds the working directories of workloads that declare
 	// files (cmd/agent's -work-dir). Empty uses defaultWorkRoot. Never
 	// put it inside IdentityDir.
-	WorkDir      string
-	Name         string
-	AgentVersion string
+	WorkDir string
+	// InputCacheBytes caps the cache of downloaded input files kept under
+	// WorkDir (inputcache.go; cmd/agent's -input-cache-size, 1 GiB by
+	// default). 0 = no cache, as agents before it behaved.
+	InputCacheBytes int64
+	Name            string
+	AgentVersion    string
 
 	HeartbeatInterval time.Duration
 	// ReconnectBackoff is both the starting delay after a failed
@@ -213,6 +217,8 @@ type Agent struct {
 	// install, if any (split.go).
 	handlers *tasks.Registry
 	llama    *llamaCpp
+	// inputs: the cache of downloaded input files; nil when off.
+	inputs *inputCache
 
 	// pendingAddr is the address that last answered "waiting for
 	// approval": retries go straight back to it rather than paying a
@@ -282,6 +288,9 @@ func New(transport domain.Transport, cfg Config) (*Agent, error) {
 	a := &Agent{cfg: cfg, transport: transport, identity: id, startedAt: time.Now(), executor: NewExecutorWithSlots(cfg.WorkloadSlots), binaryHash: binaryHash, appHash: appHash, reprobe: make(chan struct{}, 1)}
 	a.executor.SetWorkRoot(cfg.WorkDir)
 	a.executor.SetDisabled(cfg.DisabledCapabilities)
+	if cfg.InputCacheBytes > 0 {
+		a.inputs = inputCacheIn(cfg.WorkDir, cfg.InputCacheBytes)
+	}
 	a.handlers = tasks.NewRegistry(tasks.Options{OllamaURL: cfg.OllamaURL,
 		ToolsDir: cfg.ToolsDir, ToolsSearchSystem: cfg.ToolsSearchSystem, RunProgram: runProgram})
 	a.llama = &llamaCpp{dir: cfg.LlamaCppDir}
@@ -328,6 +337,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	// the Agent before taking the instance lock, and a standby copy must
 	// not clear the running one's directories.
 	cleanWorkRoot(a.cfg.WorkDir)
+	if a.inputs != nil {
+		a.inputs.load()
+	}
 	a.llama.sweep() // llama.cpp programs an earlier agent left running
 	if a.cfg.KeepAwake {
 		go a.keepAwakeWhileWorking(ctx)
@@ -464,7 +476,7 @@ func (a *Agent) register(ctx context.Context, conn domain.Conn) error {
 	signature := a.identity.Sign(protocol.RegisterSignedData(a.cfg.PairingToken, a.identity.NodeID))
 	use := a.deviceUse(ctx)
 	if err := a.send(ctx, conn, protocol.MsgRegister, domain.ManagerNodeID,
-		protocol.RegisterPayload{Manifest: manifest, PairingToken: a.cfg.PairingToken, Signature: signature, Pairing: a.cfg.Pairing, Use: &use}); err != nil {
+		protocol.RegisterPayload{Manifest: manifest, PairingToken: a.cfg.PairingToken, Signature: signature, Pairing: a.cfg.Pairing, Use: &use, Cache: a.cacheReport(true)}); err != nil {
 		return fmt.Errorf("send REGISTER: %w", err)
 	}
 
@@ -558,6 +570,7 @@ func (a *Agent) heartbeatLoop(ctx context.Context, conn domain.Conn, errCh chan<
 					AgentVersion:         a.cfg.AgentVersion,
 					Use:                  &use,
 				},
+				Cache: a.cacheReport(false),
 			}
 			if err := a.send(ctx, conn, protocol.MsgHeartbeat, domain.ManagerNodeID, payload); err != nil {
 				errCh <- fmt.Errorf("send HEARTBEAT: %w", err)
@@ -705,5 +718,18 @@ func (a *Agent) agentFeatures() []string {
 	if a.appUpdates() {
 		features = append(features, domain.FeatureAppUpdate)
 	}
+	if a.inputs != nil {
+		features = append(features, domain.FeatureInputCache)
+	}
 	return features
+}
+
+// cacheReport is what to tell the manager about the input cache: in full
+// on registering (always), and in a heartbeat only when it changed (nil
+// otherwise, and when there is no cache).
+func (a *Agent) cacheReport(always bool) *domain.InputCacheReport {
+	if a.inputs == nil {
+		return nil
+	}
+	return a.inputs.reportIfChanged(always)
 }

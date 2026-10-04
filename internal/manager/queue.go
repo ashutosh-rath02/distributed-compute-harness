@@ -24,8 +24,9 @@ import (
 // restart turning in-flight work UNKNOWN) releases capacity automatically.
 //
 // A submission that some ready node could run, but none has room for right
-// now, is QUEUED rather than rejected, and dispatched oldest-first as
-// capacity frees. Submissions no ready node could ever satisfy are still
+// now, is QUEUED rather than rejected, and dispatched as capacity frees:
+// highest priority first (domain.Priority, raised by waiting), oldest
+// first within one. Submissions no ready node could ever satisfy are still
 // rejected, as is submitting with no ready node at all — queueing those
 // would only park work in the void.
 //
@@ -188,8 +189,26 @@ func (wr *WorkloadRegistry) nextQueuedAtLocked(now time.Time) time.Time {
 	return now
 }
 
-// queued returns QUEUED workloads ready for a placement attempt, oldest
-// first.
+// priorityAgingStep is how long waiting in the queue raises a workload
+// one priority level, up to high (effectiveRank): a steady stream of
+// higher-priority work can hold low-priority work back, but not forever —
+// after two steps it competes with high-priority work by age alone.
+const priorityAgingStep = 10 * time.Minute
+
+// effectiveRank is w's priority rank (domain.Priority.Rank) raised one
+// level per priorityAgingStep it has waited since queuedAt, capped at
+// high's.
+func effectiveRank(w domain.Workload, queuedAt, now time.Time) int {
+	r := w.Priority.Rank()
+	if waited := now.Sub(queuedAt); !queuedAt.IsZero() && waited > 0 {
+		r += int(waited / priorityAgingStep)
+	}
+	return min(r, domain.PriorityHigh.Rank())
+}
+
+// queued returns QUEUED workloads ready for a placement attempt: highest
+// effective priority first (effectiveRank, with aging), oldest first
+// within one.
 func (wr *WorkloadRegistry) queued(now time.Time) []WorkloadRecord {
 	wr.mu.RLock()
 	defer wr.mu.RUnlock()
@@ -199,7 +218,14 @@ func (wr *WorkloadRegistry) queued(now time.Time) []WorkloadRecord {
 			out = append(out, *rec)
 		}
 	}
+	rank := make(map[domain.WorkloadID]int, len(out))
+	for _, rec := range out {
+		rank[rec.Workload.ID] = effectiveRank(rec.Workload, rec.Status.QueuedAt, now)
+	}
 	sort.Slice(out, func(i, j int) bool {
+		if ri, rj := rank[out[i].Workload.ID], rank[out[j].Workload.ID]; ri != rj {
+			return ri > rj
+		}
 		if !out[i].Status.QueuedAt.Equal(out[j].Status.QueuedAt) {
 			return out[i].Status.QueuedAt.Before(out[j].Status.QueuedAt)
 		}
@@ -300,9 +326,11 @@ func (s *Server) kickDispatch() {
 	}
 }
 
-// dispatchQueued places every queued workload that now has room, oldest
-// first. Later, smaller workloads may run ahead of an older one that
-// still doesn't fit anywhere — there is no head-of-line blocking.
+// dispatchQueued places every queued workload that now has room, in queue
+// order (queued: priority, then age). Later or lower-priority workloads
+// may run ahead of one that still doesn't fit anywhere — there is no
+// head-of-line blocking: priority decides who goes first, it doesn't hold
+// a slot free for anyone.
 //
 // One pass holds placeMu while it decides (so no concurrent placement can
 // take the same slot) and places against one usage snapshot it keeps

@@ -198,6 +198,12 @@
     <p id="typedDescription" class="hint"></p>
     <label for="typedTarget">Compute node</label>
     <select id="typedTarget"><option value="">Auto-select</option></select>
+    <label for="typedPriority">Priority (when every device is busy)</label>
+    <select id="typedPriority">
+      <option value="normal">Normal</option>
+      <option value="high">High: starts before waiting normal and low work</option>
+      <option value="low">Low: lets other waiting work go first</option>
+    </select>
     <div id="typedParams"></div>
     <div id="typedFilesBox">
       <label for="typedFiles" id="typedFilesLabel">Input files</label>
@@ -670,10 +676,10 @@
         el.innerHTML = '<p class="empty">No tasks yet.</p>';
         return;
       }
-      el.innerHTML = "<table><thead><tr><th>Task</th><th>Target</th><th>State</th><th>Result returned to phone</th></tr></thead><tbody>"
+      el.innerHTML = "<table><thead><tr><th>Task</th><th>Target</th><th>State</th><th>Priority</th><th>Result returned to phone</th></tr></thead><tbody>"
         + details.map((w) => "<tr><td>" + escapeHtml(w.command || w.capability || "-") + "</td><td>"
           + escapeHtml(w.target || "-") + '</td><td><span class="' + stateClass(w.state) + '">'
-          + escapeHtml(w.state) + "</span></td><td><div class=\"output\">"
+          + escapeHtml(w.state) + "</span></td><td>" + escapeHtml(w.priority || "normal") + "</td><td><div class=\"output\">"
           + escapeHtml((w.stdout || w.stderr || w.error || (w.waiting ? "Waiting: " + w.waiting : "") || (w.exitCode == null ? "-" : "exit " + w.exitCode)).trim())
           + "</div>" + outputButtons(w) + "</td></tr>").join("")
         + "</tbody></table>";
@@ -987,7 +993,8 @@
         return '<details class="card job" data-job="' + escapeHtml(j.id) + '"' + (openJobs.has(j.id) ? " open" : "") + "><summary>"
           + escapeHtml(j.name || j.id) + ' <span class="' + stateClass(j.state) + '">' + escapeHtml(j.state) + "</span> "
           + escapeHtml((c.completed || 0) + "/" + (c.total || 0) + " done" + (c.failed ? ", " + c.failed + " failed" : "")
-            + (c.active ? ", " + c.active + " running" : "") + (c.waiting ? ", " + c.waiting + " waiting" : ""))
+            + (c.active ? ", " + c.active + " running" : "") + (c.waiting ? ", " + c.waiting + " waiting" : "")
+            + (j.priority && j.priority !== "normal" ? ", " + j.priority + " priority" : ""))
           + "</summary>"
           + (j.error ? '<p class="hint">' + escapeHtml(j.error) + "</p>" : "")
           + ((j.outputs || []).length ? "<p>Result: " + fileButtons(j.outputs) + "</p>" : "")
@@ -1144,6 +1151,7 @@
     if (!t) { error.textContent = "Pick a task."; return; }
     const params = readParams(document.getElementById("typedParams"));
     const target = document.getElementById("typedTarget").value;
+    const priority = document.getElementById("typedPriority").value;
     const files = Array.from(document.getElementById("typedFiles").files || []);
     const batch = document.getElementById("typedBatch").checked && runsPerFile(t);
     button.disabled = true;
@@ -1154,13 +1162,13 @@
       for (const f of files) inputs.push(await uploadFile(f, progress));
       let resp;
       if (batch) {
-        const body = {tasks: inputs.map((input) => ({name: input.name, target, capability: t.name, params, inputs: [input]}))};
+        const body = {priority, tasks: inputs.map((input) => ({name: input.name, target, capability: t.name, params, inputs: [input]}))};
         const reduce = document.getElementById("typedReduce").value;
         if (reduce) body.reduce = {capability: reduce, params: readParams(document.getElementById("typedReduceParams"))};
         resp = await api("/jobs", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
       } else {
         resp = await api("/workloads", {method: "POST", headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({target, capability: t.name, params, inputs})});
+          body: JSON.stringify({target, capability: t.name, params, inputs, priority})});
       }
       const text = await resp.text();
       if (!resp.ok) throw new Error(text.trim() || resp.statusText);

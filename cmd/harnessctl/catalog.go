@@ -126,10 +126,11 @@ func cmdDo(c *apiClient, args []string) error {
 	fs := flag.NewFlagSet("do", flag.ContinueOnError)
 	target := fs.String("target", "", "run on this node (default: the best one)")
 	restart := fs.String("restart", "never", `restart policy: never, on-failure, always`)
+	priority := priorityFlag(fs)
 	var inputs fileList
 	fs.Var(&inputs, "in", `input file, repeatable: "path", "name=path" or "name=sha256:<hex>"`)
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: harnessctl do [-target ID] [-in FILE ...] <type> [key=value ...]   (see harnessctl tasks)")
+		fmt.Fprintln(os.Stderr, "usage: harnessctl do [-target ID] [-priority high|normal|low] [-in FILE ...] <type> [key=value ...]   (see harnessctl tasks)")
 	}
 	pos, err := parseTyped(fs, args)
 	if err != nil {
@@ -143,11 +144,15 @@ func cmdDo(c *apiClient, args []string) error {
 	if err != nil {
 		return err
 	}
+	prio, err := checkPriority(*priority)
+	if err != nil {
+		return err
+	}
 	in, err := c.resolveInputs(inputs)
 	if err != nil {
 		return err
 	}
-	body, _ := json.Marshal(map[string]any{"target": *target, "capability": pos[0], "params": params, "inputs": in, "restartPolicy": *restart})
+	body, _ := json.Marshal(map[string]any{"target": *target, "capability": pos[0], "params": params, "inputs": in, "restartPolicy": *restart, "priority": prio})
 	resp, err := c.http.Post(c.base+"/workloads", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return err

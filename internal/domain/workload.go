@@ -89,6 +89,9 @@ type Workload struct {
 	// TimeoutSeconds bounds one attempt — fetch, run and upload — on the
 	// agent (FeatureTimeout); 0 = none. Set from policy at submission.
 	TimeoutSeconds int `json:"timeoutSeconds,omitempty"`
+	// Priority orders the queue (priority.go); empty = normal. A job's
+	// attempts carry the job's.
+	Priority Priority `json:"priority,omitempty"`
 }
 
 // EffectiveCapability returns w.Capability, or CapabilitySystemExecute if
