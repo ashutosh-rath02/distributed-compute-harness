@@ -173,6 +173,8 @@ type Server struct {
 	grants *grantTable
 	// jobs holds batch jobs (jobs.go).
 	jobs *jobTable
+	// plans holds AI plans (planner.go), in memory only.
+	plans *planTable
 	// policy decides what may run (policy.go).
 	policy *policyStore
 
@@ -221,6 +223,7 @@ func NewServer(transport domain.Transport, store PersistentStore, cfg Config) *S
 		tunnels:      newTunnelTable(),
 		splits:       newSplitTable(),
 		jobs:         newJobTable(),
+		plans:        newPlanTable(),
 		policy:       &policyStore{p: domain.PermissivePolicy()},
 	}
 	if cfg.KeepAwake {

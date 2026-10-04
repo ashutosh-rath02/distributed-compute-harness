@@ -47,6 +47,20 @@ func ParseChatMessages(raw string) ([]ChatMessage, error) {
 	return msgs, nil
 }
 
+// chatFormat reads llm.chat's "format": empty (free text), "json", or a
+// JSON schema object the answer must follow.
+func chatFormat(v string) (json.RawMessage, error) {
+	switch v = strings.TrimSpace(v); {
+	case v == "":
+		return nil, nil
+	case v == "json":
+		return json.RawMessage(`"json"`), nil
+	case strings.HasPrefix(v, "{") && json.Valid([]byte(v)):
+		return json.RawMessage(v), nil
+	}
+	return nil, errors.New(`format must be "json" or a JSON schema object`)
+}
+
 type ollamaChat struct{ o *ollama }
 
 // Available while Ollama has a model or a local server (a split session)
@@ -60,15 +74,16 @@ func (c ollamaChat) Available(ctx context.Context) error {
 
 // Attributes advertises the same models as llm.generate, plus those a
 // local server serves: placement matches the requested model against
-// them.
+// them. chatFormat: this agent takes the "format" parameter.
 func (c ollamaChat) Attributes(ctx context.Context) map[string]string {
 	attrs := ollamaGenerate{c.o}.Attributes(ctx)
+	if attrs == nil {
+		attrs = map[string]string{}
+	}
+	attrs[catalog.AttrChatFormat] = "1"
 	local := c.o.local.names()
 	if len(local) == 0 {
 		return attrs
-	}
-	if attrs == nil {
-		attrs = map[string]string{}
 	}
 	names := local
 	if have := attrs[catalog.AttrModels]; have != "" {
@@ -94,9 +109,13 @@ func (c ollamaChat) Run(ctx context.Context, env Env) error {
 	if v, _ := strconv.Atoi(env.Params["seed"]); v > 0 {
 		options["seed"] = v
 	}
+	format, err := chatFormat(env.Params["format"])
+	if err != nil {
+		return err
+	}
 	// A model a local server answers (a split session's llama-server).
 	if lm, ok := c.o.local.get(env.Params["model"]); ok {
-		return openAIChat(ctx, env, lm.base, lm.alias, msgs, options)
+		return openAIChat(ctx, env, lm.base, lm.alias, msgs, options, format)
 	}
 	// Placement matched the normalized name; Ollama gets the exact name it
 	// listed.
@@ -113,7 +132,11 @@ func (c ollamaChat) Run(ctx context.Context, env Env) error {
 			return fmt.Errorf("model %q isn't on this device any more", env.Params["model"])
 		}
 	}
-	body, _ := json.Marshal(map[string]any{"model": model, "messages": msgs, "stream": true, "options": options})
+	chat := map[string]any{"model": model, "messages": msgs, "stream": true, "options": options}
+	if format != nil {
+		chat["format"] = format // Ollama: "json" or a schema, as given
+	}
+	body, _ := json.Marshal(chat)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.o.base+"/api/chat", bytes.NewReader(body))
 	if err != nil {
 		return err

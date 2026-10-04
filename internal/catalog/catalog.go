@@ -8,6 +8,8 @@
 package catalog
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path"
@@ -58,6 +60,14 @@ type Param struct {
 	// parameter's valid values per node (e.g. "models"): placement only
 	// picks a node whose list holds the value.
 	ChoicesAttr string `json:"choicesAttr,omitempty"`
+	// Needs names a capability attribute a node must carry to be given
+	// this parameter: an agent feature newer than the type itself, so an
+	// older agent (which would refuse the unknown parameter) is never
+	// placed work that sets it.
+	Needs string `json:"needs,omitempty"`
+	// AnswerFormat: the value is "json" or a JSON object (a JSON schema
+	// the answer must follow).
+	AnswerFormat bool `json:"answerFormat,omitempty"`
 }
 
 // Inputs bounds the files a task type takes.
@@ -101,6 +111,9 @@ type Type struct {
 	// Internal: a part of something the manager runs (a split session),
 	// not offered in the task form or "harnessctl tasks".
 	Internal bool `json:"internal,omitempty"`
+	// Parts: one run does one part of a whole (int params "part", from
+	// 0, and "parts"), so a job runs it once per part.
+	Parts bool `json:"parts,omitempty"`
 	// DefaultMaxRuntimeSeconds is the per-attempt limit when policy sets
 	// none for this type.
 	DefaultMaxRuntimeSeconds int `json:"defaultMaxRuntimeSeconds,omitempty"`
@@ -181,6 +194,7 @@ var builtins = []Type{
 			{Name: "scene", Type: Enum, Title: "Where to look", Default: "seahorse", Enum: []string{"seahorse", "spiral", "classic"}},
 		},
 		Outputs:                  []string{"fractal-{{part}}.png"},
+		Parts:                    true,
 		Requirements:             domain.ResourceRequirements{MinMemoryBytes: 256 << 20},
 		DefaultMaxRuntimeSeconds: 600,
 	},
@@ -226,6 +240,7 @@ var builtins = []Type{
 			{Name: "temperature", Type: Number, Title: "Temperature (empty = the model's default)", Min: num(0), Max: num(2)},
 			{Name: "max_tokens", Type: Int, Title: "Max tokens (empty = no limit)", Min: num(1), Max: num(131072)},
 			{Name: "seed", Type: Int, Title: "Seed (0 = random)", Default: "0", Min: num(0), Max: num(2147483647)},
+			{Name: "format", Type: String, Title: "Answer format (empty = free text; json, or a JSON schema)", MaxLength: 16 << 10, Multiline: true, AllowDash: true, AnswerFormat: true, Needs: AttrChatFormat},
 		},
 		Outputs:                  []string{"response.txt"},
 		Requirements:             domain.ResourceRequirements{MinMemoryBytes: 256 << 20},
@@ -306,6 +321,10 @@ const (
 // part of a session must run the same one (its RPC protocol is versioned).
 const AttrLlamaVersion = "llamaVersion"
 
+// AttrChatFormat marks an agent whose llm.chat takes the "format"
+// parameter (structured answers).
+const AttrChatFormat = "chatFormat"
+
 // AttrModelSizes lists each model's size on disk, "name=bytes,...":
 // placement prefers a device whose dedicated GPU memory fits the model.
 const AttrModelSizes = "modelSizes"
@@ -332,6 +351,9 @@ func NormalizeModel(name string) string {
 // (False with the missing value as the reason.)
 func (t Type) Offers(attrs map[string]string, params map[string]string) (bool, string) {
 	for _, p := range t.Params {
+		if p.Needs != "" && params[p.Name] != "" && attrs[p.Needs] == "" {
+			return false, fmt.Sprintf("its agent predates the %s parameter (update it)", p.Name)
+		}
 		if p.ChoicesAttr == "" {
 			continue
 		}
@@ -351,7 +373,7 @@ func (t Type) Offers(attrs map[string]string, params map[string]string) (bool, s
 // against node attributes.
 func (t Type) HasChoices() bool {
 	for _, p := range t.Params {
-		if p.ChoicesAttr != "" {
+		if p.ChoicesAttr != "" || p.Needs != "" {
 			return true
 		}
 	}
@@ -502,9 +524,30 @@ func (p Param) check(v string) (string, error) {
 		if p.Pattern != "" && !regexp.MustCompile(`^(?:`+p.Pattern+`)$`).MatchString(v) {
 			return "", fmt.Errorf("%q doesn't match %s", v, p.Pattern)
 		}
+		if p.AnswerFormat {
+			return answerFormat(v)
+		}
 		return v, nil
 	}
 	return "", fmt.Errorf("unknown parameter type %q", p.Type)
+}
+
+// answerFormat checks an answer format: "json", or a JSON object (a
+// schema), compacted with its keys kept in order (a model writes them in
+// the schema's order).
+func answerFormat(v string) (string, error) {
+	v = strings.TrimSpace(v)
+	if v == "json" {
+		return v, nil
+	}
+	if !strings.HasPrefix(v, "{") || !json.Valid([]byte(v)) {
+		return "", errors.New(`must be "json" or a JSON schema object`)
+	}
+	var b bytes.Buffer
+	if err := json.Compact(&b, []byte(v)); err != nil {
+		return "", err
+	}
+	return b.String(), nil
 }
 
 func (p Param) inRange(f float64) error {

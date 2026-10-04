@@ -81,7 +81,7 @@ func (r *Registry) Register(name string, h Handler) {
 // openAIChat streams one chat turn from an OpenAI-compatible server,
 // writing the reply like the Ollama path does: text to stdout and
 // response.txt, a stats line to stderr for the manager's usage figures.
-func openAIChat(ctx context.Context, env Env, base, model string, msgs []ChatMessage, options map[string]any) error {
+func openAIChat(ctx context.Context, env Env, base, model string, msgs []ChatMessage, options map[string]any, format json.RawMessage) error {
 	req := map[string]any{"model": model, "messages": msgs, "stream": true, "stream_options": map[string]bool{"include_usage": true}}
 	if v, ok := options["temperature"]; ok {
 		req["temperature"] = v
@@ -91,6 +91,12 @@ func openAIChat(ctx context.Context, env Env, base, model string, msgs []ChatMes
 	}
 	if v, ok := options["seed"]; ok {
 		req["seed"] = v
+	}
+	switch {
+	case string(format) == `"json"`:
+		req["response_format"] = map[string]any{"type": "json_object"}
+	case format != nil:
+		req["response_format"] = map[string]any{"type": "json_schema", "json_schema": map[string]any{"name": "answer", "schema": format}}
 	}
 	body, _ := json.Marshal(req)
 	hr, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/chat/completions", bytes.NewReader(body))

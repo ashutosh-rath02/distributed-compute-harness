@@ -69,6 +69,10 @@ func main() {
 		})
 	case "split":
 		err = client.cmdSplit(args[1:])
+	case "plan":
+		err = cmdPlan(client, args[1:])
+	case "plans":
+		err = client.cmdPlans()
 	case "rm-model":
 		err = requireArgs(args, 3, "rm-model <device-id> <model>", func() error {
 			return client.cmdModelTask("llm.remove", args[1], args[2])
@@ -241,6 +245,13 @@ Commands:
                         run one model too big for any single device across
                         several with llama.cpp (each needs llama.cpp
                         installed); chat with it through /v1 by NAME
+  plan [-model M] [-in FILE ...] "what to do"
+                        a local AI model plans a job from your words, using
+                        only the built-in task types; the manager checks it
+                        and nothing runs until you approve, e.g.
+                          harnessctl plan -in a.jpg -in b.jpg "resize to 800 px and zip them"
+  plan show|approve|reject <plan-id>
+  plans                 list recent plans and the models that can plan
   policy                show what the fleet may run
   policy type <name> on|off | labels key=value,...|- | max-runtime 10m|0
                         enable/disable a type (raw system.execute and

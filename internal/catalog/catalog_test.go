@@ -175,3 +175,64 @@ func TestModelNormalizationAndMatching(t *testing.T) {
 		t.Fatal("a type without choice params is offered by any node")
 	}
 }
+
+// A parameter newer than its type goes only to agents that advertise it:
+// an older agent would refuse the unknown parameter.
+func TestNeedsKeepsANewParameterFromOlderAgents(t *testing.T) {
+	ty := mustType(t, "llm.chat")
+	if !ty.HasChoices() {
+		t.Fatal("llm.chat must be matched against node attributes")
+	}
+	old := map[string]string{AttrModels: "gemma3:1b"}
+	updated := map[string]string{AttrModels: "gemma3:1b", AttrChatFormat: "1"}
+	plain := map[string]string{"model": "gemma3:1b", "messages": "[]"}
+	structured := map[string]string{"model": "gemma3:1b", "messages": "[]", "format": "json"}
+	if ok, _ := ty.Offers(old, plain); !ok {
+		t.Fatal("an older agent still takes plain chats")
+	}
+	if ok, why := ty.Offers(old, structured); ok || !strings.Contains(why, "format") {
+		t.Fatalf("an older agent offered a format: %v %q", ok, why)
+	}
+	if ok, _ := ty.Offers(updated, structured); !ok {
+		t.Fatal("an updated agent takes a format")
+	}
+}
+
+func TestAnswerFormatIsJSONOrASchema(t *testing.T) {
+	ty := mustType(t, "llm.chat")
+	base := func(format string) map[string]string {
+		return map[string]string{"model": "m", "messages": `[{"role":"user","content":"x"}]`, "format": format}
+	}
+	for format, want := range map[string]string{
+		"json":                            "json",
+		" { \"b\": 1,\n \"a\": [1, 2] } ": `{"b":1,"a":[1,2]}`, // compacted, order kept
+	} {
+		p, _, err := ty.Compile(base(format), nil)
+		if err != nil || p["format"] != want {
+			t.Errorf("%q: %v %q, want %q", format, err, p["format"], want)
+		}
+	}
+	for _, bad := range []string{"yaml", "[1,2]", `{"a":`, `"json"`} {
+		if _, _, err := ty.Compile(base(bad), nil); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+	if p, _, err := ty.Compile(base(""), nil); err != nil || p["format"] != "" {
+		t.Fatalf("no format: %v %v", err, p)
+	}
+	if !mustType(t, "render.fractal").Parts {
+		t.Fatal("render.fractal renders one part of N")
+	}
+	for _, typ := range Types() {
+		if !typ.Parts {
+			continue
+		}
+		have := map[string]ParamType{}
+		for _, p := range typ.Params {
+			have[p.Name] = p.Type
+		}
+		if have["part"] != Int || have["parts"] != Int {
+			t.Errorf("%s is Parts without int part/parts params", typ.Name)
+		}
+	}
+}

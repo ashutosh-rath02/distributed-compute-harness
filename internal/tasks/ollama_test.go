@@ -39,6 +39,7 @@ type fakeChat struct {
 	Model    string
 	Messages []ChatMessage
 	Options  map[string]any
+	Format   json.RawMessage
 }
 
 func (f *fakeOllama) setModels(m ...string) { f.mu.Lock(); f.models = m; f.mu.Unlock() }

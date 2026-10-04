@@ -232,14 +232,41 @@ type JobSpec struct {
 // run, a reduce whose inputs couldn't all fit — is refused here, before
 // any work starts.
 func (s *Server) SubmitJob(ctx context.Context, spec JobSpec) (domain.Job, error) {
+	if err := s.checkJob(&spec); err != nil {
+		return domain.Job{}, err
+	}
+	id, err := newRandomID()
+	if err != nil {
+		return domain.Job{}, err
+	}
+	job := domain.Job{
+		ID: domain.JobID(id), Name: spec.Name, Tasks: spec.Tasks, Reduce: spec.Reduce,
+		MaxAttempts: spec.MaxAttempts, State: domain.JobRunning, CreatedAt: time.Now().UTC(),
+	}
+	if s.store != nil {
+		if err := s.store.UpsertJob(job); err != nil {
+			return domain.Job{}, fmt.Errorf("manager: persist job: %w", err)
+		}
+	}
+	s.jobs.put(job)
+	log.Printf("job.submitted: %s (%d tasks%s)", job.ID, len(job.Tasks), map[bool]string{true: " + reduce"}[job.Reduce != nil])
+	s.publish(domain.EventJobSubmitted, "", map[string]any{"jobId": string(job.ID), "tasks": len(job.Tasks)})
+	s.kickDispatch()
+	return job, nil
+}
+
+// checkJob validates spec as SubmitJob does, completing it in place
+// (capabilities, compiled parameters, input sizes, attempts) — the AI
+// planner runs it on a proposal before anyone approves it.
+func (s *Server) checkJob(spec *JobSpec) error {
 	if len(spec.Tasks) == 0 || len(spec.Tasks) > domain.MaxJobTasks {
-		return domain.Job{}, fmt.Errorf("%w: a job needs 1-%d tasks", ErrInvalidWorkload, domain.MaxJobTasks)
+		return fmt.Errorf("%w: a job needs 1-%d tasks", ErrInvalidWorkload, domain.MaxJobTasks)
 	}
 	if spec.MaxAttempts == 0 {
 		spec.MaxAttempts = domain.DefaultJobRetries
 	}
 	if spec.MaxAttempts < 1 || spec.MaxAttempts > domain.MaxJobAttempts {
-		return domain.Job{}, fmt.Errorf("%w: maxAttempts must be 1-%d", ErrInvalidWorkload, domain.MaxJobAttempts)
+		return fmt.Errorf("%w: maxAttempts must be 1-%d", ErrInvalidWorkload, domain.MaxJobAttempts)
 	}
 	usage := s.Workloads.usageByNode()
 	// check validates one task as Submit will (policy, typed compile,
@@ -271,7 +298,7 @@ func (s *Server) SubmitJob(ctx context.Context, spec JobSpec) (domain.Job, error
 	}
 	for i := range spec.Tasks {
 		if err := check("task "+domain.TaskKey(i), &spec.Tasks[i], nil); err != nil {
-			return domain.Job{}, err
+			return err
 		}
 	}
 	if spec.Reduce != nil {
@@ -287,31 +314,14 @@ func (s *Server) SubmitJob(ctx context.Context, spec JobSpec) (domain.Job, error
 			}
 		}
 		if err := check("reduce", &r, parts[len(r.Inputs):]); err != nil {
-			return domain.Job{}, err
+			return err
 		}
 		if err := domain.ValidateWorkloadFiles(parts, r.Outputs); err != nil {
-			return domain.Job{}, fmt.Errorf("%w: reduce: %v", ErrInvalidWorkload, err)
+			return fmt.Errorf("%w: reduce: %v", ErrInvalidWorkload, err)
 		}
 		spec.Reduce = &r
 	}
-	id, err := newRandomID()
-	if err != nil {
-		return domain.Job{}, err
-	}
-	job := domain.Job{
-		ID: domain.JobID(id), Name: spec.Name, Tasks: spec.Tasks, Reduce: spec.Reduce,
-		MaxAttempts: spec.MaxAttempts, State: domain.JobRunning, CreatedAt: time.Now().UTC(),
-	}
-	if s.store != nil {
-		if err := s.store.UpsertJob(job); err != nil {
-			return domain.Job{}, fmt.Errorf("manager: persist job: %w", err)
-		}
-	}
-	s.jobs.put(job)
-	log.Printf("job.submitted: %s (%d tasks%s)", job.ID, len(job.Tasks), map[bool]string{true: " + reduce"}[job.Reduce != nil])
-	s.publish(domain.EventJobSubmitted, "", map[string]any{"jobId": string(job.ID), "tasks": len(job.Tasks)})
-	s.kickDispatch()
-	return job, nil
+	return nil
 }
 
 // CancelJob stops a job: it is marked CANCELED first (so nothing is

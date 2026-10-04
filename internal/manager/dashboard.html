@@ -81,6 +81,10 @@
   .timeline li { margin: 8px 0; font-size: 0.82rem; }
   .output { white-space: pre-wrap; overflow-wrap: anywhere; background: color-mix(in srgb, CanvasText 6%, transparent); padding: 8px; border-radius: 6px; }
   code { font-family: ui-monospace, Consolas, monospace; }
+  .plan { border-top: 1px solid color-mix(in srgb, CanvasText 12%, transparent); padding-top: 10px; margin-top: 12px; }
+  .plan ol { margin: 6px 0; padding-left: 20px; font-size: 0.88rem; }
+  .plan li { margin: 4px 0; }
+  .plan .said { font-size: 0.8rem; color: GrayText; font-style: italic; }
   @media (max-width: 720px) {
     body { padding: 14px; }
     .flow { grid-template-columns: 1fr; }
@@ -170,6 +174,21 @@
       <div id="splitError" class="error"></div>
     </div>
   </details>
+
+  <h2>Ask for a job in plain words</h2>
+  <div class="card">
+    <p class="hint">A local AI model turns your words into a job made only of the built-in task types. The harness checks the plan and shows exactly what would run; nothing runs until you approve it.</p>
+    <label for="planRequest">What should your devices do?</label>
+    <textarea id="planRequest" rows="3" maxlength="2000" placeholder="Resize these photos to 800 px wide and zip them"></textarea>
+    <label for="planFiles">Files (optional)</label>
+    <input id="planFiles" type="file" multiple>
+    <label for="planModel">Model that plans</label>
+    <select id="planModel"></select>
+    <button id="planAsk" type="button">Plan it</button>
+    <div id="planError" class="error"></div>
+    <div id="planProgress" class="task-state"></div>
+    <div id="plans"></div>
+  </div>
 
   <h2>Run a task</h2>
   <div class="card">
@@ -1331,6 +1350,7 @@
     if (type === "node.revoked" || type === "node.unrevoked") refreshRevoked();
     if (type === "node.join-requested" || type === "node.join-decided" || type === "node.registered") refreshJoinRequests();
     if (type === "join.window") refreshJoinWindow();
+    if (type.startsWith("plan.") || type.startsWith("node.")) refreshPlans();
     if (document.getElementById("auditSection").open) refreshAudit();
   }
 
@@ -1379,6 +1399,7 @@
     if (signedOut) return;
     refreshWorkloads();
     refreshJobs();
+    refreshPlans();
     refreshCatalog();
     refreshRevoked();
     refreshJoinRequests();
@@ -1386,6 +1407,108 @@
     prefillLanAddr();
     streamEvents();
   })();
+
+  // ---- AI planner: plain words in, a checked plan out, run on approval.
+  const PLAN_STATES = {planning: "Planning", proposed: "Proposed: waiting for your approval", refused: "Refused",
+    failed: "Failed", approved: "Approved", rejected: "Rejected", expired: "Expired (not approved within an hour)"};
+  let planTimer = null;
+  function planStepHtml(step) {
+    const params = Object.entries(step.effective || step.params || {})
+      .map(([k, v]) => escapeHtml(k) + " = " + escapeHtml(v.length > 80 ? v.slice(0, 80) + "..." : v)).join(", ");
+    return "<b>" + escapeHtml(step.title) + "</b> <code>" + escapeHtml(step.type) + "</code>"
+      + (params ? '<span class="subname">' + params + "</span>" : "");
+  }
+  function planHtml(p) {
+    let h = '<div class="plan"><div><b>' + escapeHtml(PLAN_STATES[p.state] || p.state) + "</b>"
+      + ' <span class="hint">with ' + escapeHtml(p.model) + "</span></div>"
+      + '<div class="said">You asked: "' + escapeHtml(p.request) + '"</div>';
+    if (p.state === "planning") {
+      h += '<div class="hint">' + (p.chatState === "QUEUED" ? "Waiting for the model's device to be free..." : "The model is writing a plan...") + "</div>";
+    }
+    if (p.task) {
+      const files = (p.useFiles || []).map(escapeHtml).join(", ");
+      const how = p.mode === "perFile" ? "Once per file (" + p.tasks + " runs, spread over your devices)"
+        : p.mode === "parts" ? "In " + p.parts + " parts, spread over your devices" : "Once";
+      h += "<ol><li>" + planStepHtml(p.task) + '<span class="subname">' + escapeHtml(how) + (files ? ": " + files : "") + "</span></li>";
+      if (p.combine) h += "<li>Then " + planStepHtml(p.combine) + '<span class="subname">Joins every result into one file</span></li>';
+      h += "</ol>";
+    }
+    // The model's own words: shown as what it said, never as the plan.
+    if (p.summary) h += '<div class="said">The model says: "' + escapeHtml(p.summary) + '"</div>';
+    if (p.problem) h += '<div class="error">' + escapeHtml(p.problem) + "</div>";
+    if (p.modelReason && p.state === "refused") h += '<div class="said">The model\'s reason: "' + escapeHtml(p.modelReason) + '"</div>';
+    if (p.state === "proposed") {
+      h += '<button class="small" data-plan-approve="' + escapeHtml(p.id) + '">Approve and run</button> '
+        + '<button class="small secondary" data-plan-reject="' + escapeHtml(p.id) + '">Reject</button>';
+    }
+    if (p.state === "planning") h += '<button class="small secondary" data-plan-reject="' + escapeHtml(p.id) + '">Stop</button>';
+    if (p.state === "approved") h += '<div class="hint">Running as a job: see Jobs below.</div>';
+    return h + "</div>";
+  }
+  async function refreshPlans() {
+    let data;
+    try {
+      const resp = await api("/plans");
+      if (!resp.ok) return;
+      data = await resp.json();
+    } catch (e) { return; }
+    const select = document.getElementById("planModel");
+    const models = data.models || [];
+    let keep = select.value;
+    if (!keep) { try { keep = localStorage.getItem("planModel") || ""; } catch (e) { /* no storage */ } }
+    select.innerHTML = models.length
+      ? models.map((m) => '<option value="' + escapeHtml(m) + '">' + escapeHtml(m) + "</option>").join("")
+      : '<option value="">(no device can plan yet: it needs a local model and an updated agent)</option>';
+    if (models.includes(keep)) select.value = keep;
+    document.getElementById("plans").innerHTML = (data.plans || []).slice(0, 5).map(planHtml).join("");
+    // A queued chat starting doesn't announce itself as a plan event.
+    clearTimeout(planTimer);
+    if ((data.plans || []).some((p) => p.state === "planning")) planTimer = setTimeout(refreshPlans, 2000);
+  }
+  document.getElementById("planAsk").addEventListener("click", async () => {
+    const button = document.getElementById("planAsk");
+    const error = document.getElementById("planError");
+    const progress = document.getElementById("planProgress");
+    error.textContent = "";
+    const request = document.getElementById("planRequest").value.trim();
+    const model = document.getElementById("planModel").value;
+    if (!request) { error.textContent = "Say what you want done."; return; }
+    if (!model) { error.textContent = "No model can plan yet."; return; }
+    try { localStorage.setItem("planModel", model); } catch (e) { /* no storage */ }
+    button.disabled = true;
+    try {
+      const files = [];
+      for (const f of Array.from(document.getElementById("planFiles").files || [])) files.push(await uploadFile(f, progress));
+      progress.textContent = "Asking " + model + "...";
+      const resp = await api("/plans", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({request, model, files})});
+      const text = await resp.text();
+      if (!resp.ok) throw new Error(text.trim() || resp.statusText);
+      progress.textContent = "";
+      refreshPlans();
+    } catch (e) {
+      progress.textContent = "";
+      error.textContent = e.message;
+    } finally {
+      button.disabled = false;
+    }
+  });
+  document.getElementById("plans").addEventListener("click", async (event) => {
+    const approve = event.target.closest("[data-plan-approve]");
+    const reject = event.target.closest("[data-plan-reject]");
+    if (!approve && !reject) return;
+    const id = approve ? approve.dataset.planApprove : reject.dataset.planReject;
+    const error = document.getElementById("planError");
+    error.textContent = "";
+    event.target.disabled = true;
+    try {
+      const resp = await api("/plans/" + encodeURIComponent(id) + (approve ? "/approve" : "/reject"), {method: "POST"});
+      if (!resp.ok) throw new Error((await resp.text()).trim() || resp.statusText);
+      if (approve) scheduleJobs();
+    } catch (e) {
+      error.textContent = e.message;
+    }
+    refreshPlans();
+  });
 
   document.getElementById("runTask").addEventListener("click", async () => {
     const button = document.getElementById("runTask");

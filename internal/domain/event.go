@@ -30,6 +30,8 @@ const (
 	EventWorkloadProgress  EventType = "workload.progress"
 	EventJobSubmitted      EventType = "job.submitted"
 	EventJobFinished       EventType = "job.finished"
+	// An AI plan changed state (data: planId, state).
+	EventPlanUpdated EventType = "plan.updated"
 )
 
 // A device asked to join by approval (agent -pair), and the operator's
