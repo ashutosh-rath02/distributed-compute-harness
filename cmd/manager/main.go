@@ -44,8 +44,10 @@ func main() {
 	heartbeatTimeout := flag.Duration("heartbeat-timeout", 15*time.Second, "how long without a heartbeat before a node is marked offline")
 	reconcileInterval := flag.Duration("reconcile-interval", 5*time.Second, "how often to check for workloads that need restarting (RestartPolicy on-failure/always)")
 	var agentBinaries agentBinaryFlags
-	checkAgentBinaries := flag.Bool("check-agent-binaries", false, "only validate the -agent-binary set (platform detection, conflicts, duplicates), print it, and exit 0 if usable or 1 if not — lets an installer vet a new set before stopping a running manager")
+	checkAgentBinaries := flag.Bool("check-agent-binaries", false, "only validate the -agent-binary set (platform detection, conflicts, duplicates, and with a release key the signed -release-manifest), print it, and exit 0 if usable or 1 if not — lets an installer vet a new set before stopping a running manager")
 	flag.Var(&agentBinaries, "agent-binary", "agent executable to serve for onboarding and self-update; repeat once per platform (e.g. a Windows agent.exe and a linux/arm64 build for Android). Each value is a path, whose platform is read from the file, or os/arch=path to state it explicitly. Onboarding downloads and self-update are disabled if unset")
+	releaseKeyFlag := flag.String("release-key", releaseKey, "with -check-agent-binaries: the release public key (base64, or a file holding it such as a bundle's release-key.pub) the -release-manifest must be signed with; default the key built into this manager, if any")
+	releaseManifest := flag.String("release-manifest", "", "with -check-agent-binaries: a bundle's signed SHA256SUMS (signature in SHA256SUMS.sig beside it); every file it lists must match, and every -agent-binary and -app-apk must be listed")
 	disableDiscovery := flag.Bool("disable-discovery", false, "disable the LAN multicast discovery beacon")
 	insecure := flag.Bool("insecure", false, "disable TLS: agents connect over plaintext ws:// with no manager authentication (dev/local use only). POST /workloads still returns 202 and dispatches ASSIGN, but an agent run with its own -insecure will refuse to execute it (see cmd/agent's -insecure) rather than run arbitrary code for a manager it can't verify")
 	relayAddr := flag.String("relay-addr", "", "address of a relay server (cmd/relay) to also accept connections through, for agents that aren't on this manager's LAN; disabled if unset")
@@ -83,12 +85,21 @@ func main() {
 	}
 
 	if *checkAgentBinaries {
+		// The release first: whether these are the files that were built,
+		// before reading anything into them.
+		checked, err := checkRelease(*releaseKeyFlag, *releaseManifest, agentBinaries, *appAPK)
+		if err != nil {
+			log.Fatalf("manager: release check failed: %v", err)
+		}
 		catalog, err := manager.BuildAgentCatalog(agentBinaries)
 		if err != nil {
 			log.Fatalf("manager: -agent-binary: %v", err)
 		}
 		for _, line := range catalog.Describe() {
 			fmt.Println(line)
+		}
+		if checked != "" {
+			fmt.Println(checked)
 		}
 		return
 	}

@@ -5,13 +5,27 @@
 # No admin rights needed; it runs as you.
 #
 #   install.cmd                       (double-click), or
-#   powershell -ExecutionPolicy Bypass -File install.ps1 [-InstallDir DIR] [-ImportState state.zip] [-NoDashboard]
+#   powershell -ExecutionPolicy Bypass -File install.ps1 [-InstallDir DIR] [-ImportState state.zip] [-ReleaseKey KEY] [-VerifyOnly] [-NoDashboard]
 #
 # -ImportState brings in a manager state exported elsewhere (manager
 # -export-state), so devices that trust that manager keep trusting this one.
+#
+# A bundle with a signed release manifest (SHA256SUMS) is checked first,
+# before the running manager is stopped or any file replaced: a bundle
+# changed since it was built doesn't install. The key it must be signed
+# with: -ReleaseKey (base64, or a release-key.pub you got separately) if
+# given, else the one this PC pinned when it installed a signed bundle
+# (release-key.pub in the install folder), else, the first time, the
+# bundle's own, which proves only that the bundle is intact. Once a signed
+# bundle is installed, unsigned bundles and other keys' are refused.
+# -VerifyOnly checks the bundle and stops there. This guards the bundle,
+# not Windows' view of it: SmartScreen still warns about programs that
+# aren't Authenticode-signed with a code-signing certificate.
 param(
   [string]$InstallDir = (Join-Path $env:LOCALAPPDATA "HomeHarness\manager"),
   [string]$ImportState = "",
+  [string]$ReleaseKey = "",
+  [switch]$VerifyOnly,
   [switch]$NoDashboard
 )
 $ErrorActionPreference = "Stop"
@@ -21,6 +35,51 @@ $manager = Join-Path $InstallDir "manager.exe"
 $launcher = Join-Path $InstallDir "run-manager.ps1"
 $state = Join-Path $InstallDir "state"
 $agents = Join-Path $InstallDir "agents"
+
+# The release check (see above), run by the bundle's own manager.exe with
+# the same code the build vetted it with.
+$pinned = Join-Path $InstallDir "release-key.pub"
+$sums = Join-Path $src "SHA256SUMS"
+$key = ""
+if ($ReleaseKey) {
+  $key = $ReleaseKey
+  if (Test-Path -LiteralPath $ReleaseKey -PathType Leaf) { $key = (Get-Content -LiteralPath $ReleaseKey -Raw).Trim() }
+} elseif (Test-Path -LiteralPath $pinned) {
+  $key = (Get-Content -LiteralPath $pinned -Raw).Trim()
+}
+if (Test-Path -LiteralPath $sums) {
+  $bundleManager = Join-Path $src "manager.exe"
+  if (-not (Test-Path -LiteralPath $bundleManager)) { throw "This bundle has no manager.exe. Nothing was installed or stopped." }
+  if (-not $key) {
+    $bundleKey = Join-Path $src "release-key.pub"
+    if (-not (Test-Path -LiteralPath $bundleKey)) { throw "This bundle has a release manifest but no release-key.pub. Nothing was installed or stopped." }
+    $key = (Get-Content -LiteralPath $bundleKey -Raw).Trim()
+    Write-Host "First signed bundle on this PC: checking it with its own release key, which is pinned for later updates."
+  }
+  $check = @("-check-agent-binaries", "-release-key", $key, "-release-manifest", $sums)
+  Get-ChildItem (Join-Path $src "agents") -File | ForEach-Object { $check += @("-agent-binary", $_.FullName) }
+  $bundleApk = Join-Path $src "home-harness.apk"
+  if (Test-Path -LiteralPath $bundleApk) { $check += @("-app-apk", $bundleApk) }
+  # Its verdict comes on stderr: collect it, rather than let Windows
+  # PowerShell turn the first line into an exception of its own.
+  $ErrorActionPreference = "Continue"
+  $out = & $bundleManager @check 2>&1 | ForEach-Object { "$_" }
+  $code = $LASTEXITCODE
+  $ErrorActionPreference = "Stop"
+  if ($code -ne 0) {
+    $out | ForEach-Object { Write-Host $_ }
+    throw "This bundle failed its release check (above): it was changed after it was built, or signed with another release key. Nothing was installed or stopped. If the release key was replaced on purpose, pass -ReleaseKey with the new release-key.pub, or delete $pinned."
+  }
+  $out | Where-Object { $_ -like "release:*" } | ForEach-Object { Write-Host $_ }
+} elseif ($key) {
+  throw "This bundle has no signed release manifest (SHA256SUMS), but this PC takes only signed bundles (-ReleaseKey, or the key pinned in $pinned). Nothing was installed or stopped. To install an unsigned bundle anyway, delete $pinned first."
+} else {
+  Write-Host "This bundle has no signed release manifest (SHA256SUMS): installing it unchecked."
+}
+if ($VerifyOnly) {
+  Write-Host "Checked only (-VerifyOnly): nothing was installed or stopped."
+  return
+}
 New-Item -ItemType Directory -Force $InstallDir, $state, $agents | Out-Null
 
 # Stop a manager installed here earlier: its task, its launcher loop and the
@@ -41,6 +100,9 @@ if ((Resolve-Path $src).Path -ne (Resolve-Path $InstallDir).Path) {
   $apk = Join-Path $src "home-harness.apk"
   if (Test-Path $apk) { Copy-Item $apk (Join-Path $InstallDir "home-harness.apk") -Force }
 }
+# Pin the key a signed bundle was checked with: from now on, only bundles
+# signed with it install here.
+if ((Test-Path -LiteralPath $sums) -and $key) { Set-Content -LiteralPath $pinned -Value $key -Encoding ascii }
 
 if ($ImportState) {
   & $manager -import-state $ImportState -state-dir $state -force

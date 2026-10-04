@@ -31,6 +31,10 @@ targets=(
 failed=()
 for target in "${targets[@]}"; do
   read -r goos goarch name <<<"$target"
+  # go build leaves an up-to-date output alone, even one signed since:
+  # start from the unsigned build, so signing (and its cache) always sees
+  # the same input.
+  rm -f "$out/$name"
   if CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" GOARM=7 go build -trimpath -o "$out/$name" ./cmd/agent; then
     echo "built $out/$name ($goos/$goarch)"
   else
@@ -42,3 +46,9 @@ if ((${#failed[@]})); then
   echo "FAILED to build: ${failed[*]}" >&2
   exit 1
 fi
+
+# Code signing, when configured (each script says how), here and nowhere
+# later: everything downstream (the catalog's hashes, the APK, the release
+# manifest) must see the signed bytes.
+bash scripts/sign-windows.sh "$out/agent-windows-amd64.exe"
+bash scripts/sign-macos.sh "$out/agent-darwin-arm64" "$out/agent-darwin-amd64"
