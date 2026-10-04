@@ -184,8 +184,15 @@ func TestToolTypesAreOfferedOnlyWhereTheirProgramsAre(t *testing.T) {
 	// An ffmpeg that doesn't answer -version isn't offered.
 	dir = toolsDir(t, "", "ffmpeg")
 	os.WriteFile(filepath.Join(dir, "ffmpeg.broken"), nil, 0o600)
-	if _, ok := advertised(toolRegistry(dir))["media.transcode"]; ok {
+	broken := toolRegistry(dir)
+	if _, ok := advertised(broken)["media.transcode"]; ok {
 		t.Fatal("a broken ffmpeg was offered")
+	}
+	// Fixed (say, its DLLs copied in afterwards): seen at the next look,
+	// not only after a restart.
+	os.Remove(filepath.Join(dir, "ffmpeg.broken"))
+	if _, ok := advertised(broken)["media.transcode"]; !ok {
+		t.Fatal("a fixed ffmpeg wasn't offered")
 	}
 
 	// whisper-cli needs a model; voice-detection models don't count.

@@ -35,13 +35,12 @@ type tools struct {
 	run    func(*exec.Cmd) error
 
 	mu     sync.Mutex
-	probes map[string]toolProbe // path -> what -version said, while the file is unchanged
+	probes map[string]toolProbe // path -> a good -version answer, while the file is unchanged
 }
 
 type toolProbe struct {
 	size    int64
 	mod     time.Time
-	ok      bool
 	version string
 }
 
@@ -126,9 +125,11 @@ func (t *tools) find(name string) string {
 	return ""
 }
 
-// probe runs `path -version` once per version of the file and reports
-// whether it answered as want (the start of its first line), and the rest
-// of that line (its version).
+// probe runs `path -version` and reports whether it answered as want (the
+// start of its first line), and the rest of that line (its version). An
+// answer is kept while the file is unchanged; a failure isn't, so an
+// install finished later (a DLL copied in after the program) is seen at
+// the next capability probe.
 func (t *tools) probe(ctx context.Context, path, want string) (bool, string) {
 	fi, err := os.Stat(path)
 	if err != nil {
@@ -138,23 +139,22 @@ func (t *tools) probe(ctx context.Context, path, want string) (bool, string) {
 	p, ok := t.probes[path]
 	t.mu.Unlock()
 	if ok && p.size == fi.Size() && p.mod.Equal(fi.ModTime()) {
-		return p.ok, p.version
+		return true, p.version
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, path, "-version").Output()
 	line, _, _ := strings.Cut(string(out), "\n")
 	line = strings.TrimSpace(line)
-	p = toolProbe{size: fi.Size(), mod: fi.ModTime(), ok: err == nil && strings.HasPrefix(line, want)}
-	if p.ok {
-		p.version, _, _ = strings.Cut(strings.TrimSpace(strings.TrimPrefix(line, want)), " ")
+	if err != nil || !strings.HasPrefix(line, want) {
+		return false, ""
 	}
-	if ctx.Err() == nil { // a probe cut short says nothing about the program
-		t.mu.Lock()
-		t.probes[path] = p
-		t.mu.Unlock()
-	}
-	return p.ok, p.version
+	p = toolProbe{size: fi.Size(), mod: fi.ModTime()}
+	p.version, _, _ = strings.Cut(strings.TrimSpace(strings.TrimPrefix(line, want)), " ")
+	t.mu.Lock()
+	t.probes[path] = p
+	t.mu.Unlock()
+	return true, p.version
 }
 
 // ffmpeg is the path of an ffmpeg that answers -version, or "".
