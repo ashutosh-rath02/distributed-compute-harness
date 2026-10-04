@@ -197,7 +197,11 @@ $task = $false
 try {
   $user = "$env:USERDOMAIN\$env:USERNAME"
   $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $launchArgs
-  $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
+  # At sign-in, and every 2 minutes as a watchdog: "restart on failure"
+  # only covers a launch that fails, so a launcher that stops later
+  # would otherwise stay down until the next sign-in. While it runs, the
+  # extra starts are ignored (IgnoreNew).
+  $trigger = @((New-ScheduledTaskTrigger -AtLogOn -User $user), (New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2) -RepetitionInterval (New-TimeSpan -Minutes 2)))
   $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
   $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
   Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "Home Compute Harness agent" -Force -ErrorAction Stop | Out-Null

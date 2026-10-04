@@ -59,7 +59,12 @@ if (-not (Test-Path $tokenFile)) {
 $dir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $state = Join-Path $dir "state"
 function Q([string]$p) { '"' + $p + '"' }
+$exe = Join-Path $dir "manager.exe"
 while ($true) {
+  # Only this loop starts the manager (the task never runs two loops), so
+  # one already running from this folder was left behind by a loop that
+  # was stopped: replace it, or the new one couldn't get the ports.
+  Get-Process manager -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe } | Stop-Process -Force -ErrorAction SilentlyContinue
   $token = (Get-Content (Join-Path $state "pairing-token") -Raw).Trim()
   $a = @("-addr", ":7420", "-api-addr", "127.0.0.1:7421", "-join-addr", ":7419", "-pairing-token", $token,
          "-operator-token-file", (Q (Join-Path $state "operator-token")), "-db", (Q (Join-Path $state "manager.db")),
@@ -69,7 +74,7 @@ while ($true) {
   if (Test-Path $apk) { $a += @("-app-apk", (Q $apk)) }
   $log = Join-Path $state "manager.log"
   if (Test-Path $log) { Move-Item -Force $log (Join-Path $state "manager.prev.log") }
-  Start-Process -FilePath (Join-Path $dir "manager.exe") -ArgumentList $a -WorkingDirectory $dir -WindowStyle Hidden -RedirectStandardError $log -RedirectStandardOutput (Join-Path $state "manager.out.log") -Wait
+  Start-Process -FilePath $exe -ArgumentList $a -WorkingDirectory $dir -WindowStyle Hidden -RedirectStandardError $log -RedirectStandardOutput (Join-Path $state "manager.out.log") -Wait
   Start-Sleep -Seconds 5
 }
 '@ | Set-Content -Encoding UTF8 $launcher
@@ -79,7 +84,10 @@ while ($true) {
 $user = "$env:USERDOMAIN\$env:USERNAME"
 $launchArgs = '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $launcher + '"'
 $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $launchArgs
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
+# At sign-in, and every 2 minutes as a watchdog: "restart on failure" only
+# covers a launch that fails, so a launcher that stops later would stay
+# down until the next sign-in. While it runs, extra starts are ignored.
+$trigger = @((New-ScheduledTaskTrigger -AtLogOn -User $user), (New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2) -RepetitionInterval (New-TimeSpan -Minutes 2)))
 $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "Home Compute Harness manager" -Force | Out-Null

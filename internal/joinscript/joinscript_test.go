@@ -26,6 +26,9 @@ func TestBuildWindowsSecureEmbedsFingerprintTokenAndHash(t *testing.T) {
 		"Register-ScheduledTask",
 		"-RunLevel Limited",
 		"Remove-ItemProperty -Path $runKey",
+		// The watchdog trigger that brings a stopped launcher back.
+		"-RepetitionInterval (New-TimeSpan -Minutes 2)",
+		"-MultipleInstances IgnoreNew",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected output to contain %q, got:\n%s", want, out)
