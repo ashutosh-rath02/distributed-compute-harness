@@ -3,6 +3,7 @@ package manager
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -86,6 +87,18 @@ type Config struct {
 	// sleeping manager stops the whole fleet. Never blocks a sleep the
 	// user asks for.
 	KeepAwake bool
+	// TLSCert is the manager's TLS identity: a standby receives it, and it
+	// signs failover terms (standby.go). Zero (-insecure): no standby.
+	TLSCert tls.Certificate
+	// StepDown is called once, when this manager learns that a newer
+	// active manager exists (standby.go): cmd/manager stops serving and
+	// runs it as that manager's standby. pair is the pair as this manager
+	// knew it, own its term, term the newer one's. Nil: it only refuses
+	// devices from then on.
+	StepDown func(pair domain.StandbyPair, own, term uint64)
+	// PeerCheckInterval is how often an active manager asks its standby
+	// whether it took over (default 10s).
+	PeerCheckInterval time.Duration
 }
 
 // PersistentStore is the subset of persistent storage the manager needs:
@@ -183,6 +196,8 @@ type Server struct {
 	agents *agentCatalog
 	// app: the Android app offered to agents updated with it (nil = none).
 	app *agentBuild
+	// failover: the term and the standby (standby.go).
+	failover *failoverState
 }
 
 // pendingCommand tracks who a dispatched command was sent to, so its
@@ -227,6 +242,7 @@ func NewServer(transport domain.Transport, store PersistentStore, cfg Config) *S
 		jobs:         newJobTable(),
 		plans:        newPlanTable(),
 		policy:       &policyStore{p: domain.PermissivePolicy()},
+		failover:     &failoverState{},
 	}
 	if cfg.KeepAwake {
 		s.awake = keepawake.New("Home Harness manager: your devices are working on tasks")
@@ -766,6 +782,9 @@ func (s *Server) Run(ctx context.Context) error {
 		for _, j := range jobs {
 			s.jobs.put(j)
 		}
+		if err := s.loadFailover(); err != nil {
+			return err
+		}
 	}
 
 	s.openJoinWindowOnFirstRun()
@@ -777,6 +796,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	go s.monitorHeartbeats(ctx)
 	go s.reconcileWorkloads(ctx)
+	go s.watchPeer(ctx)
 
 	for {
 		select {
@@ -928,6 +948,11 @@ func (s *Server) handleRegister(ctx context.Context, conn domain.Conn, env *prot
 	// the signature proves possession of its private key. (env.Source is
 	// still whatever the peer wrote, so it never reaches the audit log.)
 
+	// A manager its standby has superseded admits nobody (standby.go).
+	if s.refuseIfSuperseded(ctx, conn, env.Source, payload.Term, payload.TermProof) {
+		return ""
+	}
+
 	// Held from the revocation check through persisting the admission, so
 	// RevokeNode can't interleave between "allowed" and "registered" (see
 	// admitMu). Registrations are rare enough that one lock is fine.
@@ -992,8 +1017,7 @@ func (s *Server) handleRegister(ctx context.Context, conn domain.Conn, env *prot
 	}
 	s.admitMu.Unlock()
 
-	s.send(ctx, conn, protocol.MsgRegisterAck, domain.ManagerNodeID, claimedID,
-		protocol.RegisterAckPayload{NodeID: claimedID, ServerTime: time.Now().UTC()})
+	s.send(ctx, conn, protocol.MsgRegisterAck, domain.ManagerNodeID, claimedID, s.registerAck(claimedID, payload.Manifest))
 	s.Registry.SetState(claimedID, domain.NodeReady)
 
 	// Recorded outside admitMu, so admission never holds the lock across

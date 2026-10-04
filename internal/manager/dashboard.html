@@ -120,6 +120,7 @@
     <div class="card"><span class="hint">Workloads completed</span><div class="metric" id="completedCount">-</div></div>
     <div class="card"><span class="hint">Running / queued</span><div class="metric" id="queueCount">-</div></div>
   </div>
+  <p id="standbyLine" class="hint" hidden></p>
   <p class="sub">Operator dashboard — your sign-in is kept only in this browser, for this exact address. Generated onboarding scripts below include this harness's pairing token in plain text. <a href="#" id="signout">Sign out of this browser</a></p>
 
   <h2>Nodes</h2>
@@ -1281,6 +1282,33 @@
     joinTimer = setInterval(tick, 1000);
   }
 
+  // The standby manager (standby.go): one line, once there is one. Its
+  // name and address come from the standby: set as text, never HTML.
+  async function refreshStandby() {
+    let v;
+    try { v = await (await api("/standby")).json(); } catch (e) { return; }
+    const line = document.getElementById("standbyLine");
+    const sb = v.standby;
+    if (!sb && !v.term && !v.enrollmentExpiresAt && v.role !== "stepped-down") { line.hidden = true; return; }
+    let text;
+    if (v.role === "stepped-down") {
+      text = "This manager stepped down: a newer one took over.";
+    } else if (!sb) {
+      text = v.enrollmentExpiresAt ? "Standby manager: waiting for it to connect." : "No standby manager.";
+    } else {
+      let state = "hasn't copied this manager's state yet";
+      if (sb.lagSeconds >= 0) {
+        state = "checked in " + (sb.lagSeconds < 90 ? sb.lagSeconds + " s" : Math.round(sb.lagSeconds / 60) + " min")
+          + " ago, " + (sb.upToDate ? "up to date" : "behind");
+      }
+      text = "Standby manager: " + (sb.name ? sb.name + " at " : "") + sb.addr + " (" + state + ").";
+    }
+    if (v.term) text += " Failover term " + v.term + ".";
+    line.textContent = text;
+    line.hidden = false;
+  }
+  setInterval(() => { if (!signedOut) refreshStandby(); }, 15000);
+
   document.getElementById("joinBanner").addEventListener("click", async (event) => {
     const button = event.target.closest("button[data-join]");
     if (!button) return;
@@ -1350,6 +1378,7 @@
     if (type === "node.revoked" || type === "node.unrevoked") refreshRevoked();
     if (type === "node.join-requested" || type === "node.join-decided" || type === "node.registered") refreshJoinRequests();
     if (type === "join.window") refreshJoinWindow();
+    if (type === "standby.updated") refreshStandby();
     if (type.startsWith("plan.") || type.startsWith("node.")) refreshPlans();
     if (document.getElementById("auditSection").open) refreshAudit();
   }
@@ -1404,6 +1433,7 @@
     refreshRevoked();
     refreshJoinRequests();
     refreshJoinWindow();
+    refreshStandby();
     prefillLanAddr();
     streamEvents();
   })();

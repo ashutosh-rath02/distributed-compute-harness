@@ -53,6 +53,11 @@ func (s *Server) reconcileWorkloads(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			// A stopped manager — shut down, or stepped down to standby in
+			// the same process (standby.go) — keeps nothing awake.
+			if s.awake != nil {
+				s.awake.Hold(false)
+			}
 			return
 		case <-gc.C:
 			s.collectArtifacts()

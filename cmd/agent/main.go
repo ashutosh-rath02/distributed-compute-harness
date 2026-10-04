@@ -151,6 +151,9 @@ func main() {
 		DeviceStateFile:      *deviceStateFile,
 		KeepAwake:            *keepAwake,
 		LlamaCppDir:          *llamaDir,
+		// Follow a standby manager when the primary is gone; not through a
+		// relay, where the standby link doesn't reach.
+		Failover: *relayAddr == "",
 	}
 	switch *priority {
 	case "low":

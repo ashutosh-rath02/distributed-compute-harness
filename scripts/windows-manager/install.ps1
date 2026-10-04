@@ -60,6 +60,9 @@ $dir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $state = Join-Path $dir "state"
 function Q([string]$p) { '"' + $p + '"' }
 $exe = Join-Path $dir "manager.exe"
+# This loop restarts the manager: one that needs a restart (a standby
+# promoted after stepping down) just exits instead of starting itself.
+$env:HOME_HARNESS_SUPERVISED = "1"
 while ($true) {
   # Only this loop starts the manager (the task never runs two loops), so
   # one already running from this folder was left behind by a loop that

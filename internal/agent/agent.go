@@ -163,6 +163,10 @@ type Config struct {
 	// sleeping device loses its task). Never blocks a sleep the user asks
 	// for.
 	KeepAwake bool
+	// Failover follows a standby manager (failover.go): this agent keeps
+	// the pair's addresses and term the manager sends, and tries them when
+	// its manager is gone. cmd/agent turns it on except through a relay.
+	Failover bool
 }
 
 const defaultAgentVersion = "0.1.0"
@@ -214,6 +218,9 @@ type Agent struct {
 	pairMu        sync.Mutex
 	pendingAddr   string
 	loggedPending string
+
+	// failover: what this agent knows about a standby manager (failover.go).
+	failover failoverMemory
 }
 
 // New loads (or generates, on first run) the agent's identity and returns
@@ -379,37 +386,22 @@ func nextBackoff(current, maxBackoff time.Duration) time.Duration {
 }
 
 func (a *Agent) connectAndServe(ctx context.Context) error {
-	addr, err := a.resolveManagerAddr(ctx)
-	if err != nil {
+	resolved, err := a.resolveManagerAddr(ctx)
+	addrs := a.managerCandidates(resolved)
+	if len(addrs) == 0 {
 		return fmt.Errorf("resolve manager address: %w", err)
 	}
-	a.setCurrentManagerAddr(addr)
-
-	conn, err := a.transport.Dial(ctx, addr)
+	conn, addr, err := a.connectFirst(ctx, addrs)
 	if err != nil {
-		return fmt.Errorf("dial manager at %s: %w", addr, err)
-	}
-	defer conn.Close()
-
-	if err := a.register(ctx, conn); err != nil {
-		a.pairMu.Lock()
-		if isPendingApproval(err) || isJoinClosed(err) {
-			a.pendingAddr = addr
-		} else {
-			a.pendingAddr = ""
-		}
-		a.pairMu.Unlock()
 		return err
 	}
-	a.pairMu.Lock()
-	a.pendingAddr, a.loggedPending = "", ""
-	a.pairMu.Unlock()
+	defer conn.Close()
 	log.Printf("agent %s: registered with manager at %s", a.identity.NodeID, addr)
 	if a.cfg.OnRegistered != nil {
 		a.cfg.OnRegistered()
 	}
 
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 3)
 	// connCtx ends with this connection, so loops that would otherwise
 	// only stop at agent shutdown (the capability probe) don't pile up,
 	// one per reconnect.
@@ -418,6 +410,9 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 	go a.heartbeatLoop(ctx, conn, errCh)
 	go a.receiveLoop(ctx, conn, errCh)
 	go a.capabilityLoop(connCtx, conn)
+	if a.cfg.Failover {
+		go a.watchManager(connCtx, conn, errCh)
+	}
 
 	select {
 	case err := <-errCh:
@@ -425,6 +420,38 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// dialAndRegister connects to the manager at addr and registers. bounded
+// limits the dial when other addresses wait behind this one.
+func (a *Agent) dialAndRegister(ctx context.Context, addr string, bounded bool) (domain.Conn, error) {
+	a.setCurrentManagerAddr(addr)
+	dialCtx := ctx
+	if bounded {
+		var cancel context.CancelFunc
+		dialCtx, cancel = context.WithTimeout(ctx, failoverDialTimeout)
+		defer cancel()
+	}
+	conn, err := a.transport.Dial(dialCtx, addr)
+	if err != nil {
+		return nil, fmt.Errorf("dial manager at %s: %w", addr, err)
+	}
+
+	if err := a.register(ctx, conn, addr); err != nil {
+		conn.Close()
+		a.pairMu.Lock()
+		if isPendingApproval(err) || isJoinClosed(err) {
+			a.pendingAddr = addr
+		} else {
+			a.pendingAddr = ""
+		}
+		a.pairMu.Unlock()
+		return nil, err
+	}
+	a.pairMu.Lock()
+	a.pendingAddr, a.loggedPending = "", ""
+	a.pairMu.Unlock()
+	return conn, nil
 }
 
 func (a *Agent) resolveManagerAddr(ctx context.Context) (string, error) {
@@ -451,13 +478,17 @@ func (a *Agent) resolveManagerAddr(ctx context.Context) (string, error) {
 	return addr, err
 }
 
-func (a *Agent) register(ctx context.Context, conn domain.Conn) error {
+func (a *Agent) register(ctx context.Context, conn domain.Conn, addr string) error {
 	manifest := a.buildManifest(ctx)
 	a.setAdvertised(manifest.Capabilities)
 	signature := a.identity.Sign(protocol.RegisterSignedData(a.cfg.PairingToken, a.identity.NodeID))
 	use := a.deviceUse(ctx)
-	if err := a.send(ctx, conn, protocol.MsgRegister, domain.ManagerNodeID,
-		protocol.RegisterPayload{Manifest: manifest, PairingToken: a.cfg.PairingToken, Signature: signature, Pairing: a.cfg.Pairing, Use: &use}); err != nil {
+	payload := protocol.RegisterPayload{Manifest: manifest, PairingToken: a.cfg.PairingToken, Signature: signature, Pairing: a.cfg.Pairing, Use: &use}
+	if a.cfg.Failover {
+		known := a.knownManagers()
+		payload.Term, payload.TermProof = known.Term, known.TermProof
+	}
+	if err := a.send(ctx, conn, protocol.MsgRegister, domain.ManagerNodeID, payload); err != nil {
 		return fmt.Errorf("send REGISTER: %w", err)
 	}
 
@@ -468,6 +499,11 @@ func (a *Agent) register(ctx context.Context, conn domain.Conn) error {
 
 	switch env.Type {
 	case protocol.MsgRegisterAck:
+		if a.cfg.Failover {
+			var ack protocol.RegisterAckPayload
+			_ = env.DecodePayload(&ack)
+			return a.noteAck(addr, ack)
+		}
 		return nil
 	case protocol.MsgRegisterReject:
 		var payload protocol.RegisterRejectPayload
@@ -567,7 +603,11 @@ func (a *Agent) receiveLoop(ctx context.Context, conn domain.Conn, errCh chan<- 
 			errCh <- err
 			return
 		}
+		a.failover.heard.Store(time.Now().UnixNano())
 		switch env.Type {
+		case protocol.MsgPong: // an answer to watchManager's ping
+		case protocol.MsgManagers:
+			a.handleManagers(env)
 		case protocol.MsgPing:
 			if err := a.send(ctx, conn, protocol.MsgPong, env.Source, nil); err != nil {
 				errCh <- fmt.Errorf("send PONG: %w", err)
@@ -697,6 +737,9 @@ func (a *Agent) agentFeatures() []string {
 	}
 	if a.appUpdates() {
 		features = append(features, domain.FeatureAppUpdate)
+	}
+	if a.cfg.Failover {
+		features = append(features, domain.FeatureFailover)
 	}
 	return features
 }

@@ -125,6 +125,9 @@ func (s *Server) toNodeView(rec *NodeRecord, relations map[domain.NodeID]hostRel
 //	GET  /ai-info                    the OpenAI-compatible API's base URL and AI key, for setting up apps
 //	GET  /v1/models                  OpenAI-compatible: the models READY devices can chat with (openai.go)
 //	POST /v1/chat/completions        OpenAI-compatible chat, streamed or not; also takes the AI key
+//	GET  /standby                    the standby manager: role, term, last copy, lag (standby.go)
+//	POST /standby                    a one-time standby enrollment and the command to start the standby with it
+//	DELETE /standby                  forget the standby (its credential stops working)
 //
 // It is a thin adapter over Registry/SendCommand/Events — the manager's
 // core logic has no HTTP dependency of its own.
@@ -196,6 +199,10 @@ func (s *Server) NewHTTPHandler() http.Handler {
 	mux.HandleFunc("GET /ai-info", s.apiGetAIInfo)
 	mux.HandleFunc("GET /v1/models", s.apiOpenAIModels)
 	mux.HandleFunc("POST /v1/chat/completions", s.apiOpenAIChat)
+	mux.HandleFunc("GET /standby", s.apiGetStandby)
+	mux.HandleFunc("POST /standby", s.apiAddStandby)
+	mux.HandleFunc("DELETE /standby", s.apiRemoveStandby)
+	mux.HandleFunc("POST /standby/promote", s.apiPromoteActive)
 	// Host check and CSRF protection first (apiguard.go), then operator
 	// authentication (operatorauth.go) — browser defenses and the
 	// credential check are independent layers.

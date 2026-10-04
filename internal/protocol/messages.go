@@ -34,6 +34,11 @@ type RegisterPayload struct {
 	// operator's availability rule applies from the moment it connects,
 	// before its first heartbeat (domain.FeatureAvailability).
 	Use *domain.DeviceUse `json:"use,omitempty"`
+	// Term and TermProof are the highest failover term this agent has seen
+	// and the active manager's signature over it (domain.FeatureFailover).
+	// A manager behind that term steps down instead of admitting it.
+	Term      uint64 `json:"term,omitempty"`
+	TermProof []byte `json:"termProof,omitempty"`
 }
 
 // PairingCode is the short code a device and its manager both show while
@@ -62,6 +67,19 @@ func RegisterSignedData(pairingToken string, nodeID domain.NodeID) []byte {
 type RegisterAckPayload struct {
 	NodeID     domain.NodeID `json:"nodeId"`
 	ServerTime time.Time     `json:"serverTime"`
+	// Failover (sent to domain.FeatureFailover agents only): the manager's
+	// term, its proof, and the pair's agent-facing addresses.
+	Term      uint64   `json:"term,omitempty"`
+	TermProof []byte   `json:"termProof,omitempty"`
+	Managers  []string `json:"managers,omitempty"`
+}
+
+// ManagersPayload (MANAGERS) updates a failover.v1 agent's view of the
+// pair while it is connected.
+type ManagersPayload struct {
+	Term      uint64   `json:"term,omitempty"`
+	TermProof []byte   `json:"termProof,omitempty"`
+	Managers  []string `json:"managers,omitempty"`
 }
 
 // RegisterRejectPayload explains why REGISTER was refused (e.g. bad
@@ -76,6 +94,9 @@ type RegisterRejectPayload struct {
 	// JoinClosed: the manager isn't taking new devices (its join window
 	// is closed). The agent asks again later, quietly.
 	JoinClosed bool `json:"joinClosed,omitempty"`
+	// NotActive: this manager is not (or no longer) the active one — a
+	// standby took over. A failover.v1 agent tries its other addresses.
+	NotActive bool `json:"notActive,omitempty"`
 }
 
 // HeartbeatPayload carries the sending node's current runtime state.
