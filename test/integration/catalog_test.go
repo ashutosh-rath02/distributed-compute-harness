@@ -365,6 +365,10 @@ func TestTypedSubmissionsAreValidated(t *testing.T) {
 	}
 	for _, ty := range cat.Types {
 		want := 1
+		switch ty.Name {
+		case "media.transcode", "audio.transcribe", "doc.text":
+			want = 0 // each runs a program the device owner installs; the test agent has none
+		}
 		if strings.HasPrefix(ty.Name, "llm.") || ty.Name == "container.run" {
 			want = 0 // needs a local model runtime or container engine; the test agent has none
 		}
