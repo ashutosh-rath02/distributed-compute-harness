@@ -4,12 +4,15 @@
 // external program. Handlers work only inside their workload's working
 // directory: they read their inputs and write their declared outputs.
 // Types backed by a local runtime (Ollama, ollama.go) are offered only
-// where that runtime answers.
+// where that runtime answers; those that run a program the device owner
+// installed (ffmpeg, whisper.cpp, poppler, tesseract: tools.go) only
+// where it is found, always by absolute path with arguments built here.
 package tasks
 
 import (
 	"context"
 	"io"
+	"os/exec"
 	"sort"
 	"time"
 
@@ -54,6 +57,18 @@ type Options struct {
 	// OllamaURL is where this device's Ollama listens (the device owner's
 	// setting, never the manager's). Empty means the default local one.
 	OllamaURL string
+	// ToolsDir is the device owner's folder of programs for the media and
+	// document types (ffmpeg, whisper.cpp and its models, poppler,
+	// tesseract; tools.go). Empty: none there.
+	ToolsDir string
+	// ToolsSearchSystem also looks for them in standard install locations
+	// and PATH (cmd/agent turns it on; tests leave it off, so what this
+	// machine has installed never matters).
+	ToolsSearchSystem bool
+	// RunProgram runs one of those programs to the end; the agent ties it
+	// to its own life (a killed agent leaves nothing running). Nil:
+	// cmd.Run.
+	RunProgram func(*exec.Cmd) error
 
 	tagsTTL time.Duration // how long Ollama's model list is reused (tests shorten it)
 }
@@ -77,6 +92,7 @@ func builtinHandlers() map[domain.CapabilityName]Handler {
 		"text.count":      textCount{},
 		"render.fractal":  renderFractal{},
 		"image.stack":     imageStack{},
+		"image.upscale":   imageUpscale{},
 	}
 }
 
@@ -98,6 +114,10 @@ func NewRegistry(opts Options) *Registry {
 	r.handlers["llm.remove"] = ollamaRemove{o}
 	r.handlers["llm.inventory"] = ollamaInventory{o}
 	r.ollama = o
+	t := newTools(opts)
+	r.handlers["media.transcode"] = mediaTranscode{t}
+	r.handlers["audio.transcribe"] = audioTranscribe{t}
+	r.handlers["doc.text"] = docText{t}
 	return r
 }
 

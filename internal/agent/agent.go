@@ -157,6 +157,12 @@ type Config struct {
 	// model pieces it was sent; empty: the user cache dir's
 	// HomeHarness/llama-rpc-cache (tests use their own).
 	LlamaCacheDir string
+	// ToolsDir is where the device owner keeps programs for the media and
+	// document task types (ffmpeg, whisper.cpp + its models/, poppler,
+	// tesseract); empty: none. ToolsSearchSystem also looks in standard
+	// install locations and PATH (cmd/agent; tests leave it off).
+	ToolsDir          string
+	ToolsSearchSystem bool
 	// GPUs overrides the GPUs the agent reports (tests). Nil: detected.
 	GPUs func(ctx context.Context) []domain.GPU
 	// KeepAwake asks the OS not to sleep while a workload runs here (a
@@ -276,7 +282,8 @@ func New(transport domain.Transport, cfg Config) (*Agent, error) {
 	a := &Agent{cfg: cfg, transport: transport, identity: id, startedAt: time.Now(), executor: NewExecutorWithSlots(cfg.WorkloadSlots), binaryHash: binaryHash, appHash: appHash, reprobe: make(chan struct{}, 1)}
 	a.executor.SetWorkRoot(cfg.WorkDir)
 	a.executor.SetDisabled(cfg.DisabledCapabilities)
-	a.handlers = tasks.NewRegistry(tasks.Options{OllamaURL: cfg.OllamaURL})
+	a.handlers = tasks.NewRegistry(tasks.Options{OllamaURL: cfg.OllamaURL,
+		ToolsDir: cfg.ToolsDir, ToolsSearchSystem: cfg.ToolsSearchSystem, RunProgram: runProgram})
 	a.llama = &llamaCpp{dir: cfg.LlamaCppDir}
 	a.handlers.Register("llm.split-helper", splitHelper{a})
 	a.handlers.Register("llm.split-main", splitMain{a})

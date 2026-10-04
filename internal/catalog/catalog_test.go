@@ -236,3 +236,72 @@ func TestAnswerFormatIsJSONOrASchema(t *testing.T) {
 		}
 	}
 }
+
+// The home media and document types: names that carry their format,
+// bounded params, and choices matched exactly (they are file names and
+// fixed words, not Ollama models).
+func TestMediaAndDocumentTypes(t *testing.T) {
+	transcode := mustType(t, "media.transcode")
+	for _, preset := range TranscodePresets {
+		_, outs, err := transcode.Compile(map[string]string{"preset": preset}, img("clips/Holiday.MOV"))
+		if err != nil || len(outs) != 1 || outs[0] != "Holiday-"+preset {
+			t.Errorf("%s: %v %v", preset, err, outs)
+		}
+	}
+	upscale := mustType(t, "image.upscale")
+	if _, outs, err := upscale.Compile(map[string]string{"scale": "4", "format": "jpg"}, img("a.png")); err != nil || outs[0] != "a-x4.jpg" {
+		t.Fatalf("upscale: %v %v", err, outs)
+	}
+	transcribe := mustType(t, "audio.transcribe")
+	doc := mustType(t, "doc.text")
+	for _, c := range []struct {
+		name   string
+		ty     Type
+		params map[string]string
+		inputs []domain.ArtifactRef
+	}{
+		{"scale 1", upscale, map[string]string{"scale": "1"}, img("a.png")},
+		{"scale 8", upscale, map[string]string{"scale": "8"}, img("a.png")},
+		{"raw ffmpeg args", transcode, map[string]string{"preset": "-vf"}, img("a.mp4")},
+		{"made-up preset", transcode, map[string]string{"preset": "4k.mkv"}, img("a.mp4")},
+		{"negative start", transcode, map[string]string{"start": "-5"}, img("a.mp4")},
+		{"too long", transcode, map[string]string{"duration": "14401"}, img("a.mp4")},
+		{"not a video", transcode, nil, img("a.exe")},
+		{"model as a path", transcribe, map[string]string{"model": "../ggml-base"}, img("a.wav")},
+		{"model with a drive", transcribe, map[string]string{"model": "c:base"}, img("a.wav")},
+		{"model as an option", transcribe, map[string]string{"model": "-h"}, img("a.wav")},
+		{"no model", transcribe, nil, img("a.wav")},
+		{"language as an option", transcribe, map[string]string{"model": "base", "language": "-otxt"}, img("a.wav")},
+		{"long language", transcribe, map[string]string{"model": "base", "language": "english"}, img("a.wav")},
+		{"ocr language with a path", doc, map[string]string{"language": "../eng"}, img("a.pdf")},
+		{"five ocr languages", doc, map[string]string{"language": "eng+deu+fra+ita+spa"}, img("a.pdf")},
+		{"unknown method", doc, map[string]string{"method": "magic"}, img("a.pdf")},
+		{"a word file", doc, nil, img("a.docx")},
+	} {
+		if _, _, err := c.ty.Compile(c.params, c.inputs); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: got %v, want ErrInvalid", c.name, err)
+		}
+	}
+	if p, _, err := doc.Compile(map[string]string{"language": "chi_sim+eng"}, img("scan.PDF")); err != nil || p["method"] != "auto" {
+		t.Fatalf("doc.text: %v %v", err, p)
+	}
+
+	// Choices that aren't models match exactly: a device listing
+	// "base.en" can't be sent "Base.EN" (a different file on Linux).
+	attrs := map[string]string{AttrWhisperModels: "base.en,small"}
+	if ok, _ := transcribe.Offers(attrs, map[string]string{"model": "base.en"}); !ok {
+		t.Fatal("base.en not offered")
+	}
+	for _, m := range []string{"Base.EN", "base.en:latest", "base"} {
+		if ok, why := transcribe.Offers(attrs, map[string]string{"model": m}); ok || !strings.Contains(why, m) {
+			t.Errorf("%q matched %q: %v %s", m, attrs, ok, why)
+		}
+	}
+	textOnly := map[string]string{AttrDocMethods: "text"}
+	if ok, _ := doc.Offers(textOnly, map[string]string{"method": "ocr"}); ok {
+		t.Fatal("OCR work offered to a device without OCR")
+	}
+	if ok, _ := doc.Offers(textOnly, map[string]string{"method": "text"}); !ok {
+		t.Fatal("text work not offered to a device with pdftotext")
+	}
+}
