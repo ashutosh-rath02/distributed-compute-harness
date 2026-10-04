@@ -24,14 +24,26 @@ func captureStdout(t *testing.T, fn func()) string {
 	os.Stdout = w
 	defer func() { os.Stdout = original }()
 
+	// Read while fn writes: a pipe holds only a few KiB (4 on Windows), and
+	// a join script longer than that would block its writer forever.
+	type result struct {
+		out []byte
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		out, err := io.ReadAll(r)
+		done <- result{out, err}
+	}()
+
 	fn()
 
 	w.Close()
-	out, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatalf("ReadAll: %v", err)
+	res := <-done
+	if res.err != nil {
+		t.Fatalf("ReadAll: %v", res.err)
 	}
-	return string(out)
+	return string(res.out)
 }
 
 func joinInfoServer(t *testing.T, body string) *apiClient {
