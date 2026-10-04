@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Home Harness: how it works</title>
+<style>
+  :root { --bg:#fff; --fg:#1f2328; --mut:#656d76; --line:#d0d7de; --card:#f6f8fa; --acc:#0969da; --ok:#1a7f37; --warn:#9a6700; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0d1117; --fg:#e6edf3; --mut:#8d96a0; --line:#30363d; --card:#161b22; --acc:#4493f8; --ok:#3fb950; --warn:#d29922; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.6 system-ui,-apple-system,Segoe UI,sans-serif; }
+  .wrap { display:flex; max-width:1200px; margin:0 auto; }
+  nav { position:sticky; top:0; align-self:flex-start; width:250px; height:100vh; overflow:auto; padding:24px 16px; border-right:1px solid var(--line); font-size:14px; }
+  nav a { display:block; color:var(--mut); text-decoration:none; padding:3px 0; }
+  nav a:hover { color:var(--acc); }
+  nav b { display:block; margin:14px 0 4px; color:var(--fg); font-size:12px; text-transform:uppercase; letter-spacing:.06em; }
+  main { flex:1; min-width:0; padding:24px 32px 80px; }
+  h1 { font-size:2rem; margin:.2em 0; }
+  h2 { font-size:1.45rem; margin:2.2em 0 .4em; padding-top:.6em; border-top:1px solid var(--line); }
+  h3 { font-size:1.1rem; margin:1.6em 0 .3em; }
+  p, li { max-width:75ch; }
+  code { background:var(--card); padding:.1em .35em; border-radius:4px; font:.88em ui-monospace,Consolas,monospace; }
+  pre { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 14px; overflow:auto; font:13px/1.5 ui-monospace,Consolas,monospace; }
+  .lead { color:var(--mut); font-size:1.1rem; max-width:70ch; }
+  table { border-collapse:collapse; width:100%; font-size:14.5px; margin:.8em 0; }
+  th, td { border:1px solid var(--line); padding:6px 10px; text-align:left; vertical-align:top; }
+  th { background:var(--card); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px 16px; margin:12px 0; }
+  .tag { display:inline-block; font-size:12px; padding:1px 8px; border-radius:10px; border:1px solid var(--line); margin-right:4px; }
+  .ok { color:var(--ok); } .warn { color:var(--warn); }
+  svg text { fill:var(--fg); font:13px system-ui,sans-serif; }
+  svg .box { fill:var(--card); stroke:var(--line); }
+  svg .arrow { stroke:var(--mut); fill:none; marker-end:url(#h); }
+  @media (max-width: 820px) { nav { display:none; } main { padding:16px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav>
+  <b>Understand</b>
+  <a href="#what">What it is</a><a href="#arch">Architecture</a><a href="#life">Life of a task</a><a href="#trust">Trust and security</a>
+  <b>The code</b>
+  <a href="#map">Codebase map</a><a href="#manager">Manager internals</a><a href="#agent">Agent internals</a><a href="#catalog">Task catalog</a><a href="#android">Android app</a><a href="#tests">Tests and builds</a>
+  <b>Features</b>
+  <a href="#f-core">Core platform</a><a href="#f-ai">Local AI</a><a href="#f-jobs">Jobs, workflows, placement</a><a href="#f-trust">Trust, failover, remote</a><a href="#f-tasks">More task types</a>
+  <b>Operate</b>
+  <a href="#run">Run and deploy</a><a href="#status">What is verified</a><a href="#todo">What is left</a>
+</nav>
+<main>
+
+<h1>Home Harness</h1>
+<p class="lead">A way to use every computer and phone you own as one pool of compute. One <b>manager</b> hands work to <b>agents</b> running on your devices, over an authenticated, certificate-pinned connection. Written in Go (about 40,000 lines plus tests) with a small Java Android app. Everything is typed, allow-listed and device-agnostic.</p>
+
+<h2 id="what">1. What it is</h2>
+<ul>
+  <li><b>Manager</b>: one program (on a PC or phone) that knows every device, decides where work runs, and serves a dashboard and an API on <code>127.0.0.1:7421</code>.</li>
+  <li><b>Agent</b>: a small program on each device (Windows, Linux, macOS, Android). It connects to the manager, reports what the device can do, and runs the tasks it is given.</li>
+  <li><b>Tasks</b> are not arbitrary commands. They are <b>typed catalog tasks</b> (resize an image, ask a local AI model, hash files, run a container...) with a schema the manager checks and the agent re-checks. Raw commands exist but are off by default.</li>
+  <li><b>Jobs</b> run one task per file across the fleet and combine the results. <b>Workflows</b> chain stages. The <b>AI planner</b> turns a sentence into a checked plan that only runs when you approve it.</li>
+</ul>
+<div class="card"><b>The one rule:</b> the manager never trusts what an agent, an AI model or a remote relay says. They propose; the manager checks every request against the catalog, policy and the operator's credentials before anything happens.</div>
+
+<h2 id="arch">2. Architecture</h2>
+<svg viewBox="0 0 760 300" width="100%" role="img" aria-label="Architecture diagram">
+  <defs><marker id="h" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="#8d96a0"/></marker></defs>
+  <rect class="box" x="290" y="20" width="180" height="90" rx="10"/><text x="380" y="48" text-anchor="middle" font-weight="700">Manager</text><text x="380" y="68" text-anchor="middle">registry, placement, queue</text><text x="380" y="86" text-anchor="middle">jobs, policy, audit, store</text>
+  <rect class="box" x="20" y="20" width="200" height="90" rx="10"/><text x="120" y="48" text-anchor="middle" font-weight="700">You</text><text x="120" y="68" text-anchor="middle">dashboard, harnessctl,</text><text x="120" y="86" text-anchor="middle">AI apps (/v1), remote page</text>
+  <rect class="box" x="540" y="20" width="200" height="90" rx="10"/><text x="640" y="48" text-anchor="middle" font-weight="700">Standby manager</text><text x="640" y="68" text-anchor="middle">copy of state, same identity,</text><text x="640" y="86" text-anchor="middle">takes over if primary dies</text>
+  <rect class="box" x="20" y="190" width="150" height="80" rx="10"/><text x="95" y="220" text-anchor="middle" font-weight="700">Windows PC agent</text><text x="95" y="240" text-anchor="middle">tasks, Ollama, tools</text>
+  <rect class="box" x="200" y="190" width="150" height="80" rx="10"/><text x="275" y="220" text-anchor="middle" font-weight="700">Linux / Mac agent</text><text x="275" y="240" text-anchor="middle">tasks, containers</text>
+  <rect class="box" x="380" y="190" width="150" height="80" rx="10"/><text x="455" y="220" text-anchor="middle" font-weight="700">Android worker</text><text x="455" y="240" text-anchor="middle">agent inside the app</text>
+  <rect class="box" x="560" y="190" width="180" height="80" rx="10"/><text x="650" y="220" text-anchor="middle" font-weight="700">Relay (optional)</text><text x="650" y="240" text-anchor="middle">devices and you, away from home</text>
+  <path class="arrow" d="M220,65 L290,65"/><path class="arrow" d="M470,65 L540,65"/>
+  <path class="arrow" d="M330,110 L110,190"/><path class="arrow" d="M370,110 L275,190"/><path class="arrow" d="M400,110 L455,190"/><path class="arrow" d="M430,110 L620,190"/>
+</svg>
+<ul>
+  <li><b>Transport:</b> agents open a WebSocket to the manager over TLS. They <b>pin the manager's certificate fingerprint</b> (P-256) instead of trusting a CA.</li>
+  <li><b>Joining:</b> by a pairing token, a one-time invitation (QR or link), or by approval: the device shows a 6-digit code that also appears on the manager.</li>
+  <li><b>State:</b> a bbolt database (devices, jobs, workflows, audit, policy...). Files (task inputs and outputs) are a content-addressed store keyed by SHA-256.</li>
+  <li><b>Events:</b> an in-memory bus feeds the dashboard's live updates (server-sent events over an authenticated fetch).</li>
+</ul>
+
+<h2 id="life">3. Life of a task</h2>
+<ol>
+  <li>You submit (dashboard, <code>harnessctl</code>, API, or the AI planner after approval). Files are uploaded first and referred to by hash.</li>
+  <li>The manager <b>compiles</b> the request against the catalog: required parameters, ranges, allowed values, file counts and extensions, policy (is this type enabled? which devices?).</li>
+  <li><b>Placement</b> picks a device that has the capability, the model or tool needed, free slots and memory, and is allowed to take work now (not on battery, not paused, within hours). Among equals: least busy first, then the device already holding the input files, then most free memory. If nothing has room right now the task is <b>queued</b> (priority, then age).</li>
+  <li>The agent <b>downloads the inputs</b> (or copies them from its cache), runs the handler in its own work folder, streams progress, and uploads the outputs.</li>
+  <li>The manager records the result. Jobs derive their state from their attempts, retry on other devices, and run the combine step when every task is done.</li>
+</ol>
+
+<h2 id="trust">4. Trust and security</h2>
+<table>
+<tr><th>Boundary</th><th>How it is protected</th></tr>
+<tr><td>Agent to manager</td><td>TLS with a pinned fingerprint; each agent has its own key pair; admission by token, invitation, or approved code; revocation list.</td></tr>
+<tr><td>You to manager</td><td>Operator bearer token (or a derived dashboard session). No cookies, ever. CSRF and DNS-rebinding guard. The AI key works only on <code>/v1</code>.</td></tr>
+<tr><td>What runs</td><td>Typed catalog + policy. Raw commands, container tasks and some types are off until you enable them. The AI planner can only propose catalog types.</td></tr>
+<tr><td>Agent output</td><td>Untrusted: names, hashes, cache reports and results are validated; the dashboard escapes everything an agent or model wrote.</td></tr>
+<tr><td>Wrong results</td><td>Optional spot-checks re-run a sample of deterministic tasks on a different device and flag a device whose results differ.</td></tr>
+<tr><td>Builds</td><td>Signed release manifest (Ed25519) checked before install; optional Windows/macOS code signing; the Android app updates only from its own signing key.</td></tr>
+<tr><td>Audit</td><td>Security-relevant actions are recorded (who, what, never the content of prompts or secrets).</td></tr>
+</table>
+
+<h2 id="map">5. Codebase map</h2>
+<table>
+<tr><th>Path</th><th>What lives there</th></tr>
+<tr><td><code>cmd/manager</code></td><td>The manager program: flags, TLS, listeners, standby role, release check, relay mounting.</td></tr>
+<tr><td><code>cmd/agent</code></td><td>The agent program: flags (tools dir, llama.cpp dir, container engine, cache size...).</td></tr>
+<tr><td><code>cmd/harnessctl</code></td><td>The command-line client: nodes, tasks, jobs, workflows, plan, models, policy, standby, remote, update...</td></tr>
+<tr><td><code>cmd/relay</code></td><td>The relay server for devices and the dashboard away from home.</td></tr>
+<tr><td><code>internal/domain</code></td><td>Plain data types shared everywhere: nodes, workloads, jobs, workflows, policy, priority, availability, GPUs, failover.</td></tr>
+<tr><td><code>internal/protocol</code></td><td>The wire messages (REGISTER, HEARTBEAT, WORKLOAD_ASSIGN, TUNNEL_OPEN...) and envelopes.</td></tr>
+<tr><td><code>internal/manager</code></td><td>Everything the manager does (about 14,000 lines): see below.</td></tr>
+<tr><td><code>internal/agent</code></td><td>Everything the agent does: connection, executing workloads, files and input cache, self-update, split-model helpers, tunnels, failover.</td></tr>
+<tr><td><code>internal/catalog</code></td><td>The typed task catalog: schemas, validation, output naming, node-choice matching.</td></tr>
+<tr><td><code>internal/tasks</code></td><td>The agent-side handlers for each catalog type (image, archive, hash, fractal, Ollama, upscale, ffmpeg, whisper, OCR, reports...).</td></tr>
+<tr><td><code>internal/container</code></td><td>Container tasks: engine detection, hardened docker/podman argv, output collection.</td></tr>
+<tr><td><code>internal/failover</code></td><td>Standby manager: terms, state bundle, replication, roles.</td></tr>
+<tr><td><code>internal/remoteaccess</code>, <code>internal/relay</code></td><td>Sealed remote dashboard protocol; the relay and its gateway.</td></tr>
+<tr><td><code>internal/store</code></td><td>The bbolt persistent store.</td></tr>
+<tr><td><code>internal/artifacts</code></td><td>The content-addressed file store.</td></tr>
+<tr><td><code>internal/mtls</code>, <code>identity</code></td><td>Certificates, fingerprint pinning, device identity keys.</td></tr>
+<tr><td><code>internal/sysinfo</code>, <code>keepawake</code></td><td>CPU/memory/GPU/battery readings per OS; keeping a PC awake while it works.</td></tr>
+<tr><td><code>internal/tunnel</code></td><td>Device-to-device byte tunnels (for split models) through the manager.</td></tr>
+<tr><td><code>internal/release</code>, <code>scripts/releasesign</code></td><td>Signed release manifest.</td></tr>
+<tr><td><code>android/</code></td><td>The Android app (Java, built without Gradle): manager mode, worker mode, self-updater.</td></tr>
+<tr><td><code>scripts/</code></td><td>Builds (agents, Windows manager bundle, Android APK), signing, installers.</td></tr>
+<tr><td><code>test/integration</code></td><td>Tests with a real manager and real agents in one process (plus stand-in programs for external tools).</td></tr>
+</table>
+
+<h2 id="manager">6. Manager internals (<code>internal/manager</code>)</h2>
+<table>
+<tr><th>Area</th><th>Files</th><th>Role</th></tr>
+<tr><td>Connections</td><td><code>server.go</code>, <code>registry.go</code>, <code>revocation.go</code>, <code>enrollment.go</code>, <code>join*.go</code></td><td>Accepting agents, admission, the device registry, invitations and the join page.</td></tr>
+<tr><td>Placement</td><td><code>placement.go</code>, <code>locality.go</code>, <code>gpu.go</code>, <code>availability.go</code></td><td>Who may run a workload, who is best, GPU fit, when a device takes work.</td></tr>
+<tr><td>Queue and workloads</td><td><code>queue.go</code>, <code>workloads.go</code>, <code>reconcile.go</code>, <code>retention.go</code></td><td>Queueing by priority and age, workload state, the periodic reconcile loop, cleanup of old records.</td></tr>
+<tr><td>Jobs and workflows</td><td><code>jobs.go</code>, <code>workflows.go</code>, <code>taskindex.go</code>, <code>spotcheck.go</code></td><td>Per-file jobs with retries, multi-stage workflows, the report index, result spot-checks.</td></tr>
+<tr><td>Catalog and policy</td><td><code>policy.go</code>, <code>container.go</code></td><td>Which types are enabled, per-type limits, image allow-lists.</td></tr>
+<tr><td>AI</td><td><code>openai.go</code>, <code>planner*.go</code>, <code>split.go</code>, <code>aidevices.go</code>, <code>tunnel.go</code></td><td>The OpenAI-compatible API, the planner, split-model sessions, the device models card.</td></tr>
+<tr><td>Operators</td><td><code>api.go</code>, <code>operatorauth.go</code>, <code>apiguard.go</code>, <code>audit.go</code>, <code>fleet.go</code></td><td>HTTP API and authentication, audit log, device names and labels.</td></tr>
+<tr><td>Updates</td><td><code>selfupdate.go</code>, <code>agentcatalog.go</code></td><td>Agent builds per platform; the Android app as an update target.</td></tr>
+<tr><td>Failover and remote</td><td><code>standby.go</code>, <code>remote.go</code></td><td>Standby manager link and fencing; the sealed remote dashboard.</td></tr>
+<tr><td>Surfaces</td><td><code>dashboard.html</code>, <code>live.html</code></td><td>The web dashboard and the live view.</td></tr>
+</table>
+
+<h2 id="agent">7. Agent internals (<code>internal/agent</code>)</h2>
+<ul>
+  <li><b>Connection loop:</b> discover or dial the manager (or a known standby), register with a manifest (hardware, capabilities, features), heartbeat every few seconds with live CPU/memory/battery.</li>
+  <li><b>Workloads:</b> receive an assignment, fetch inputs (verifying SHA-256, using a size-capped local cache), run the typed handler or command with limits, stream output, upload declared outputs.</li>
+  <li><b>Capabilities:</b> re-probed every 30 seconds (is Ollama up, which models, which tools found) and sent to the manager when they change.</li>
+  <li><b>Self-update:</b> on PCs the agent downloads and swaps its own binary (hash checked). On Android the app downloads the new app and installs it.</li>
+  <li><b>Split models, tunnels, failover:</b> helper processes for llama.cpp, byte tunnels, and following a standby manager.</li>
+</ul>
+
+<h2 id="catalog">8. The task catalog</h2>
+<table>
+<tr><th>Type</th><th>What it does</th><th>Needs</th></tr>
+<tr><td><code>system.identity</code>, <code>cpu.burn</code></td><td>Device info; a CPU load test.</td><td>nothing</td></tr>
+<tr><td><code>image.resize</code>, <code>image.upscale</code></td><td>Scale pictures down or up (pixel-capped).</td><td>nothing</td></tr>
+<tr><td><code>archive.zip</code>, <code>file.hash</code>, <code>text.count</code></td><td>Zip files, checksum files, count lines and words.</td><td>nothing</td></tr>
+<tr><td><code>render.fractal</code>, <code>image.stack</code></td><td>Render a picture in strips on many devices and join them.</td><td>nothing</td></tr>
+<tr><td><code>llm.generate</code>, <code>llm.chat</code></td><td>Ask a local model; chat turns (also behind <code>/v1</code>).</td><td>Ollama + a model</td></tr>
+<tr><td><code>llm.classify</code>, <code>llm.embed</code></td><td>Pick a label per file; vectors per file.</td><td>Ollama (embed: an embedding model)</td></tr>
+<tr><td><code>report.collect</code></td><td>Join per-file results into one Markdown, CSV or JSON report.</td><td>nothing</td></tr>
+<tr><td><code>llm.pull</code>, <code>llm.remove</code></td><td>Download or delete a model on one device.</td><td>Ollama</td></tr>
+<tr><td><code>media.transcode</code></td><td>Convert video and audio with fixed presets.</td><td>ffmpeg</td></tr>
+<tr><td><code>audio.transcribe</code></td><td>Speech to text.</td><td>whisper.cpp + a model</td></tr>
+<tr><td><code>doc.text</code></td><td>Text from PDFs and pictures (OCR).</td><td>poppler and/or tesseract</td></tr>
+<tr><td><code>container.run</code></td><td>Run an allow-listed container image, locked down. Off by default.</td><td>Docker or Podman, policy</td></tr>
+<tr><td><code>llm.split-*</code></td><td>Internal: run one model across several devices with llama.cpp.</td><td>llama.cpp on each device</td></tr>
+</table>
+<p>Adding a type = a definition in <code>catalog.go</code> plus a handler in <code>internal/tasks</code>. Optional parameters that older agents don't know use <code>Param.Needs</code> so they are never placed on them.</p>
+
+<h2 id="android">9. The Android app</h2>
+<ul>
+  <li>Two modes in one APK: <b>manager</b> (runs the manager as a foreground service and shows the dashboard in a WebView) or <b>worker</b> (runs the agent, joins by approval).</li>
+  <li>The Go binaries ship as native libraries (Android only runs files from its install folder).</li>
+  <li><b>Self-update:</b> the manager serves its own APK; the agent reports which APK it runs, downloads a newer one when told, and <code>AppUpdater</code> installs it with PackageInstaller. After the owner allows installs once, later updates need no taps (Android 12+).</li>
+</ul>
+
+<h2 id="tests">10. Tests and builds</h2>
+<ul>
+  <li>About 150 test files. <b>Unit tests</b> sit next to the code; <b>integration tests</b> in <code>test/integration</code> start a real manager and real agents in one process on 127.0.0.1 ports.</li>
+  <li>External tools (llama.cpp, ffmpeg, docker...) are tested with small <b>stand-in programs</b> that record the exact arguments they receive.</li>
+  <li>Key logic is <b>mutation-checked</b>: deliberately broken to confirm a test fails.</li>
+  <li>Builds: <code>scripts/build-agents.sh</code> (all platforms), <code>build-windows-manager.sh</code> (the installable bundle, with a signed manifest), <code>build-android-app.sh</code> (the APK).</li>
+</ul>
+
+<h2 id="f-core">11. Features: core platform</h2>
+<ul>
+  <li>Multi-platform agents and self-update; revocation; operator authentication; fleet names and labels; audit log; host de-duplication.</li>
+  <li>Join by approval code, timed "add devices" window, invitations/QR; Windows manager install bundle with a watchdog; live fleet view.</li>
+  <li>Device availability: per-device rules (auto, always, idle, charging, paused, hours); work waits with a stated reason; keep-awake while working; below-normal priority.</li>
+  <li>Capacity slots per device, a FIFO-by-priority queue with aging, workload files (content-addressed), retention of old records.</li>
+</ul>
+<h2 id="f-ai">12. Features: local AI</h2>
+<ul>
+  <li>Local models through each device's Ollama; model management per device from the dashboard; GPU awareness.</li>
+  <li><b>OpenAI-compatible API</b> (<code>/v1/chat/completions</code>, <code>/v1/models</code>, streaming) so any AI app can use your fleet with its own key.</li>
+  <li><b>Split models</b>: one model too big for any device runs across several with llama.cpp through authenticated tunnels.</li>
+  <li><b>Batch AI</b>: summarise, classify or embed a folder across devices and collect one report.</li>
+  <li><b>AI planner</b>: a sentence and your files become a checked plan (optionally multi-step); it runs only on your approval.</li>
+</ul>
+<h2 id="f-jobs">13. Features: jobs, workflows, placement</h2>
+<ul>
+  <li>Jobs: one task per file, spread over devices, retried elsewhere on failure, with a combine step.</li>
+  <li>Workflows: up to 8 stages in order; each stage works on the previous stage's results; checked completely before anything runs; survives a manager restart.</li>
+  <li>Placement: least busy first, then data already on the device (input cache), then memory. Priorities (high/normal/low) with aging.</li>
+</ul>
+<h2 id="f-trust">14. Features: trust, failover, remote access</h2>
+<ul>
+  <li><b>Spot checks</b> (off by default): re-run a sample of deterministic tasks on another device; flag the odd one out.</li>
+  <li><b>Standby manager</b>: a warm copy with the same identity; promote by hand (or automatically); a term number stops a returning old manager from acting as a second boss.</li>
+  <li><b>Remote dashboard</b> (off by default): use the dashboard away from home through the relay with a separate key; every call is sealed so the relay cannot read, replay or change it; modes read-only, standard, full.</li>
+  <li><b>Signed builds</b>: signed release manifest always; Windows Authenticode and macOS notarisation when you have the certificates.</li>
+</ul>
+<h2 id="f-tasks">15. Features: more task types</h2>
+<ul>
+  <li>Image upscaling (built in); video/audio conversion, speech to text, PDF/photo text (switch on when the tool is installed); container tasks (Docker/Podman, allow-listed images, off by default).</li>
+</ul>
+
+<h2 id="run">16. Run and deploy</h2>
+<pre>
+# build everything
+bash scripts/build-agents.sh
+bash scripts/build-android-app.sh
+bash scripts/build-windows-manager.sh        # -> dist/windows-manager
+
+# install or update the manager on this PC (keeps its state)
+powershell -File dist/windows-manager/install.ps1 -InstallDir "%USERPROFILE%\.home-harness\laptop-manager" -NoDashboard
+
+# talk to it
+harnessctl nodes | models | tasks | jobs | workflows | plan "..." | policy | standby | remote
+harnessctl update &lt;node-id&gt;               # PCs and the phone (the app updates itself)
+</pre>
+<p>Dashboard: <code>http://127.0.0.1:7421</code> on the manager's machine (sign-in link printed by the installer). Live view: <code>/live</code>.</p>
+
+<h2 id="status">17. What is verified</h2>
+<table>
+<tr><th>Area</th><th>Status</th></tr>
+<tr><td>Core, jobs, catalog, policy, OpenAI API, model management</td><td class="ok">Verified with real binaries; real Ollama + gemma3 on this laptop.</td></tr>
+<tr><td>AI planner</td><td class="warn">Safe (every bad plan refused). Quality depends on the model: gemma3:1b rarely right; gemma3:4b right on the photo example, weaker on others.</td></tr>
+<tr><td>Phone app self-update</td><td class="ok">Verified on an Android emulator (five updates, silent and asked) and installed on your phone.</td></tr>
+<tr><td>Batch AI, workflows, placement + priorities, spot-checks, standby, signing manifest, upscale</td><td class="ok">Unit + integration tests and real-binary runs on one PC (127.0.0.1).</td></tr>
+<tr><td>Split model across two PCs, discrete GPU, Mac, phone "forget manager"</td><td class="warn">Built; need your hardware to try.</td></tr>
+<tr><td>Containers, ffmpeg, whisper, poppler/tesseract</td><td class="warn">Verified with stand-in programs only; the real tools are not installed here.</td></tr>
+<tr><td>Remote dashboard</td><td class="warn">Protocol tested through an in-process relay and a tampering stand-in; never run in a real browser. One replay-protection mutation check survived: investigate before relying on remote access. Off by default.</td></tr>
+<tr><td>Code signing certificates, macOS notarisation</td><td class="warn">Only the signed manifest is real; certificates need to be bought.</td></tr>
+</table>
+
+<h2 id="todo">18. What is left</h2>
+<ul>
+  <li>Install the real tools (Docker, ffmpeg, whisper.cpp, poppler, tesseract) and run each new type once.</li>
+  <li>Put llama.cpp on the second PC for the two-machine split run.</li>
+  <li>Investigate the surviving replay-window check before turning remote access on.</li>
+  <li>Re-measure the AI planner now that workflows made its prompt longer.</li>
+  <li>Back up <code>~/.home-harness/android-signing.keystore</code> and <code>release-signing.key</code> (with their <code>.pass</code> files).</li>
+</ul>
+<p style="color:var(--mut)">The detailed engineering handover, with gotchas, is in <code>HANDOVER.md</code> at the repository root.</p>
+</main>
+</div>
+</body>
+</html>
