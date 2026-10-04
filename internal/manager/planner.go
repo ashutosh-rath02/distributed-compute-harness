@@ -36,6 +36,9 @@ const (
 	maxPlanRequest = 2000            // bytes of request text
 	maxPlanFiles   = 64
 	maxPlanAnswer  = 16 << 10 // bytes of the model's answer kept
+	// maxPlanSteps bounds a plan's steps: its task (with its combine)
+	// and up to maxPlanSteps-1 follow-ups, which make it a workflow.
+	maxPlanSteps = 4
 )
 
 // PlanState is where a plan stands.
@@ -90,6 +93,11 @@ type Plan struct {
 	Parts    int       `json:"parts,omitempty"`
 	UseFiles []string  `json:"useFiles,omitempty"`
 	Combine  *PlanStep `json:"combine,omitempty"`
+	// Then are follow-up steps, each on the results of the step before:
+	// a plan with any runs as a workflow (planner_then.go).
+	Then []PlanThen `json:"then,omitempty"`
+	// WorkflowID is what an approved plan with follow-ups became.
+	WorkflowID domain.WorkflowID `json:"workflowId,omitempty"`
 	// Tasks is how many tasks the job will have (not counting combine).
 	Tasks     int          `json:"tasks,omitempty"`
 	JobID     domain.JobID `json:"jobId,omitempty"`
@@ -463,7 +471,13 @@ func (s *Server) runPlan(ctx context.Context, cancel context.CancelFunc, p Plan,
 	text := answer.String()
 	draft, problem := draftPlan(text, p.Files, types)
 	var spec JobSpec
-	if problem == nil && draft.possible {
+	var stages []JobSpec // with follow-up steps: each stage's checked job
+	if problem == nil && draft.possible && len(draft.then) > 0 {
+		wf := draft.workflowSpec(p.Files)
+		if stages, problem = s.checkWorkflow(&wf); problem == nil {
+			spec = stages[0]
+		}
+	} else if problem == nil && draft.possible {
 		spec = draft.jobSpec(p.Files)
 		if err := s.checkJob(&spec); err != nil {
 			problem = err
@@ -472,6 +486,7 @@ func (s *Server) runPlan(ctx context.Context, cancel context.CancelFunc, p Plan,
 	settle(func(p *Plan) {
 		p.Answer, p.Summary, p.ModelReason = text, draft.summary, draft.reason
 		p.Task, p.Mode, p.Parts, p.UseFiles, p.Combine = draft.task, draft.mode, draft.parts, draft.files, draft.combine
+		p.Then = append([]PlanThen(nil), draft.then...)
 		switch {
 		case problem != nil:
 			p.State, p.Problem = PlanRefused, strings.TrimPrefix(problem.Error(), ErrInvalidWorkload.Error()+": ")
@@ -486,6 +501,9 @@ func (s *Server) runPlan(ctx context.Context, cancel context.CancelFunc, p Plan,
 			}
 			if p.Combine != nil && spec.Reduce != nil {
 				p.Combine.Effective = spec.Reduce.Params
+			}
+			for i := range p.Then {
+				p.Then[i].Effective, p.Then[i].Runs = stages[i+1].Tasks[0].Params, len(stages[i+1].Tasks)
 			}
 		}
 	})
@@ -506,6 +524,11 @@ func (s *Server) ApprovePlan(ctx context.Context, id, actor string) (Plan, error
 		return Plan{}, fmt.Errorf("%w: the plan is %s", ErrPlanState, state)
 	}
 	p.approving = true
+	if len(p.Then) > 0 {
+		wf := p.workflowSpecFromPlan()
+		s.plans.mu.Unlock()
+		return s.approveWorkflowPlan(ctx, id, actor, wf)
+	}
 	spec := p.jobSpecFromPlan()
 	s.plans.mu.Unlock()
 
@@ -565,6 +588,7 @@ type proposal struct {
 	Mode     string          `json:"mode"`
 	Parts    json.RawMessage `json:"parts"`
 	Combine  *proposedStep   `json:"combine"`
+	Then     []proposedThen  `json:"then"`
 	Possible *bool           `json:"possible"`
 	Reason   string          `json:"reason"`
 }
@@ -582,6 +606,7 @@ type planDraft struct {
 	mode            string
 	parts           int
 	files           []string
+	then            []PlanThen
 }
 
 // extractJSON finds the JSON object in a model's answer, which may come
@@ -753,6 +778,9 @@ func draftPlan(answer string, files []domain.ArtifactRef, types []plannable) (pl
 		}
 		d.combine = &PlanStep{Type: ct.Name, Title: ct.Title, Params: cp}
 	}
+	if d.then, err = draftThen(prop.Then, allowed); err != nil {
+		return d, err
+	}
 	return d, nil
 }
 
@@ -900,6 +928,7 @@ Answer with one JSON object:
 - mode: "perFile" runs the task once for each file, spread over the devices (needed when a task takes 1 file per run and there are several); "once" runs it once with all the files; "parts" (only types marked [parts]) splits the work into "parts" pieces done in parallel.
 - parts: how many pieces for mode "parts", otherwise 0.
 - combine: null, or {"type": a type marked [can combine], "params": {...}} to join every result into one file (for example one zip to download).
+- then: [] unless the request asks for more steps after that. Otherwise up to ` + strconv.Itoa(maxPlanSteps-1) + ` steps, in order, each {"type": a task type above that takes files, "params": {...}, "mode": "perFile" or "once"}, working on the files the step before made (after its combine): "perFile" runs it once for each of those files, "once" once with all of them.
 - possible: false if these task types can't do what was asked.
 - reason: if possible is false, why; otherwise "".
 `)
@@ -954,8 +983,9 @@ func paramSchema(p catalog.Param, choices []string) string {
 // and params limited to theirs, each typed. (One object for every type,
 // not an anyOf per type: with anyOf, gemma3:1b under Ollama's grammar
 // stopped picking the type its own summary described.) Which parameter
-// belongs to which type is the catalog's check, after the answer.
-func stepSchema(types []plannable) string {
+// belongs to which type is the catalog's check, after the answer. mode,
+// when given, is a follow-up step's "mode" property, after its params.
+func stepSchema(types []plannable, mode string) string {
 	var names, props []string
 	seen := map[string]bool{}
 	for _, t := range types {
@@ -978,8 +1008,12 @@ func stepSchema(types []plannable) string {
 			props = append(props, jsonText(p.Name)+":"+schema)
 		}
 	}
+	required := `"type","params"`
+	if mode != "" {
+		mode, required = `,"mode":`+mode, required+`,"mode"`
+	}
 	return `{"type":"object","properties":{"type":{"type":"string","enum":` + jsonText(names) + `},` +
-		`"params":{"type":"object","properties":{` + strings.Join(props, ",") + `},"additionalProperties":false}},"required":["type","params"]}`
+		`"params":{"type":"object","properties":{` + strings.Join(props, ",") + `},"additionalProperties":false}` + mode + `},"required":[` + required + `]}`
 }
 
 // planSchema is the JSON schema the answer must follow, its keys in the
@@ -992,14 +1026,14 @@ func planSchema(types []plannable, files []string) string {
 			combiners = append(combiners, t)
 		}
 	}
-	task := stepSchema(types)
+	task := stepSchema(types, "")
 	fileList := `{"type":"array","maxItems":0}`
 	if len(files) > 0 {
 		fileList = `{"type":"array","items":{"type":"string","enum":` + jsonText(files) + `}}`
 	}
 	combine := `{"type":"null"}`
 	if len(combiners) > 0 {
-		combine = `{"anyOf":[{"type":"null"},` + stepSchema(combiners) + `]}`
+		combine = `{"anyOf":[{"type":"null"},` + stepSchema(combiners, "") + `]}`
 	}
 	return `{"type":"object","properties":{` +
 		`"summary":{"type":"string"},` +
@@ -1008,7 +1042,8 @@ func planSchema(types []plannable, files []string) string {
 		`"mode":{"type":"string","enum":["once","perFile","parts"]},` +
 		`"parts":{"type":"integer","minimum":0,"maximum":` + strconv.Itoa(domain.MaxJobTasks) + `},` +
 		`"combine":` + combine + `,` +
+		`"then":` + thenSchema(types) + `,` +
 		`"possible":{"type":"boolean"},` +
 		`"reason":{"type":"string"}` +
-		`},"required":["summary","task","files","mode","parts","combine","possible","reason"]}`
+		`},"required":["summary","task","files","mode","parts","combine","then","possible","reason"]}`
 }

@@ -21,6 +21,7 @@ var workloadsBucket = []byte("workloads")
 var revokedBucket = []byte("revoked")
 var nodeMetaBucket = []byte("node-meta")
 var jobsBucket = []byte("jobs")
+var workflowsBucket = []byte("workflows")
 var settingsBucket = []byte("settings")
 
 // auditBuckets maps each audit log to its own bucket, so each is capped
@@ -51,7 +52,7 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("persistent: open %q: %w", path, err)
 	}
 	err = db.Update(func(tx *bbolt.Tx) error {
-		for _, name := range [][]byte{nodesBucket, workloadsBucket, revokedBucket, nodeMetaBucket, jobsBucket, settingsBucket, auditBuckets[domain.AuditSecurity], auditBuckets[domain.AuditAdmissions], auditBuckets[domain.AuditNoise]} {
+		for _, name := range [][]byte{nodesBucket, workloadsBucket, revokedBucket, nodeMetaBucket, jobsBucket, workflowsBucket, settingsBucket, auditBuckets[domain.AuditSecurity], auditBuckets[domain.AuditAdmissions], auditBuckets[domain.AuditNoise]} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -377,6 +378,34 @@ func (s *Store) ListJobs() ([]domain.Job, error) {
 				return fmt.Errorf("persistent: decode job: %w", err)
 			}
 			out = append(out, job)
+			return nil
+		})
+	})
+	return out, err
+}
+
+// UpsertWorkflow stores a workflow's request and outcome (its stages are
+// ordinary jobs).
+func (s *Store) UpsertWorkflow(wf domain.Workflow) error {
+	data, err := json.Marshal(wf)
+	if err != nil {
+		return fmt.Errorf("persistent: marshal workflow: %w", err)
+	}
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		return tx.Bucket(workflowsBucket).Put([]byte(wf.ID), data)
+	})
+}
+
+// ListWorkflows returns every stored workflow.
+func (s *Store) ListWorkflows() ([]domain.Workflow, error) {
+	var out []domain.Workflow
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		return tx.Bucket(workflowsBucket).ForEach(func(_, data []byte) error {
+			var wf domain.Workflow
+			if err := json.Unmarshal(data, &wf); err != nil {
+				return fmt.Errorf("persistent: decode workflow: %w", err)
+			}
+			out = append(out, wf)
 			return nil
 		})
 	})

@@ -333,6 +333,7 @@ func (s *Server) liveArtifacts() map[string]bool {
 		}
 	}
 	s.jobLiveArtifacts(live)
+	s.workflowLiveArtifacts(live)
 	return live
 }
 

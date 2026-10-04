@@ -60,6 +60,10 @@ type Job struct {
 	// Priority is every attempt's queue priority (priority.go); empty =
 	// normal.
 	Priority Priority `json:"priority,omitempty"`
+	// Workflow and Stage (from 0) are set on a workflow stage's job
+	// (workflow.go): the workflow's progress is derived from them.
+	Workflow WorkflowID `json:"workflow,omitempty"`
+	Stage    int        `json:"stage,omitempty"`
 }
 
 // ReduceTask is the task key of a job's fan-in step.

@@ -226,6 +226,15 @@ type JobSpec struct {
 	MaxAttempts int
 	// Priority is every attempt's (empty = normal).
 	Priority domain.Priority
+	// Workflow and Stage link a workflow stage's job to its workflow
+	// (workflows.go).
+	Workflow domain.WorkflowID
+	Stage    int
+	// ahead: the tasks' inputs don't exist yet (a later workflow stage,
+	// checked before the stages before it have run). checkJob compiles
+	// and places them as placeholders, like a reduce's parts, and never
+	// looks them up in the store.
+	ahead bool
 }
 
 // SubmitJob validates and records a job; the reconcile loop submits its
@@ -244,6 +253,7 @@ func (s *Server) SubmitJob(ctx context.Context, spec JobSpec) (domain.Job, error
 	job := domain.Job{
 		ID: domain.JobID(id), Name: spec.Name, Tasks: spec.Tasks, Reduce: spec.Reduce,
 		MaxAttempts: spec.MaxAttempts, State: domain.JobRunning, CreatedAt: time.Now().UTC(), Priority: spec.Priority,
+		Workflow: spec.Workflow, Stage: spec.Stage,
 	}
 	if s.store != nil {
 		if err := s.store.UpsertJob(job); err != nil {
@@ -306,8 +316,22 @@ func (s *Server) checkJob(spec *JobSpec) error {
 		return nil
 	}
 	for i := range spec.Tasks {
-		if err := check("task "+domain.TaskKey(i), &spec.Tasks[i], nil); err != nil {
+		t, label := &spec.Tasks[i], "task "+domain.TaskKey(i)
+		if !spec.ahead {
+			if err := check(label, t, nil); err != nil {
+				return err
+			}
+			continue
+		}
+		ahead := t.Inputs
+		t.Inputs = nil
+		err := check(label, t, ahead)
+		t.Inputs = ahead
+		if err != nil {
 			return err
+		}
+		if err := domain.ValidateWorkloadFiles(ahead, t.Outputs); err != nil {
+			return fmt.Errorf("%s: %w: %v", label, ErrInvalidWorkload, err)
 		}
 	}
 	if spec.Reduce != nil {

@@ -113,6 +113,9 @@ type PersistentStore interface {
 	// Batch jobs (jobs.go).
 	UpsertJob(job domain.Job) error
 	ListJobs() ([]domain.Job, error)
+	// Workflows (workflows.go).
+	UpsertWorkflow(wf domain.Workflow) error
+	ListWorkflows() ([]domain.Workflow, error)
 	// Policy (policy.go).
 	GetPolicy() (domain.Policy, bool, error)
 	PutPolicy(p domain.Policy) error
@@ -173,6 +176,8 @@ type Server struct {
 	grants *grantTable
 	// jobs holds batch jobs (jobs.go).
 	jobs *jobTable
+	// workflows holds multi-step workflows (workflows.go).
+	workflows *workflowTable
 	// plans holds AI plans (planner.go), in memory only.
 	plans *planTable
 	// policy decides what may run (policy.go).
@@ -225,6 +230,7 @@ func NewServer(transport domain.Transport, store PersistentStore, cfg Config) *S
 		tunnels:      newTunnelTable(),
 		splits:       newSplitTable(),
 		jobs:         newJobTable(),
+		workflows:    newWorkflowTable(),
 		plans:        newPlanTable(),
 		policy:       &policyStore{p: domain.PermissivePolicy()},
 	}
@@ -773,6 +779,13 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 		for _, j := range jobs {
 			s.jobs.put(j)
+		}
+		workflows, err := s.store.ListWorkflows()
+		if err != nil {
+			return fmt.Errorf("manager: load persisted workflows: %w", err)
+		}
+		for _, wf := range workflows {
+			s.workflows.put(wf)
 		}
 	}
 
