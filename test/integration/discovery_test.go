@@ -30,6 +30,7 @@ func TestAgentDiscoversManagerOverMulticast(t *testing.T) {
 		HeartbeatTimeout: 2 * time.Second,
 	})
 	go srv.Run(ctx)
+	waitListening(t, wsAddr)
 
 	beacon := &udp.Beacon{MulticastAddr: multicastGroup, ManagerPort: wsPort, Interval: 100 * time.Millisecond}
 	go beacon.Run(ctx)

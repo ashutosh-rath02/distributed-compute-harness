@@ -15,7 +15,7 @@ import (
 func writeState(t *testing.T, dir string) {
 	t.Helper()
 	for name, content := range map[string]string{
-		"pairing-token": "pair", "operator-token": "op", "tls/cert.pem": "CERT", "tls/key.pem": "KEY",
+		"pairing-token": "pair", "operator-token": "op", "ai-key": "ai", "tls/cert.pem": "CERT", "tls/key.pem": "KEY",
 		"artifacts/sha256/ab/abc": "blob", "manager.pid": "123", "manager.log": "noise",
 	} {
 		p := filepath.Join(dir, filepath.FromSlash(name))
@@ -43,7 +43,8 @@ func TestExportImportRoundTrip(t *testing.T) {
 	if err := Import(bytes.NewReader(buf.Bytes()), int64(buf.Len()), dst, false); err != nil {
 		t.Fatal(err)
 	}
-	for name, want := range map[string]string{"pairing-token": "pair", "operator-token": "op", "tls/cert.pem": "CERT", "tls/key.pem": "KEY"} {
+	// The AI key moves too, so apps set up with it keep working.
+	for name, want := range map[string]string{"pairing-token": "pair", "operator-token": "op", "ai-key": "ai", "tls/cert.pem": "CERT", "tls/key.pem": "KEY"} {
 		got, err := os.ReadFile(filepath.Join(dst, filepath.FromSlash(name)))
 		if err != nil || string(got) != want {
 			t.Errorf("%s: %q %v", name, got, err)

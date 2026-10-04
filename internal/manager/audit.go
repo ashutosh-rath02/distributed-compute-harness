@@ -41,6 +41,7 @@ const (
 const (
 	actorOperatorToken    = "operator-token"
 	actorDashboardSession = "dashboard-session"
+	actorAIKey            = "ai-key"   // the OpenAI-compatible API's own key (openai.go)
 	actorUnauthenticated  = "operator" // operator auth disabled (tests, embedding)
 	actorNode             = "node"
 	actorAnonymous        = "anonymous"

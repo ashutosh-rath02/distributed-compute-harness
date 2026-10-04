@@ -100,6 +100,7 @@ func startManagerWithAgentBinary(t *testing.T, addr, binaryPath string) *manager
 			t.Logf("manager exited: %v", err)
 		}
 	}()
+	waitListening(t, addr)
 	return srv
 }
 

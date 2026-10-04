@@ -26,6 +26,15 @@ type fakeOllama struct {
 	delay   time.Duration
 	prompts []string
 	sent    []string // the model names generate requests named
+	chats   []fakeChat
+	reason  string // done_reason of the last chat chunk ("" = stop)
+}
+
+// fakeChat is one /api/chat request as the fake received it.
+type fakeChat struct {
+	Model    string
+	Messages []ChatMessage
+	Options  map[string]any
 }
 
 func (f *fakeOllama) setModels(m ...string) { f.mu.Lock(); f.models = m; f.mu.Unlock() }
@@ -37,7 +46,11 @@ func (f *fakeOllama) server(t *testing.T) *httptest.Server {
 		models := append([]string(nil), f.models...)
 		chunks := append([]string(nil), f.chunks...)
 		delay := f.delay
+		reason := f.reason
 		f.mu.Unlock()
+		if reason == "" {
+			reason = "stop"
+		}
 		switch r.URL.Path {
 		case "/api/tags":
 			var list []map[string]any
@@ -76,6 +89,33 @@ func (f *fakeOllama) server(t *testing.T) *httptest.Server {
 				fl.Flush()
 			}
 			w.Write([]byte(`{"response":"","done":true,"eval_count":7,"eval_duration":1000000000,"done_reason":"stop"}` + "\n"))
+		case "/api/chat":
+			var req fakeChat
+			json.NewDecoder(r.Body).Decode(&req)
+			f.mu.Lock()
+			f.chats = append(f.chats, req)
+			f.mu.Unlock()
+			known := false
+			for _, m := range models {
+				known = known || m == req.Model
+			}
+			if !known {
+				w.WriteHeader(http.StatusNotFound)
+				fmt.Fprintf(w, `{"error":"model \"%s\" not found, try pulling it first"}`, req.Model)
+				return
+			}
+			fl := w.(http.Flusher)
+			for _, c := range chunks {
+				select {
+				case <-r.Context().Done():
+					return
+				case <-time.After(delay):
+				}
+				b, _ := json.Marshal(map[string]any{"message": map[string]any{"role": "assistant", "content": c}, "done": false})
+				w.Write(append(b, '\n'))
+				fl.Flush()
+			}
+			fmt.Fprintf(w, `{"message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":12,"eval_count":7,"eval_duration":1000000000,"done_reason":%q}`+"\n", reason)
 		}
 	}))
 	t.Cleanup(srv.Close)

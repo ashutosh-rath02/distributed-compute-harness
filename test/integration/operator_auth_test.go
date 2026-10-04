@@ -48,6 +48,7 @@ func TestOperatorAPIRequiresTheOperatorToken(t *testing.T) {
 		Addr: addr, PairingToken: pairingToken, HeartbeatTimeout: 2 * time.Second, OperatorToken: operatorToken,
 	})
 	go srv.Run(ctx)
+	waitListening(t, addr)
 	api := httptest.NewServer(srv.NewHTTPHandler())
 	defer api.Close()
 	a := startRegisteredAgent(t, addr, "auth-agent")

@@ -211,6 +211,23 @@ var builtins = []Type{
 		DefaultMaxRuntimeSeconds: 600,
 	},
 	{
+		Name: "llm.chat", Version: "1", Title: "Chat with a local AI model",
+		Description: "One turn of a conversation with a local model (Ollama) on whichever device has it: the messages so far in, the reply streamed back. What AI apps use through the manager's OpenAI-compatible API (/v1).",
+		Params: []Param{
+			{Name: "model", Type: String, Title: "Model", Required: true, Pattern: ModelPattern, MaxLength: 128, ChoicesAttr: AttrModels},
+			{Name: "messages", Type: String, Title: "Messages (JSON: [{role, content}])", Required: true, MaxLength: 64 << 10, Multiline: true, AllowDash: true},
+			// No defaults: unset means the model's own.
+			{Name: "temperature", Type: Number, Title: "Temperature (empty = the model's default)", Min: num(0), Max: num(2)},
+			{Name: "max_tokens", Type: Int, Title: "Max tokens (empty = no limit)", Min: num(1), Max: num(131072)},
+			{Name: "seed", Type: Int, Title: "Seed (0 = random)", Default: "0", Min: num(0), Max: num(2147483647)},
+		},
+		Outputs:                  []string{"response.txt"},
+		Requirements:             domain.ResourceRequirements{MinMemoryBytes: 256 << 20},
+		MaxPerNode:               1,
+		Streams:                  true,
+		DefaultMaxRuntimeSeconds: 600,
+	},
+	{
 		Name: "llm.inventory", Version: "1", Title: "List local AI models",
 		Description: "List the models the device's local runtime (Ollama) has.",
 	},

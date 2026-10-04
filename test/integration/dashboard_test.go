@@ -34,6 +34,7 @@ func startTestManagerWithDashboard(t *testing.T, addr string, cfg manager.Config
 			t.Logf("manager exited: %v", err)
 		}
 	}()
+	waitListening(t, addr)
 
 	apiSrv := httptest.NewServer(srv.NewHTTPHandler())
 	t.Cleanup(apiSrv.Close)

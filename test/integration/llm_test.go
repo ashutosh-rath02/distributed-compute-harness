@@ -28,6 +28,10 @@ type fakeOllama struct {
 	delay  time.Duration
 	active int
 	peak   int
+	// Chat only: the last user message received, and answers cut off by
+	// the caller going away.
+	lastUser string
+	cut      int
 }
 
 func (f *fakeOllama) set(models ...string) { f.mu.Lock(); f.models = models; f.mu.Unlock() }
@@ -75,6 +79,45 @@ func startFakeOllama(t *testing.T, f *fakeOllama) string {
 				w.(http.Flusher).Flush()
 			}
 			w.Write([]byte(`{"done":true,"eval_count":3,"eval_duration":1000000000,"done_reason":"stop"}` + "\n"))
+		case "/api/chat":
+			var req struct {
+				Model    string
+				Messages []struct{ Role, Content string }
+			}
+			json.NewDecoder(r.Body).Decode(&req)
+			found := false
+			for _, m := range models {
+				found = found || m == req.Model
+			}
+			if !found {
+				w.WriteHeader(http.StatusNotFound)
+				fmt.Fprintf(w, `{"error":"model %q not found"}`, req.Model)
+				return
+			}
+			f.mu.Lock()
+			f.active++
+			if f.active > f.peak {
+				f.peak = f.active
+			}
+			if len(req.Messages) > 0 {
+				f.lastUser = req.Messages[len(req.Messages)-1].Content
+			}
+			f.mu.Unlock()
+			defer func() { f.mu.Lock(); f.active--; f.mu.Unlock() }()
+			for _, c := range chunks {
+				select {
+				case <-r.Context().Done():
+					f.mu.Lock()
+					f.cut++
+					f.mu.Unlock()
+					return
+				case <-time.After(delay):
+				}
+				b, _ := json.Marshal(map[string]any{"message": map[string]string{"role": "assistant", "content": c}})
+				w.Write(append(b, '\n'))
+				w.(http.Flusher).Flush()
+			}
+			w.Write([]byte(`{"done":true,"prompt_eval_count":11,"eval_count":3,"eval_duration":1000000000,"done_reason":"stop"}` + "\n"))
 		}
 	}))
 	t.Cleanup(srv.Close)

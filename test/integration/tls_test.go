@@ -78,6 +78,7 @@ func TestRegisterOverTLSWithPinnedFingerprint(t *testing.T) {
 		HeartbeatTimeout: 2 * time.Second,
 	})
 	go srv.Run(ctx)
+	waitListening(t, addr)
 
 	a, err := agent.New(ws.NewTLSClient(mtls.PinnedClientConfig(mtls.Fingerprint(cert))), agent.Config{
 		ManagerAddr:       addr,
@@ -122,6 +123,7 @@ func TestAgentRejectsRogueManagerWithWrongFingerprint(t *testing.T) {
 		HeartbeatTimeout: 2 * time.Second,
 	})
 	go srv.Run(ctx)
+	waitListening(t, addr)
 
 	a, err := agent.New(ws.NewTLSClient(mtls.PinnedClientConfig(mtls.Fingerprint(realCert))), agent.Config{
 		ManagerAddr:       addr,

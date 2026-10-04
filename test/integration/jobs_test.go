@@ -268,6 +268,7 @@ func TestJobResumesAfterManagerRestartWithoutChargingAnAttempt(t *testing.T) {
 		})
 		transport.Handle("/workload-artifacts/", srv.ArtifactTransferHandler())
 		go srv.Run(ctx)
+		waitListening(t, addr)
 		api := httptest.NewServer(srv.NewHTTPHandler())
 		return srv, api.URL, func() { api.Close(); cancel(); time.Sleep(150 * time.Millisecond); db.Close() }
 	}

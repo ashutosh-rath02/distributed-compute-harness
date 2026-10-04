@@ -51,6 +51,7 @@ func startPairingManagerWindow(t *testing.T, addr, token string, firstRun time.D
 		FirstRunJoinWindow: firstRun,
 	})
 	go srv.Run(ctx)
+	waitListening(t, addr)
 	api := httptest.NewServer(srv.NewHTTPHandler())
 	t.Cleanup(api.Close)
 	return srv, fp, api.URL
@@ -335,6 +336,7 @@ func TestJoinWindowStartsClosedForAKnownFleet(t *testing.T) {
 	t.Cleanup(func() { cancel(); store.Close() })
 	srv := manager.NewServer(ws.New(), store, manager.Config{Addr: addr, PairingToken: "x", HeartbeatTimeout: 2 * time.Second, FirstRunJoinWindow: time.Hour})
 	go srv.Run(ctx)
+	waitListening(t, addr)
 	api := httptest.NewServer(srv.NewHTTPHandler())
 	t.Cleanup(api.Close)
 	var v struct{ Open bool }

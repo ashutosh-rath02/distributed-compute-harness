@@ -53,6 +53,7 @@ func TestJoinInfoEndpointReturnsConfiguredValues(t *testing.T) {
 			t.Logf("manager exited: %v", err)
 		}
 	}()
+	waitListening(t, addr)
 
 	apiSrv := httptest.NewServer(srv.NewHTTPHandler())
 	defer apiSrv.Close()
@@ -97,6 +98,7 @@ func TestJoinInfoInsecureWithoutAgentBinary(t *testing.T) {
 			t.Logf("manager exited: %v", err)
 		}
 	}()
+	waitListening(t, addr)
 
 	apiSrv := httptest.NewServer(srv.NewHTTPHandler())
 	defer apiSrv.Close()

@@ -55,6 +55,29 @@ func (c *apiClient) cmdModels() error {
 	return nil
 }
 
+// cmdAI prints what an app needs to use the fleet's models through the
+// manager's OpenAI-compatible API.
+func (c *apiClient) cmdAI() error {
+	var info struct {
+		BaseURL string   `json:"baseUrl"`
+		APIKey  string   `json:"apiKey"`
+		Models  []string `json:"models"`
+	}
+	if err := c.get("/ai-info", &info); err != nil {
+		return err
+	}
+	fmt.Println("Apps that speak OpenAI's chat API can use your devices' models with:")
+	fmt.Println("  base URL: " + info.BaseURL)
+	fmt.Println("  API key:  " + info.APIKey)
+	if len(info.Models) == 0 {
+		fmt.Println("  models:   none yet (install Ollama on a device and pull one: ollama pull llama3.2)")
+	} else {
+		fmt.Println("  models:   " + strings.Join(info.Models, ", "))
+	}
+	fmt.Println("The key opens only the chat API (/v1). It answers on this computer only.")
+	return nil
+}
+
 // cmdAsk runs a prompt on a local model somewhere in the fleet and
 // prints the answer as it is generated. Ctrl-C cancels it.
 func cmdAsk(c *apiClient, args []string) error {

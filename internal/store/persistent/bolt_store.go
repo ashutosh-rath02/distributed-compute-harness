@@ -146,6 +146,19 @@ func (s *Store) UpsertWorkload(pw domain.PersistedWorkload) error {
 	})
 }
 
+// DeleteWorkloads removes workload records, all in one transaction.
+func (s *Store) DeleteWorkloads(ids []domain.WorkloadID) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket(workloadsBucket)
+		for _, id := range ids {
+			if err := b.Delete([]byte(id)); err != nil {
+				return fmt.Errorf("persistent: delete workload %s: %w", id, err)
+			}
+		}
+		return nil
+	})
+}
+
 // ListWorkloads returns every persisted workload, e.g. to seed the
 // manager's in-memory WorkloadRegistry after a restart.
 func (s *Store) ListWorkloads() ([]domain.PersistedWorkload, error) {

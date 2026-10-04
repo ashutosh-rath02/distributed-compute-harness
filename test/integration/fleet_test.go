@@ -184,6 +184,7 @@ func TestAliasAndLabelsPersistAndRevocationClearsThem(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		srv := manager.NewServer(ws.New(), store, manager.Config{Addr: addr, PairingToken: pairingToken, HeartbeatTimeout: 2 * time.Second})
 		go srv.Run(ctx)
+		waitListening(t, addr)
 		return srv, store, cancel
 	}
 	srv, store, stop := start()

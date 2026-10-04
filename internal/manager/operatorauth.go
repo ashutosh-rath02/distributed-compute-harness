@@ -141,6 +141,7 @@ func (s *Server) requireOperator(next http.Handler) http.Handler {
 		return next
 	}
 	session := dashboardSession(token)
+	aiKey := s.cfg.AIKey
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if operatorPublic(r) {
 			next.ServeHTTP(w, r)
@@ -154,6 +155,17 @@ func (s *Server) requireOperator(next http.Handler) http.Handler {
 		}
 		if subtle.ConstantTimeCompare(got, []byte(session)) == 1 {
 			next.ServeHTTP(w, r.WithContext(withActor(r.Context(), actorDashboardSession)))
+			return
+		}
+		// The AI key opens only the OpenAI-compatible API (openai.go).
+		if isOpenAIPath(r.URL.Path) {
+			if aiKey != "" && subtle.ConstantTimeCompare(got, []byte(aiKey)) == 1 {
+				next.ServeHTTP(w, r.WithContext(withActor(r.Context(), actorAIKey)))
+				return
+			}
+			w.Header().Set("WWW-Authenticate", `Bearer realm="home-harness AI API"`)
+			writeOpenAIError(w, http.StatusUnauthorized, "invalid_request_error", "invalid_api_key",
+				"use the manager's AI key as the API key (dashboard: \"Use with AI apps\", or harnessctl ai)")
 			return
 		}
 		w.Header().Set("WWW-Authenticate", `Bearer realm="home-harness operator API"`)

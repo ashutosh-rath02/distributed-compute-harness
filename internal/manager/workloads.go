@@ -18,6 +18,9 @@ type WorkloadRecord struct {
 	// PENDING, so a busy refusal racing that cancel must not re-queue it
 	// (queue.go). In memory only; it matters for one assignment's lifetime.
 	cancelRequested bool
+	// finishedSeen: when retention first saw this finished workload, for
+	// one that ended without a finish time (retention.go). In memory only.
+	finishedSeen time.Time
 }
 
 // WorkloadRegistry tracks every workload the manager has submitted, keyed

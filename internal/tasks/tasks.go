@@ -86,6 +86,7 @@ func NewRegistry(opts Options) *Registry {
 		o.ttl = opts.tagsTTL
 	}
 	r.handlers["llm.generate"] = ollamaGenerate{o}
+	r.handlers["llm.chat"] = ollamaChat{o}
 	r.handlers["llm.inventory"] = ollamaInventory{o}
 	return r
 }

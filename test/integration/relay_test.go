@@ -58,6 +58,7 @@ func startManagerWithRelay(t *testing.T, lanAddr, relayAddr string, heartbeatTim
 			t.Logf("manager exited: %v", err)
 		}
 	}()
+	waitListening(t, lanAddr)
 	return srv
 }
 

@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -37,6 +38,7 @@ func main() {
 	dbPath := flag.String("db", "harness-manager.db", "path to the persistent store file")
 	tlsDir := flag.String("tls-dir", "harness-manager-tls", "directory holding the manager's persistent TLS certificate")
 	operatorTokenFile := flag.String("operator-token-file", "harness-operator-token", "file holding the operator API token, created (owner-only) on first run. Every API call needs it: harnessctl reads this file, and the dashboard signs in through the login link logged at startup. Delete it and restart to revoke every client")
+	aiKeyFile := flag.String("ai-key-file", "", "file holding the AI key: the API key apps use for the OpenAI-compatible API (/v1), which opens nothing else. Created (owner-only) on first run; default: \"ai-key\" next to -operator-token-file. Delete it and restart to revoke it")
 	pairingToken := flag.String("pairing-token", "", "shared secret agents must present to register (required)")
 	heartbeatTimeout := flag.Duration("heartbeat-timeout", 15*time.Second, "how long without a heartbeat before a node is marked offline")
 	reconcileInterval := flag.Duration("reconcile-interval", 5*time.Second, "how often to check for workloads that need restarting (RestartPolicy on-failure/always)")
@@ -120,6 +122,13 @@ func main() {
 	if err != nil {
 		log.Fatalf("manager: %v", err)
 	}
+	if *aiKeyFile == "" {
+		*aiKeyFile = filepath.Join(filepath.Dir(*operatorTokenFile), "ai-key")
+	}
+	aiKey, err := manager.LoadOrCreateOperatorToken(*aiKeyFile)
+	if err != nil {
+		log.Fatalf("manager: AI key: %v", err)
+	}
 
 	store, err := persistent.Open(*dbPath)
 	if err != nil {
@@ -198,6 +207,7 @@ func main() {
 		RelayPublicURL:      *relayPublicURL,
 		EnrollmentPublisher: enrollmentPublisher,
 		OperatorToken:       operatorToken,
+		AIKey:               aiKey,
 		Artifacts:           artifactStore,
 		ArtifactRetention:   *artifactRetention,
 		InitialPolicy:       initialPolicy(*allowRaw),
@@ -251,7 +261,11 @@ func main() {
 			<-ctx.Done()
 			joinServer.Close()
 		}()
-		log.Printf("manager: to add a device, open http://<this machine's LAN address>%s on it", portSuffix(*joinAddr))
+		where := "<this machine's LAN address>"
+		if host, _, err := net.SplitHostPort(*advertiseAddr); err == nil && host != "" {
+			where = host
+		}
+		log.Printf("manager: to add a device, open http://%s%s on it (while adding devices is open)", where, portSuffix(*joinAddr))
 	}
 
 	apiServer := &http.Server{Addr: *apiAddr, Handler: srv.NewHTTPHandler()}

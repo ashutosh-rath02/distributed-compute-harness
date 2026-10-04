@@ -46,6 +46,9 @@ func (s *Server) reconcileWorkloads(ctx context.Context) {
 	defer ticker.Stop()
 	gc := time.NewTicker(time.Hour)
 	defer gc.Stop()
+	expire := time.NewTicker(expireEvery)
+	defer expire.Stop()
+	s.expireWorkloads()
 	s.collectArtifacts()
 	for {
 		select {
@@ -53,6 +56,8 @@ func (s *Server) reconcileWorkloads(ctx context.Context) {
 			return
 		case <-gc.C:
 			s.collectArtifacts()
+		case <-expire.C:
+			s.expireWorkloads()
 		case <-ticker.C:
 			s.reconcileOnce(ctx)
 			s.advanceJobs(ctx)

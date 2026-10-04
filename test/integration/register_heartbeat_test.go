@@ -6,6 +6,7 @@ package integration
 
 import (
 	"context"
+	"net"
 	"path/filepath"
 	"testing"
 	"time"
@@ -33,7 +34,28 @@ func startManager(t *testing.T, addr string, heartbeatTimeout time.Duration) *ma
 			t.Logf("manager exited: %v", err)
 		}
 	}()
+	waitListening(t, addr)
 	return srv
+}
+
+// waitListening returns once something accepts TCP connections at addr:
+// the manager binds its port in its own goroutine (Run), and an agent
+// that dials first waits out its whole reconnect backoff (3 s by
+// default) — longer than many tests wait for READY on a loaded machine.
+func waitListening(t *testing.T, addr string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		c, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
+		if err == nil {
+			c.Close()
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("manager not listening on %s: %v", addr, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // dialWithRetry dials addr, retrying briefly to tolerate the manager's

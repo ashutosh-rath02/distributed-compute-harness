@@ -115,6 +115,9 @@ func (r *Registry) Upsert(manifest domain.Manifest, conn domain.Conn) (rec *Node
 	existing.slotsN = manifest.Slots()
 	existing.busyUntil = time.Time{} // a fresh process starts with free slots
 	existing.Conn = conn
+	// Not READY until the manager has acknowledged the registration on
+	// this connection (handleRegister), even if the old one still was.
+	existing.State = domain.NodeConnected
 	existing.LastSeen = time.Now()
 	// A reconnect (new process, new connection) invalidates any previous
 	// live metrics — LastSeen alone doesn't catch this, since it's

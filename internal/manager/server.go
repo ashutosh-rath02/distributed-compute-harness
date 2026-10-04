@@ -56,6 +56,9 @@ type Config struct {
 	// Empty disables operator authentication — only for tests and
 	// embedding; cmd/manager always loads or creates one.
 	OperatorToken string
+	// AIKey is the OpenAI-compatible API's own credential (openai.go):
+	// accepted only on /v1/. Empty: only the operator credentials work.
+	AIKey string
 	// Artifacts stores workload input/output files (artifacts.go); nil
 	// disables workload files. ArtifactRetention is how long an unused
 	// artifact is kept (default 7 days).
@@ -89,6 +92,8 @@ type PersistentStore interface {
 	ListNodes() ([]domain.Manifest, error)
 	UpsertWorkload(pw domain.PersistedWorkload) error
 	ListWorkloads() ([]domain.PersistedWorkload, error)
+	// DeleteWorkloads forgets finished workloads past retention (retention.go).
+	DeleteWorkloads(ids []domain.WorkloadID) error
 	// RevokeNode must persist the denylist entry and forget the node's
 	// record atomically (see revocation.go).
 	RevokeNode(rev domain.RevokedNode) error
@@ -923,8 +928,12 @@ func (s *Server) handleRegister(ctx context.Context, conn domain.Conn, env *prot
 		}
 	}
 
+	// Upsert leaves the node CONNECTED: nothing may be sent on the new
+	// connection until REGISTER_ACK has gone out (below), or the agent —
+	// still waiting for its answer — would read a command or a workload
+	// first and drop the connection. Everything that sends work or
+	// commands waits for READY.
 	_, isNew := s.Registry.Upsert(payload.Manifest, conn)
-	s.Registry.SetState(claimedID, domain.NodeReady)
 
 	if s.store != nil {
 		if err := s.store.UpsertNode(payload.Manifest); err != nil {
@@ -932,6 +941,10 @@ func (s *Server) handleRegister(ctx context.Context, conn domain.Conn, env *prot
 		}
 	}
 	s.admitMu.Unlock()
+
+	s.send(ctx, conn, protocol.MsgRegisterAck, domain.ManagerNodeID, claimedID,
+		protocol.RegisterAckPayload{NodeID: claimedID, ServerTime: time.Now().UTC()})
+	s.Registry.SetState(claimedID, domain.NodeReady)
 
 	// Recorded outside admitMu, so admission never holds the lock across
 	// an extra disk write. Routine reconnects go to the noise log.
@@ -950,9 +963,6 @@ func (s *Server) handleRegister(ctx context.Context, conn domain.Conn, env *prot
 		s.publish(domain.EventNodeReconnected, claimedID, map[string]any{"name": node.Name})
 	}
 	s.publish(domain.EventNodeReady, claimedID, nil)
-
-	s.send(ctx, conn, protocol.MsgRegisterAck, domain.ManagerNodeID, claimedID,
-		protocol.RegisterAckPayload{NodeID: claimedID, ServerTime: time.Now().UTC()})
 	s.kickDispatch() // new capacity: queued work may fit now
 
 	return claimedID

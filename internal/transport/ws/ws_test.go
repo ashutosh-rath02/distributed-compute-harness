@@ -3,6 +3,7 @@ package ws
 import (
 	"context"
 	"io"
+	"net"
 	"net/http"
 	"testing"
 	"time"
@@ -10,6 +11,19 @@ import (
 	"home-harness/internal/domain"
 	"home-harness/internal/mtls"
 )
+
+// freeAddr is a loopback address with a port the OS just handed out. A
+// fixed port fails now and then on Windows: with -count=2 the first run's
+// closed connections leave it in TIME_WAIT and the second can't bind it.
+func freeAddr(t *testing.T) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	return l.Addr().String()
+}
 
 // dialWithRetry tolerates Listen's HTTP server starting to accept
 // connections asynchronously relative to when Listen returns.
@@ -75,7 +89,7 @@ func assertRoundTrip(t *testing.T, server, client *Transport, addr string) {
 }
 
 func TestRoundTrip(t *testing.T) {
-	assertRoundTrip(t, New(), New(), "127.0.0.1:18181")
+	assertRoundTrip(t, New(), New(), freeAddr(t))
 }
 
 // TestHandleServesAlongsideWebSocketUpgrade proves an extra route
@@ -83,7 +97,7 @@ func TestRoundTrip(t *testing.T) {
 // WebSocket upgrade is served on, with no new listener — the mechanism
 // internal/agent/selfupdate.go's binary download relies on.
 func TestHandleServesAlongsideWebSocketUpgrade(t *testing.T) {
-	const addr = "127.0.0.1:18182"
+	addr := freeAddr(t)
 	server := New()
 	server.Handle("/extra", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -127,7 +141,7 @@ func TestTLSRoundTrip(t *testing.T) {
 	}
 	server := NewTLSServer(cert)
 	client := NewTLSClient(mtls.PinnedClientConfig(mtls.Fingerprint(cert)))
-	assertRoundTrip(t, server, client, "127.0.0.1:18182")
+	assertRoundTrip(t, server, client, freeAddr(t))
 }
 
 func TestTLSDialRejectsMismatchedFingerprint(t *testing.T) {
@@ -135,7 +149,7 @@ func TestTLSDialRejectsMismatchedFingerprint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadOrCreateCert: %v", err)
 	}
-	const addr = "127.0.0.1:18183"
+	addr := freeAddr(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

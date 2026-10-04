@@ -196,6 +196,7 @@ func TestRevokeCancelsPinnedRestartingWorkload(t *testing.T) {
 		ReconcileInterval: 50 * time.Millisecond,
 	})
 	go srv.Run(ctx)
+	waitListening(t, addr)
 	a := startFastReconnectAgent(t, ctx, addr, filepath.Join(t.TempDir(), "pinned-agent"), "pinned-agent")
 	waitFor(t, 5*time.Second, func() bool {
 		rec, ok := srv.Registry.Get(a.NodeID())

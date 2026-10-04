@@ -314,6 +314,7 @@ func TestQueuedWorkloadSurvivesManagerRestart(t *testing.T) {
 			Addr: addr, PairingToken: pairingToken, HeartbeatTimeout: 2 * time.Second, ReconcileInterval: 100 * time.Millisecond,
 		})
 		go srv.Run(ctx)
+		waitListening(t, addr)
 		return srv, store, cancel
 	}
 	srv1, store1, stop1 := start()

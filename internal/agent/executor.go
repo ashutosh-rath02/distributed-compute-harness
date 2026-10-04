@@ -50,7 +50,8 @@ type Executor struct {
 	// since some depend on the device's own configuration (Ollama).
 	handlers *tasks.Registry
 	// progressEvery is how often a streaming task reports its output so
-	// far.
+	// far: often enough that a chat answer reads as it is written. Each
+	// report carries the output so far (capped at 64 KiB).
 	progressEvery time.Duration
 }
 
@@ -70,7 +71,7 @@ func NewExecutorWithSlots(slots int) *Executor {
 		slots = 1
 	}
 	return &Executor{slots: slots, running: make(map[domain.WorkloadID]*runningWorkload), canceledBeforeStart: make(map[domain.WorkloadID]bool),
-		handlers: tasks.Builtins(), progressEvery: time.Second}
+		handlers: tasks.Builtins(), progressEvery: 300 * time.Millisecond}
 }
 
 // Slots reports how many workloads this executor runs at once.

@@ -52,6 +52,7 @@ func TestOneManagerOnboardsEveryLoadedPlatform(t *testing.T) {
 	transport.Handle("GET /agent-binaries/{os}/{arch}", srv.AgentBinariesHandler())
 	transport.Handle("/enroll/", srv.EnrollmentHandler())
 	go srv.Run(ctx)
+	waitListening(t, addr)
 	api := httptest.NewServer(srv.NewHTTPHandler())
 	defer api.Close()
 
@@ -172,6 +173,7 @@ func TestMacOSInvitationServesEachArchitecture(t *testing.T) {
 	})
 	transport.Handle("/enroll/", srv.EnrollmentHandler())
 	go srv.Run(ctx)
+	waitListening(t, addr)
 	api := httptest.NewServer(srv.NewHTTPHandler())
 	defer api.Close()
 

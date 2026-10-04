@@ -243,8 +243,15 @@ func (s *Server) apiListModels(w http.ResponseWriter, r *http.Request) {
 		if rec.State != domain.NodeReady {
 			continue
 		}
-		for _, m := range attrValues(rec, "llm.generate", catalog.AttrModels) {
-			byModel[m] = append(byModel[m], nodeRef{rec.Node.Identity.NodeID, s.nodeDisplayName(rec.Node.Identity.NodeID)})
+		// llm.generate and llm.chat run the same models on a device.
+		seen := map[string]bool{}
+		for _, capability := range []domain.CapabilityName{"llm.generate", capLLMChat} {
+			for _, m := range attrValues(rec, capability, catalog.AttrModels) {
+				if m = catalog.NormalizeModel(m); !seen[m] {
+					seen[m] = true
+					byModel[m] = append(byModel[m], nodeRef{rec.Node.Identity.NodeID, s.nodeDisplayName(rec.Node.Identity.NodeID)})
+				}
+			}
 		}
 	}
 	type row struct {

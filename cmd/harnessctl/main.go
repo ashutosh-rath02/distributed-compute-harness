@@ -59,6 +59,8 @@ func main() {
 		err = client.cmdTasks(args[1:])
 	case "models":
 		err = client.cmdModels()
+	case "ai":
+		err = client.cmdAI()
 	case "ask":
 		err = cmdAsk(client, args[1:])
 	case "do":
@@ -209,6 +211,8 @@ Commands:
   ask [-model M] [-in FILE ...] [-target ID] "question"
                         ask a local model on whichever device has it; the
                         answer streams back as it is written (Ctrl-C cancels)
+  ai                    the base URL and API key for apps that speak OpenAI's
+                        chat API (/v1/chat/completions), and the models now
   policy                show what the fleet may run
   policy type <name> on|off | labels key=value,...|- | max-runtime 10m|0
                         enable/disable a type (raw system.execute and

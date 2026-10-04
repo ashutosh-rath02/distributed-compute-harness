@@ -31,6 +31,7 @@ func startManagerWithReconcile(t *testing.T, addr string, heartbeatTimeout, reco
 			t.Logf("manager exited: %v", err)
 		}
 	}()
+	waitListening(t, addr)
 	return srv
 }
 

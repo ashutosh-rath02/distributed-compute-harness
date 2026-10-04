@@ -65,6 +65,22 @@ func TestUpsertMarksNewVsKnown(t *testing.T) {
 	}
 }
 
+// A reconnect on a new connection is not READY until the manager has
+// acknowledged it there: a node still READY from its old connection would
+// let a command or a queued workload reach the agent before its
+// REGISTER_ACK, and the agent drops a connection whose first answer isn't
+// the ack.
+func TestUpsertOfAReconnectIsNotReadyYet(t *testing.T) {
+	r := NewRegistry()
+	r.Upsert(testNode("node-a"), &fakeConn{tag: "old"})
+	r.SetState("node-a", domain.NodeReady)
+
+	r.Upsert(testNode("node-a"), &fakeConn{tag: "new"})
+	if rec, _ := r.Get("node-a"); rec.State != domain.NodeConnected || rec.Conn.RemoteAddr() != "new" {
+		t.Fatalf("after a reconnect: state %s on %s, want CONNECTED on the new connection", rec.State, rec.Conn.RemoteAddr())
+	}
+}
+
 // TestUpsertClearsStaleMetricsOnReconnect proves a reconnecting node
 // (agent process restarted, new connection) doesn't keep its previous
 // session's live metrics lingering with a non-zero LastHeartbeat — that

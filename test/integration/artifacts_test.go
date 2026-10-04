@@ -65,6 +65,7 @@ func startArtifactManager(t *testing.T, addr string, useTLS bool) artifactManage
 	})
 	transport.Handle("/workload-artifacts/", srv.ArtifactTransferHandler())
 	go srv.Run(ctx)
+	waitListening(t, addr)
 	api := httptest.NewServer(srv.NewHTTPHandler())
 	t.Cleanup(api.Close)
 	return artifactManager{srv: srv, api: api.URL, fingerprint: fp}
@@ -241,6 +242,7 @@ func TestWorkloadFilesThroughRelay(t *testing.T) {
 	lan.Handle("/workload-artifacts/", srv.ArtifactTransferHandler())
 	rt.Handle("/workload-artifacts/", srv.ArtifactTransferHandler())
 	go srv.Run(ctx)
+	waitListening(t, lanAddr)
 	api := httptest.NewServer(srv.NewHTTPHandler())
 	defer api.Close()
 	m := artifactManager{srv: srv, api: api.URL}

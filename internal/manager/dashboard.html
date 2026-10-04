@@ -128,6 +128,24 @@
       It records what happened; it is not protection against someone who already holds the operator token.</p>
     <div id="audit"></div>
   </details>
+  <details id="aiSection">
+    <summary><h2 style="display:inline">Use with AI apps</h2></summary>
+    <p class="hint">Apps that speak OpenAI's chat API (chat apps, editor plugins, scripts using the openai library) can use the AI models on your devices: give them this base URL and key.
+      Each request runs on a device that has the model, like any task, and the answer streams back. The key opens only the chat API, nothing else.
+      The API answers on this computer only. To replace the key, delete <code>ai-key</code> in the manager's state folder and restart the manager.</p>
+    <div class="card">
+      <label>Base URL</label>
+      <code id="aiBase">…</code>
+      <label>API key</label>
+      <code id="aiKey">hidden</code>
+      <button class="secondary" id="aiShowKey" type="button">Show</button>
+      <button class="secondary" id="aiCopyKey" type="button">Copy</button>
+      <label>Models on your devices now</label>
+      <div id="aiModels" class="hint">…</div>
+      <label>Try it</label>
+      <div id="aiExample" class="output"></div>
+    </div>
+  </details>
 
   <h2>Run a task</h2>
   <div class="card">
@@ -647,6 +665,50 @@
     if (event.target.open) refreshAudit();
   });
 
+  // Use with AI apps: the OpenAI-compatible API's base URL, key and the
+  // models it can serve now. All text goes in through textContent.
+  let aiInfo = null;
+  async function refreshAI() {
+    const models = document.getElementById("aiModels");
+    try {
+      const resp = await api("/ai-info");
+      if (!resp.ok) throw new Error(resp.status);
+      aiInfo = await resp.json();
+    } catch (e) {
+      models.textContent = "Failed to load.";
+      return;
+    }
+    document.getElementById("aiBase").textContent = aiInfo.baseUrl;
+    const list = aiInfo.models || [];
+    models.textContent = list.length ? list.join(", ")
+      : "None yet. Install Ollama on a device and pull a model (for example: ollama pull llama3.2); it shows up here within a minute.";
+    const model = list[0] || "llama3.2";
+    document.getElementById("aiExample").textContent =
+      "curl " + aiInfo.baseUrl + "/chat/completions -H \"Authorization: Bearer YOUR_AI_KEY\" -H \"Content-Type: application/json\" "
+      + "-d '{\"model\": \"" + model + "\", \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}]}'\n\n"
+      + "# Python (pip install openai)\nfrom openai import OpenAI\n"
+      + "client = OpenAI(base_url=\"" + aiInfo.baseUrl + "\", api_key=\"YOUR_AI_KEY\")\n"
+      + "reply = client.chat.completions.create(model=\"" + model + "\", messages=[{\"role\": \"user\", \"content\": \"Hello\"}])\n"
+      + "print(reply.choices[0].message.content)";
+  }
+  document.getElementById("aiSection").addEventListener("toggle", (event) => {
+    if (event.target.open) refreshAI();
+  });
+  document.getElementById("aiShowKey").addEventListener("click", () => {
+    if (aiInfo) document.getElementById("aiKey").textContent = aiInfo.apiKey || "(no AI key set)";
+  });
+  document.getElementById("aiCopyKey").addEventListener("click", async (event) => {
+    if (!aiInfo || !aiInfo.apiKey) return;
+    try {
+      await navigator.clipboard.writeText(aiInfo.apiKey);
+      event.target.textContent = "Copied";
+    } catch (e) {
+      document.getElementById("aiKey").textContent = aiInfo.apiKey;
+      event.target.textContent = "Select and copy it";
+    }
+    setTimeout(() => { event.target.textContent = "Copy"; }, 2000);
+  });
+
   // Jobs: the five most recent, each expandable to its tasks. Refreshes
   // are coalesced (a big job emits many events).
   let jobsTimer = null;
@@ -1034,6 +1096,7 @@
     if (type === "workload.progress") return;
     if (type.startsWith("job.") || type.startsWith("workload.")) scheduleJobs();
     if (type.startsWith("node.")) refreshCatalog();
+    if (type.startsWith("node.") && document.getElementById("aiSection").open) refreshAI();
     if (type === "node.revoked" || type === "node.unrevoked") refreshRevoked();
     if (type === "node.join-requested" || type === "node.join-decided" || type === "node.registered") refreshJoinRequests();
     if (type === "join.window") refreshJoinWindow();

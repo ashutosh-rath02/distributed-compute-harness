@@ -112,6 +112,9 @@ func (s *Server) toNodeView(rec *NodeRecord, relations map[domain.NodeID]hostRel
 //	GET  /jobs                       list jobs with progress counts
 //	GET  /jobs/{id}                  one job: every task's state, attempts, node, outputs
 //	POST /jobs/{id}/cancel           cancel a job and its in-flight attempts
+//	GET  /ai-info                    the OpenAI-compatible API's base URL and AI key, for setting up apps
+//	GET  /v1/models                  OpenAI-compatible: the models READY devices can chat with (openai.go)
+//	POST /v1/chat/completions        OpenAI-compatible chat, streamed or not; also takes the AI key
 //
 // It is a thin adapter over Registry/SendCommand/Events — the manager's
 // core logic has no HTTP dependency of its own.
@@ -170,6 +173,9 @@ func (s *Server) NewHTTPHandler() http.Handler {
 	mux.HandleFunc("GET /jobs", s.apiListJobs)
 	mux.HandleFunc("GET /jobs/{id}", s.apiGetJob)
 	mux.HandleFunc("POST /jobs/{id}/cancel", s.apiCancelJob)
+	mux.HandleFunc("GET /ai-info", s.apiGetAIInfo)
+	mux.HandleFunc("GET /v1/models", s.apiOpenAIModels)
+	mux.HandleFunc("POST /v1/chat/completions", s.apiOpenAIChat)
 	// Host check and CSRF protection first (apiguard.go), then operator
 	// authentication (operatorauth.go) — browser defenses and the
 	// credential check are independent layers.

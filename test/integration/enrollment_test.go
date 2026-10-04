@@ -28,6 +28,7 @@ func TestOneTimeEnrollmentAdmitsOneIdentityAndAllowsItsReconnect(t *testing.T) {
 	})
 	transport.Handle("/enroll/", srv.EnrollmentHandler())
 	go srv.Run(ctx)
+	waitListening(t, addr)
 	api := httptest.NewServer(srv.NewHTTPHandler())
 	defer api.Close()
 

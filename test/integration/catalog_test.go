@@ -63,6 +63,7 @@ func startPolicyManager(t *testing.T, addr string, p *domain.Policy) artifactMan
 	})
 	transport.Handle("/workload-artifacts/", srv.ArtifactTransferHandler())
 	go srv.Run(ctx)
+	waitListening(t, addr)
 	api := httptest.NewServer(srv.NewHTTPHandler())
 	t.Cleanup(api.Close)
 	return artifactManager{srv: srv, api: api.URL}
@@ -378,6 +379,7 @@ func TestPolicyPersistsAndAStoredOneWins(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		srv := manager.NewServer(ws.New(), db, manager.Config{Addr: addr, PairingToken: pairingToken, HeartbeatTimeout: 2 * time.Second, InitialPolicy: initial})
 		go srv.Run(ctx)
+		waitListening(t, addr)
 		api := httptest.NewServer(srv.NewHTTPHandler())
 		return api.URL, func() { api.Close(); cancel(); time.Sleep(150 * time.Millisecond); db.Close() }
 	}
