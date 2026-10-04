@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -85,7 +86,10 @@ type ollamaModel struct {
 	Name       string `json:"name"`
 	Size       int64  `json:"size"`
 	ModifiedAt string `json:"modified_at"`
-	Details    struct {
+	// Capabilities: "completion", "embedding", "vision", ... (Ollama
+	// lists them in /api/tags; an older one lists none).
+	Capabilities []string `json:"capabilities"`
+	Details      struct {
 		Family            string `json:"family"`
 		ParameterSize     string `json:"parameter_size"`
 		QuantizationLevel string `json:"quantization_level"`
@@ -155,16 +159,32 @@ type ollamaGenerate struct{ o *ollama }
 
 func (g ollamaGenerate) Available(ctx context.Context) error { return g.o.available(ctx) }
 
-// Attributes advertises the models, normalized and sorted so an
-// unchanged list compares equal between probes.
+// generates reports whether m writes text: an embedding-only model
+// can't answer a prompt or a chat. With no capabilities listed (an older
+// Ollama), every model is taken to.
+func (m ollamaModel) generates() bool {
+	return len(m.Capabilities) == 0 || slices.Contains(m.Capabilities, "completion")
+}
+
+// Attributes advertises the models that write text.
 func (g ollamaGenerate) Attributes(ctx context.Context) map[string]string {
-	models, err := g.o.tags(ctx)
+	return g.o.modelAttrs(ctx, ollamaModel.generates)
+}
+
+// modelAttrs lists the device's models (those keep accepts; nil = all),
+// normalized and sorted so an unchanged list compares equal between
+// probes, with their sizes.
+func (o *ollama) modelAttrs(ctx context.Context, keep func(ollamaModel) bool) map[string]string {
+	models, err := o.tags(ctx)
 	if err != nil {
 		return nil
 	}
 	names := make([]string, 0, len(models))
 	sizes := map[string]int64{}
 	for _, m := range models {
+		if keep != nil && !keep(m) {
+			continue
+		}
 		if n := catalog.NormalizeModel(m.Name); n != "" {
 			if _, seen := sizes[n]; !seen {
 				names = append(names, n)

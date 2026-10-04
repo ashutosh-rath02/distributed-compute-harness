@@ -117,6 +117,25 @@ func TestChatIsAdvertisedWithTheModels(t *testing.T) {
 	}
 }
 
+// An embedding-only model can't answer a prompt or a chat: it isn't
+// offered for either, but can still be removed.
+func TestEmbeddingModelsAreNotOfferedForText(t *testing.T) {
+	f := &fakeOllama{embedding: map[string]bool{"embeddinggemma:latest": true}}
+	f.setModels("gemma3:4b", "embeddinggemma:latest")
+	srv := f.server(t)
+	reg := NewRegistry(Options{OllamaURL: srv.URL, tagsTTL: -1})
+	got := map[string]string{}
+	for _, c := range reg.Capabilities(context.Background()) {
+		got[string(c.Name)] = c.Attributes[catalog.AttrModels]
+	}
+	if got["llm.generate"] != "gemma3:4b" || got["llm.chat"] != "gemma3:4b" {
+		t.Fatalf("text types offer %q / %q", got["llm.generate"], got["llm.chat"])
+	}
+	if got["llm.remove"] != "embeddinggemma:latest,gemma3:4b" {
+		t.Fatalf("llm.remove offers %q", got["llm.remove"])
+	}
+}
+
 // A structured answer: "format" reaches Ollama as given (a schema keeps
 // its key order), and llama-server as OpenAI's response_format.
 func TestChatPassesTheAnswerFormat(t *testing.T) {

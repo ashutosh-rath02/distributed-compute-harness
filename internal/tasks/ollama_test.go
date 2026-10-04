@@ -32,6 +32,9 @@ type fakeOllama struct {
 	// the next pull to end with.
 	pulled, deleted []string
 	pullError       string
+	// embedding: models listed as embedding-only; when set, every model
+	// lists its capabilities (as current Ollama does).
+	embedding map[string]bool
 }
 
 // fakeChat is one /api/chat request as the fake received it.
@@ -59,8 +62,18 @@ func (f *fakeOllama) server(t *testing.T) *httptest.Server {
 		switch r.URL.Path {
 		case "/api/tags":
 			var list []map[string]any
+			f.mu.Lock()
+			embedding := f.embedding
+			f.mu.Unlock()
 			for _, m := range models {
-				list = append(list, map[string]any{"name": m, "size": 2000000000, "details": map[string]any{"parameter_size": "3B", "quantization_level": "Q4_K_M"}})
+				entry := map[string]any{"name": m, "size": 2000000000, "details": map[string]any{"parameter_size": "3B", "quantization_level": "Q4_K_M"}}
+				if embedding != nil {
+					entry["capabilities"] = []string{"completion"}
+					if embedding[m] {
+						entry["capabilities"] = []string{"embedding"}
+					}
+				}
+				list = append(list, entry)
 			}
 			json.NewEncoder(w).Encode(map[string]any{"models": list})
 		case "/api/generate":

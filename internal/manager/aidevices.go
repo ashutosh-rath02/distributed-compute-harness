@@ -49,13 +49,20 @@ func (s *Server) apiListAIDevices(w http.ResponseWriter, r *http.Request) {
 		id := rec.Node.Identity.NodeID
 		d := aiDevice{NodeID: id, Name: s.nodeDisplayName(id), State: rec.State, Models: []aiModel{}, GPUs: rec.GPUs, DedicatedGPUBytes: domain.DedicatedGPUMemory(rec.GPUs),
 			LlamaVersion: llama, Ollama: ollama}
+		// Every model the device has: llm.remove lists them all (embedding
+		// models too); an agent from before that lists them under
+		// llm.generate.
+		from := domain.CapabilityName("llm.remove")
+		if attrValue(rec, from, catalog.AttrModels) == "" {
+			from = "llm.generate"
+		}
 		sizes := map[string]int64{}
-		for _, e := range attrValues(rec, "llm.generate", catalog.AttrModelSizes) {
+		for _, e := range attrValues(rec, from, catalog.AttrModelSizes) {
 			if name, size, ok := strings.Cut(e, "="); ok {
 				sizes[name], _ = strconv.ParseInt(size, 10, 64)
 			}
 		}
-		for _, m := range attrValues(rec, "llm.generate", catalog.AttrModels) {
+		for _, m := range attrValues(rec, from, catalog.AttrModels) {
 			d.Models = append(d.Models, aiModel{Name: m, SizeBytes: sizes[m]})
 		}
 		out = append(out, d)

@@ -232,22 +232,30 @@ func attrValues(rec *NodeRecord, capability domain.CapabilityName, attr string) 
 }
 
 // apiListModels is GET /models: every local model the READY fleet has,
-// and which nodes have it.
+// which nodes have it, and whether it writes text (text: false is an
+// embedding model, which can't answer a prompt or a chat).
 func (s *Server) apiListModels(w http.ResponseWriter, r *http.Request) {
 	type nodeRef struct {
 		ID   domain.NodeID `json:"id"`
 		Name string        `json:"name"`
 	}
 	byModel := map[string][]nodeRef{}
+	text := map[string]bool{}
 	for _, rec := range s.Registry.List() {
 		if rec.State != domain.NodeReady {
 			continue
 		}
-		// llm.generate and llm.chat run the same models on a device.
+		// llm.remove lists every model (embedding ones too); llm.generate
+		// and llm.chat the ones that write text, and every model for an
+		// agent from before that distinction.
 		seen := map[string]bool{}
-		for _, capability := range []domain.CapabilityName{"llm.generate", capLLMChat} {
+		for _, capability := range []domain.CapabilityName{"llm.remove", "llm.generate", capLLMChat} {
 			for _, m := range attrValues(rec, capability, catalog.AttrModels) {
-				if m = catalog.NormalizeModel(m); !seen[m] {
+				m = catalog.NormalizeModel(m)
+				if capability != "llm.remove" {
+					text[m] = true
+				}
+				if !seen[m] {
 					seen[m] = true
 					byModel[m] = append(byModel[m], nodeRef{rec.Node.Identity.NodeID, s.nodeDisplayName(rec.Node.Identity.NodeID)})
 				}
@@ -257,11 +265,12 @@ func (s *Server) apiListModels(w http.ResponseWriter, r *http.Request) {
 	type row struct {
 		Model string    `json:"model"`
 		Nodes []nodeRef `json:"nodes"`
+		Text  bool      `json:"text"`
 	}
 	out := []row{}
 	for m, nodes := range byModel {
 		sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
-		out = append(out, row{m, nodes})
+		out = append(out, row{m, nodes, text[m]})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Model < out[j].Model })
 	writeJSON(w, http.StatusOK, out)

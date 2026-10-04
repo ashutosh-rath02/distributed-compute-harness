@@ -22,7 +22,12 @@ type modelRow struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
 	} `json:"nodes"`
+	// Text: the model writes text (false: embeddings only). Absent from
+	// an older manager, which listed only text models.
+	Text *bool `json:"text"`
 }
+
+func (r modelRow) writesText() bool { return r.Text == nil || *r.Text }
 
 func (c *apiClient) models() ([]modelRow, error) {
 	var rows []modelRow
@@ -50,7 +55,11 @@ func (c *apiClient) cmdModels() error {
 			}
 			names = append(names, name)
 		}
-		fmt.Printf("%-40s %s\n", r.Model, strings.Join(names, ", "))
+		kind := ""
+		if !r.writesText() {
+			kind = "  (embeddings only: can't answer prompts)"
+		}
+		fmt.Printf("%-40s %s%s\n", r.Model, strings.Join(names, ", "), kind)
 	}
 	return nil
 }
@@ -101,9 +110,15 @@ func cmdAsk(c *apiClient, args []string) error {
 		return errors.New("missing the question")
 	}
 	if *model == "" {
-		rows, err := c.models()
+		all, err := c.models()
 		if err != nil {
 			return err
+		}
+		var rows []modelRow
+		for _, r := range all {
+			if r.writesText() {
+				rows = append(rows, r)
+			}
 		}
 		switch {
 		case len(rows) == 0:

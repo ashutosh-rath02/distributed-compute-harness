@@ -123,8 +123,9 @@ type ollamaRemove struct{ o *ollama }
 func (r ollamaRemove) Available(ctx context.Context) error { return r.o.available(ctx) }
 
 // Attributes: the models, which the model parameter must be one of.
+// Attributes lists every model, embedding ones too: any can be removed.
 func (r ollamaRemove) Attributes(ctx context.Context) map[string]string {
-	return ollamaGenerate{r.o}.Attributes(ctx)
+	return r.o.modelAttrs(ctx, nil)
 }
 
 func (r ollamaRemove) Run(ctx context.Context, env Env) error {
