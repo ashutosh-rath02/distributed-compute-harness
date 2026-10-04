@@ -80,10 +80,24 @@ func TestUpscaleKeepsFlatAndLinearImages(t *testing.T) {
 // The kernel's lobes overshoot at sharp edges: the result must still be
 // valid premultiplied color (no channel above alpha).
 func TestUpscaleClampsOvershootToValidColor(t *testing.T) {
+	// Half-transparent white next to opaque black: on the white side the
+	// black pixel's negative weight lowers alpha but not color, so the
+	// raw result has more color than alpha. Then opaque white next to
+	// transparent, where both overshoot past 255 and below 0.
 	src := image.NewRGBA(image.Rect(0, 0, 8, 8))
 	for y := 0; y < 8; y++ {
-		for x := 4; x < 8; x++ {
-			src.SetRGBA(x, y, color.RGBA{255, 255, 255, 255}) // opaque white next to transparent
+		for x := 0; x < 8; x++ {
+			c := color.RGBA{128, 128, 128, 128}
+			if x >= 4 {
+				c = color.RGBA{0, 0, 0, 255}
+			}
+			if y >= 4 {
+				c = color.RGBA{}
+				if x >= 4 {
+					c = color.RGBA{255, 255, 255, 255}
+				}
+			}
+			src.SetRGBA(x, y, c)
 		}
 	}
 	dst, err := catmullRomUpscale(context.Background(), src, 4)
