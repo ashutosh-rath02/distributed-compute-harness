@@ -344,7 +344,9 @@ func (r *Replica) dueForAutoPromotion(now time.Time) bool {
 // Promote asks the running standby to take over. Refused while the
 // primary still answers, unless force (a planned switch-over: the copy is
 // brought current first, and the primary steps down when it next checks,
-// within ~10 s). actor goes into the audit entry.
+// within ~10 s). Without a copy it is refused too, unless force and this
+// manager has a state of its own (a stepped-down primary whose successor
+// is gone). actor goes into the audit entry.
 func (r *Replica) Promote(ctx context.Context, force bool, actor string) error {
 	req := promoteRequest{force: force, actor: actor, result: make(chan error, 1)}
 	select {
@@ -387,7 +389,19 @@ func (r *Replica) handlePromote(ctx context.Context, req promoteRequest) error {
 		return fmt.Errorf("%w: the primary at %s still answers, and two active managers would split the fleet. Stop it first, or force a planned switch-over (it then steps down within about 10 seconds)", ErrPromotionRefused, role.Primary)
 	}
 	if role.CopiedAt.IsZero() {
-		return fmt.Errorf("%w: this standby has no copy of the primary's state yet", ErrPromotionRefused)
+		if !req.force {
+			return fmt.Errorf("%w: this standby has no copy of the primary's state yet", ErrPromotionRefused)
+		}
+		// The way back when the manager that superseded this one is gone
+		// for good: a stepped-down primary serves its own last state, at a
+		// term above the one it stepped down for (so devices accept it). A
+		// standby with no state at all has nothing to serve.
+		for _, p := range []string{r.opt.DBPath, filepath.Join(r.opt.TLSDir, "manager-key.pem")} {
+			if _, err := os.Stat(p); err != nil {
+				return fmt.Errorf("%w: this standby has no state of its own to serve (%s is missing)", ErrPromotionRefused, filepath.Base(p))
+			}
+		}
+		log.Printf("manager: standby: forced promotion without a current copy: serving this manager's own last state")
 	}
 	return r.doPromote(req.force, req.actor, false)
 }

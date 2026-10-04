@@ -264,6 +264,24 @@ func TestPromotionRefused(t *testing.T) {
 	if err := r.Promote(context.Background(), true, "x"); err != nil || !<-done {
 		t.Fatalf("forced promotion: %v", err)
 	}
+	// A stepped-down primary whose successor is gone for good: no copy,
+	// but a state and identity of its own. Forced, it serves that, above
+	// the term it stepped down for.
+	r, opt = newTestReplica(t, Role{Secret: "s", SeenTerm: 4, SteppedDown: true}, 1)
+	_, certPEM, keyPEM, _ := testCert(t)
+	if _, err := mtls.Install(opt.TLSDir, certPEM, keyPEM); err != nil {
+		t.Fatal(err)
+	}
+	_, done = runReplica(t, r)
+	if err := r.Promote(context.Background(), false, "x"); !errors.Is(err, ErrPromotionRefused) {
+		t.Fatalf("unforced promotion without a copy: %v", err)
+	}
+	if err := r.Promote(context.Background(), true, "x"); err != nil || !<-done {
+		t.Fatalf("forced promotion of a stepped-down primary: %v", err)
+	}
+	if role, _ := LoadRole(opt.DBPath); role.Role != RoleActive || role.SeenTerm != 5 {
+		t.Fatalf("role: %+v", role)
+	}
 }
 
 // Automatic promotion never happens without a copy, for a standby the
