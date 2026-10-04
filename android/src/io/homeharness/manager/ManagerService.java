@@ -40,6 +40,7 @@ public class ManagerService extends Service {
     private PowerManager.WakeLock wakeLock;
     private WifiManager.WifiLock wifiLock;
     private WifiManager.MulticastLock multicastLock;
+    private DeviceState deviceState;
 
     static void start(Context c) {
         Intent i = new Intent(c, ManagerService.class);
@@ -85,6 +86,11 @@ public class ManagerService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (supervisor == null) {
             acquireLocks();
+            if (Harness.isWorker(this)) {
+                Harness.workerDir(this).mkdirs();
+                deviceState = new DeviceState(this, Harness.deviceStateFile(this));
+                deviceState.start();
+            }
             supervisor = new Thread(this::supervise, "manager-supervisor");
             supervisor.start();
         }
@@ -174,6 +180,7 @@ public class ManagerService extends Service {
         }
         if (p != null) p.destroy();
         if (supervisor != null) supervisor.interrupt();
+        if (deviceState != null) deviceState.stop();
         if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
         if (wifiLock != null && wifiLock.isHeld()) wifiLock.release();
         if (multicastLock != null && multicastLock.isHeld()) multicastLock.release();

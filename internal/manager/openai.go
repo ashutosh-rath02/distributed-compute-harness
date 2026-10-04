@@ -250,6 +250,27 @@ func (s *Server) apiOpenAIChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Every device with the model holding work back (on battery, in use,
+	// paused by the operator): say so now instead of leaving the app
+	// waiting in the queue. Merely busy devices still queue it.
+	var held []string
+	available := false
+	for _, id := range models[model] {
+		if rec, ok := s.Registry.Get(id); ok {
+			ok, reason := s.availableNow(rec, time.Now())
+			if ok {
+				available = true
+				break
+			}
+			held = append(held, s.nodeDisplayName(id)+": "+reason)
+		}
+	}
+	if !available {
+		writeOpenAIError(w, http.StatusServiceUnavailable, "server_error", "device_unavailable",
+			fmt.Sprintf("no device with %q is taking work right now (%s)", model, strings.Join(held, "; ")))
+		return
+	}
+
 	// Subscribed before submitting, so no event about the new workload
 	// can slip by unseen.
 	events, unsubscribe := s.Events.Subscribe(64)

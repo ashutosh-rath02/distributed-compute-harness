@@ -45,6 +45,8 @@ func main() {
 		err = requireArgs(args, 3, "rename <id> <alias|->", func() error { return client.cmdRename(args[1], args[2]) })
 	case "label":
 		err = requireArgs(args, 3, "label <id> key=value|key= ...", func() error { return client.cmdLabel(args[1], args[2:]) })
+	case "avail":
+		err = requireArgs(args, 2, "avail <id> [auto|always|idle [minutes]|charging|paused] [hours HH:MM-HH:MM|hours -]", func() error { return client.cmdAvail(args[1], args[2:]) })
 	case "audit":
 		err = cmdAudit(client, args[1:])
 	case "artifact":
@@ -161,6 +163,13 @@ Commands:
                         node ("-" clears it); the agent can't overwrite it
   label <id> key=value ...
                         set labels on a node; "key=" removes one
+  avail <id> [auto|always|idle [minutes]|charging|paused] [hours 22:00-07:00|hours -]
+                        when a device takes new work: auto (the default: not
+                        while on battery), always, idle (after N minutes
+                        without keyboard/mouse/screen use, default 5),
+                        charging, or paused; "hours" limits any of them to a
+                        daily window. Running work always finishes. With no
+                        rule, shows the current one
   audit [-noise] [-n N] show the audit log, newest first: admissions (and
                         how), revocations, invitations, updates, sign-ins,
                         workloads; -noise shows rejections and reconnects
@@ -508,6 +517,13 @@ type nodeView struct {
 	// of them are in use.
 	Slots   int `json:"slots"`
 	Running int `json:"running"`
+	// Availability: the operator's rule and whether the node takes new
+	// work now (the manager's availability.go).
+	Availability struct {
+		Rule      domain.Availability `json:"rule"`
+		Available bool                `json:"available"`
+		Reason    string              `json:"reason"`
+	} `json:"availability"`
 }
 
 // displayName is the operator's alias when set, else the agent's name.
@@ -549,6 +565,9 @@ func (c *apiClient) cmdNodes() error {
 		case len(n.SameHostAs) > 0:
 			agent += " SAME-HOST"
 		}
+		if n.State == domain.NodeReady && !n.Availability.Available {
+			agent += "  [no new work: " + n.Availability.Reason + "]"
+		}
 		busy := fmt.Sprintf("%d/%d", n.Running, max(n.Slots, 1))
 		fmt.Printf("%-24s %-20s %-12s %-8.1f %-6s %-14s %s\n",
 			n.NodeID, truncate(n.displayName(), 20), n.State, n.Metrics.CPUPercent, busy, lastSeen, agent)
@@ -570,6 +589,10 @@ func (c *apiClient) cmdNode(id string) error {
 	fmt.Printf("Last seen      %s\n", n.LastSeen.Format(time.RFC3339))
 	fmt.Printf("CPU usage      %.1f%%\n", n.Metrics.CPUPercent)
 	fmt.Printf("Mem available  %s\n", humanBytes(n.Metrics.MemoryAvailableBytes))
+	fmt.Printf("Takes work     %s\n", describeAvailability(n))
+	if u := n.Metrics.Use; u != nil {
+		fmt.Printf("Use            %s\n", describeUse(*u))
+	}
 
 	var resources []domain.Resource
 	if err := c.get("/nodes/"+id+"/resources", &resources); err == nil && len(resources) > 0 {
@@ -654,6 +677,8 @@ type workloadView struct {
 	Inputs        []domain.ArtifactRef        `json:"inputs,omitempty"`
 	Outputs       []string                    `json:"outputs,omitempty"`
 	OutputFiles   []domain.ArtifactRef        `json:"outputFiles,omitempty"`
+	// Waiting: why a QUEUED workload hasn't started.
+	Waiting string `json:"waiting,omitempty"`
 }
 
 func (c *apiClient) cmdRunWorkload(target, command string, args []string, capability string, params map[string]string, req domain.ResourceRequirements, restartPolicy string, inputs []map[string]string, outputs []string) error {
@@ -707,6 +732,9 @@ func (c *apiClient) cmdWorkloads() error {
 		command := w.Command
 		if w.Capability != "" {
 			command = string(w.Capability)
+		}
+		if w.Waiting != "" {
+			command += "  (waiting: " + w.Waiting + ")"
 		}
 		fmt.Printf("%-34s %-24s %-10s %s\n", w.ID, w.Target, w.State, command)
 	}

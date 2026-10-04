@@ -74,7 +74,7 @@ func TestAgentRegistersAndHeartbeatsThroughRelay(t *testing.T) {
 	agentCtx, agentCancel := context.WithCancel(context.Background())
 	defer agentCancel()
 
-	a, err := agent.New(relaytransport.NewClient(relaySessionToken), agent.Config{
+	a, err := agent.New(relaytransport.NewClient(relaySessionToken), agent.Config{DeviceUse: pluggedIn,
 		ManagerAddr:       relayAddr,
 		PairingToken:      pairingToken,
 		IdentityDir:       filepath.Join(t.TempDir(), "relay-agent-a"),
@@ -109,7 +109,7 @@ func TestCommandRoundTripThroughRelay(t *testing.T) {
 	agentCtx, agentCancel := context.WithCancel(context.Background())
 	defer agentCancel()
 
-	a, err := agent.New(relaytransport.NewClient(relaySessionToken), agent.Config{
+	a, err := agent.New(relaytransport.NewClient(relaySessionToken), agent.Config{DeviceUse: pluggedIn,
 		ManagerAddr:       relayAddr,
 		PairingToken:      pairingToken,
 		IdentityDir:       filepath.Join(t.TempDir(), "relay-agent-b"),
@@ -152,7 +152,7 @@ func TestAgentReconnectsThroughRelayAfterDrop(t *testing.T) {
 	identityDir := filepath.Join(t.TempDir(), "relay-agent-c")
 	agentCtx, agentCancel := context.WithCancel(context.Background())
 
-	a, err := agent.New(relaytransport.NewClient(relaySessionToken), agent.Config{
+	a, err := agent.New(relaytransport.NewClient(relaySessionToken), agent.Config{DeviceUse: pluggedIn,
 		ManagerAddr:       relayAddr,
 		PairingToken:      pairingToken,
 		IdentityDir:       identityDir,
@@ -182,7 +182,7 @@ func TestAgentReconnectsThroughRelayAfterDrop(t *testing.T) {
 
 	agentCtx2, agentCancel2 := context.WithCancel(context.Background())
 	defer agentCancel2()
-	a2, err := agent.New(relaytransport.NewClient(relaySessionToken), agent.Config{
+	a2, err := agent.New(relaytransport.NewClient(relaySessionToken), agent.Config{DeviceUse: pluggedIn,
 		ManagerAddr:       relayAddr,
 		PairingToken:      pairingToken,
 		IdentityDir:       identityDir,

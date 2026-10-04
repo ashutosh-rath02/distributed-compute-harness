@@ -38,6 +38,7 @@ func main() {
 	dbPath := flag.String("db", "harness-manager.db", "path to the persistent store file")
 	tlsDir := flag.String("tls-dir", "harness-manager-tls", "directory holding the manager's persistent TLS certificate")
 	operatorTokenFile := flag.String("operator-token-file", "harness-operator-token", "file holding the operator API token, created (owner-only) on first run. Every API call needs it: harnessctl reads this file, and the dashboard signs in through the login link logged at startup. Delete it and restart to revoke every client")
+	keepAwake := flag.Bool("keep-awake", true, "ask the OS not to sleep while your devices are working on tasks (and 2 minutes after): a sleeping manager stops the whole fleet. It never blocks closing the lid or choosing Sleep")
 	aiKeyFile := flag.String("ai-key-file", "", "file holding the AI key: the API key apps use for the OpenAI-compatible API (/v1), which opens nothing else. Created (owner-only) on first run; default: \"ai-key\" next to -operator-token-file. Delete it and restart to revoke it")
 	pairingToken := flag.String("pairing-token", "", "shared secret agents must present to register (required)")
 	heartbeatTimeout := flag.Duration("heartbeat-timeout", 15*time.Second, "how long without a heartbeat before a node is marked offline")
@@ -208,6 +209,7 @@ func main() {
 		EnrollmentPublisher: enrollmentPublisher,
 		OperatorToken:       operatorToken,
 		AIKey:               aiKey,
+		KeepAwake:           *keepAwake,
 		Artifacts:           artifactStore,
 		ArtifactRetention:   *artifactRetention,
 		InitialPolicy:       initialPolicy(*allowRaw),

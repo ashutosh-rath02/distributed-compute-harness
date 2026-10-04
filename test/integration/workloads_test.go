@@ -208,7 +208,7 @@ func TestWorkloadDisconnectFreesNodeForNewWorkload(t *testing.T) {
 
 	ctx0, cancel0 := context.WithCancel(context.Background())
 	t.Cleanup(cancel0)
-	a, err := agent.New(ws.New(), agent.Config{
+	a, err := agent.New(ws.New(), agent.Config{DeviceUse: pluggedIn,
 		ManagerAddr:       addr,
 		PairingToken:      pairingToken,
 		IdentityDir:       filepath.Join(t.TempDir(), "workload-agent-f"),
@@ -314,7 +314,7 @@ func TestSecondWorkloadOnSingleSlotNodeIsQueuedThenRuns(t *testing.T) {
 
 func startAgentWithSlots(t *testing.T, ctx context.Context, addr, name string, slots int) *agent.Agent {
 	t.Helper()
-	a, err := agent.New(ws.New(), agent.Config{
+	a, err := agent.New(ws.New(), agent.Config{DeviceUse: pluggedIn,
 		ManagerAddr: addr, PairingToken: pairingToken, IdentityDir: filepath.Join(t.TempDir(), name),
 		Name: name, HeartbeatInterval: 100 * time.Millisecond, ReconnectBackoff: 50 * time.Millisecond,
 		MaxReconnectBackoff: 200 * time.Millisecond, WorkloadSlots: slots, HostFingerprint: "-",

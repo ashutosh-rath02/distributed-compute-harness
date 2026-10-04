@@ -33,7 +33,7 @@ func TestNodeSurvivesManagerRestart(t *testing.T) {
 	go srv1.Run(mgrCtx1)
 
 	agentCtx, agentCancel := context.WithCancel(context.Background())
-	a, err := agent.New(ws.New(), agent.Config{
+	a, err := agent.New(ws.New(), agent.Config{DeviceUse: pluggedIn,
 		ManagerAddr:       addr,
 		PairingToken:      pairingToken,
 		IdentityDir:       identityDir,
@@ -95,7 +95,7 @@ func TestNodeSurvivesManagerRestart(t *testing.T) {
 	// and confirm it comes back READY under the same NodeID.
 	agentCtx2, agentCancel2 := context.WithCancel(context.Background())
 	defer agentCancel2()
-	a2, err := agent.New(ws.New(), agent.Config{
+	a2, err := agent.New(ws.New(), agent.Config{DeviceUse: pluggedIn,
 		ManagerAddr:       addr2,
 		PairingToken:      pairingToken,
 		IdentityDir:       identityDir,
@@ -242,7 +242,7 @@ func TestOrphanedRestartAlwaysWorkloadResumesAfterManagerRestart(t *testing.T) {
 	// by, so BackoffCount always increments here rather than resetting.
 	agentCtx, agentCancel := context.WithCancel(context.Background())
 	defer agentCancel()
-	a, err := agent.New(ws.New(), agent.Config{
+	a, err := agent.New(ws.New(), agent.Config{DeviceUse: pluggedIn,
 		ManagerAddr:       addr2,
 		PairingToken:      pairingToken,
 		IdentityDir:       filepath.Join(t.TempDir(), "agent-restart-resume"),

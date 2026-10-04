@@ -48,7 +48,7 @@ func TestOneTimeEnrollmentAdmitsOneIdentityAndAllowsItsReconnect(t *testing.T) {
 
 	identityDir := filepath.Join(t.TempDir(), "enrolled-node")
 	firstCtx, stopFirst := context.WithCancel(context.Background())
-	a, err := agent.New(ws.New(), agent.Config{
+	a, err := agent.New(ws.New(), agent.Config{DeviceUse: pluggedIn,
 		ManagerAddr: addr, PairingToken: invite.Token, IdentityDir: identityDir,
 		Name: "enrolled-node", HeartbeatInterval: 100 * time.Millisecond, ReconnectBackoff: 50 * time.Millisecond,
 		Insecure: true, InsecureWorkloadsDisabled: true,
@@ -77,7 +77,7 @@ func TestOneTimeEnrollmentAdmitsOneIdentityAndAllowsItsReconnect(t *testing.T) {
 
 	secondCtx, stopSecond := context.WithCancel(context.Background())
 	defer stopSecond()
-	a2, err := agent.New(ws.New(), agent.Config{
+	a2, err := agent.New(ws.New(), agent.Config{DeviceUse: pluggedIn,
 		ManagerAddr: addr, PairingToken: invite.Token, IdentityDir: identityDir,
 		Name: "enrolled-node", HeartbeatInterval: 100 * time.Millisecond, ReconnectBackoff: 50 * time.Millisecond,
 		Insecure: true, InsecureWorkloadsDisabled: true,
@@ -93,7 +93,7 @@ func TestOneTimeEnrollmentAdmitsOneIdentityAndAllowsItsReconnect(t *testing.T) {
 
 	otherCtx, stopOther := context.WithCancel(context.Background())
 	defer stopOther()
-	other, err := agent.New(ws.New(), agent.Config{
+	other, err := agent.New(ws.New(), agent.Config{DeviceUse: pluggedIn,
 		ManagerAddr: addr, PairingToken: invite.Token, IdentityDir: filepath.Join(t.TempDir(), "other-node"),
 		Name: "other-node", HeartbeatInterval: 100 * time.Millisecond, ReconnectBackoff: 50 * time.Millisecond,
 		Insecure: true, InsecureWorkloadsDisabled: true,

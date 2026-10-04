@@ -18,4 +18,8 @@ type RuntimeState struct {
 	// CPUScope "process": CPUPercent is the agent's own use (the system's
 	// counters were unreadable, e.g. on Android), not the whole device's.
 	CPUScope string `json:"cpuScope,omitempty"`
+	// Use is what the device reports about its owner's use of it (power,
+	// idle time), read by the operator's availability rule. Nil from
+	// agents before FeatureAvailability.
+	Use *DeviceUse `json:"use,omitempty"`
 }

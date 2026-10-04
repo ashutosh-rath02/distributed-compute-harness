@@ -27,6 +27,8 @@
   .dsub { color:var(--dim); font-size:.8rem; margin-top:2px; }
   .badge { font-size:.72rem; padding:2px 8px; border-radius:10px; margin-left:6px; vertical-align:middle; background:#2ea04333; color:var(--green); }
   .badge.off { background:#8b949e33; color:var(--dim); }
+  .badge.hold { background:#d2992233; color:#d29922; }
+  .hold { color:#d29922; font-size:.8rem; margin-top:2px; }
   .row { display:flex; align-items:baseline; justify-content:space-between; margin-top:12px; font-size:.85rem; color:var(--dim); }
   .big { font-size:1.6rem; font-weight:700; color:var(--text); font-variant-numeric:tabular-nums; }
   .bar { height:8px; background:#21262d; border-radius:4px; overflow:hidden; margin-top:6px; }
@@ -187,9 +189,12 @@
       const online = n.state === "READY";
       const card = el("div", "card" + (online ? "" : " offline"));
       const title = el("div", "dname", n.alias || n.name || n.nodeId);
-      title.append(el("span", "badge" + (online ? "" : " off"), online ? "online" : String(n.state).toLowerCase()));
+      // Online but holding back new work (on battery, in use, paused...).
+      const held = online && n.availability && !n.availability.available;
+      title.append(el("span", "badge" + (online ? (held ? " hold" : "") : " off"), online ? (held ? "not taking work" : "online") : String(n.state).toLowerCase()));
       const host = n.hostname && n.hostname !== n.name && n.hostname !== "localhost" ? " · " + n.hostname : "";
       card.append(title, el("div", "dsub", platformOf(n) + host));
+      if (held) card.append(el("div", "hold", n.availability.reason || ""));
 
       const cpu = online && n.metrics ? n.metrics.cpuPercent || 0 : 0;
       // Android doesn't let apps see the whole phone's CPU: there the
@@ -228,7 +233,7 @@
     if (!queued.length) q.append(el("div", "empty", "Nothing waiting."));
     for (const w of queued) {
       const r = el("div", "task");
-      r.append(el("span", "t", taskLabel(w)), el("span", "muted", w.target ? "for " + nameOf(w.target) : "next free device"));
+      r.append(el("span", "t", taskLabel(w)), el("span", "muted", w.waiting ? "waiting: " + w.waiting : w.target ? "for " + nameOf(w.target) : "next free device"));
       q.append(r);
     }
   }

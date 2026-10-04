@@ -49,7 +49,7 @@ func TestAgentDiscoversManagerOverMulticast(t *testing.T) {
 	// Deliberately no ManagerAddr: the agent must find the manager purely
 	// via discovery, per v1.md §4.1 ("without manually configuring IP
 	// addresses").
-	a, err := agent.New(ws.New(), agent.Config{
+	a, err := agent.New(ws.New(), agent.Config{DeviceUse: pluggedIn,
 		Discoverer:        &udp.Discoverer{MulticastAddr: multicastGroup, Timeout: 3 * time.Second},
 		PairingToken:      pairingToken,
 		IdentityDir:       filepath.Join(t.TempDir(), "discovered-agent"),
@@ -77,7 +77,7 @@ func TestManagerAddrOverrideSkipsDiscovery(t *testing.T) {
 	// A Discoverer that always fails: if the agent ever consulted it, the
 	// connection would never succeed. Setting ManagerAddr must bypass it
 	// entirely (the "manual fallback" from v1.md §4.1).
-	a, err := agent.New(ws.New(), agent.Config{
+	a, err := agent.New(ws.New(), agent.Config{DeviceUse: pluggedIn,
 		ManagerAddr:       addr,
 		Discoverer:        alwaysFailDiscoverer{},
 		PairingToken:      pairingToken,

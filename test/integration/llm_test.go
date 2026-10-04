@@ -126,7 +126,7 @@ func startFakeOllama(t *testing.T, f *fakeOllama) string {
 
 func startLLMAgent(t *testing.T, ctx context.Context, addr, name, ollamaURL string, slots int) *agent.Agent {
 	t.Helper()
-	a, err := agent.New(ws.New(), agent.Config{
+	a, err := agent.New(ws.New(), agent.Config{DeviceUse: pluggedIn,
 		ManagerAddr: addr, PairingToken: pairingToken, IdentityDir: filepath.Join(t.TempDir(), name), WorkDir: filepath.Join(t.TempDir(), name+"-work"),
 		Name: name, HeartbeatInterval: 100 * time.Millisecond, ReconnectBackoff: 50 * time.Millisecond, MaxReconnectBackoff: 200 * time.Millisecond,
 		HostFingerprint: "-", Insecure: true, WorkloadSlots: slots, OllamaURL: ollamaURL, CapabilityProbeInterval: 200 * time.Millisecond,

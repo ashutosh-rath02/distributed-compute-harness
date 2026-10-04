@@ -31,6 +31,9 @@ func newNodeMetaStore() *nodeMetaStore {
 }
 
 func (m *nodeMetaStore) get(id domain.NodeID) domain.NodeMeta {
+	if m == nil { // a bare Server{} (placement unit tests): no metadata
+		return domain.NodeMeta{}
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.entries[id]
@@ -96,12 +99,17 @@ func (s *Server) SetNodeMeta(id domain.NodeID, meta domain.NodeMeta) (old domain
 	if _, ok := s.Registry.Get(id); !ok {
 		return domain.NodeMeta{}, ErrUnknownNode
 	}
+	s.metaMu.Lock()
+	defer s.metaMu.Unlock()
+	old = s.meta.get(id)
+	// The availability rule has its own endpoint: renaming or relabelling
+	// (which send the whole alias/labels record) keeps it.
+	meta.Availability = old.Availability
 	if s.store != nil {
 		if err := s.store.PutNodeMeta(id, meta); err != nil {
 			return domain.NodeMeta{}, fmt.Errorf("manager: persist node meta: %w", err)
 		}
 	}
-	old = s.meta.get(id)
 	s.meta.set(id, meta)
 	return old, nil
 }

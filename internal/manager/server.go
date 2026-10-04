@@ -16,6 +16,7 @@ import (
 	"home-harness/internal/domain"
 	"home-harness/internal/eventbus"
 	"home-harness/internal/identity"
+	"home-harness/internal/keepawake"
 	"home-harness/internal/protocol"
 )
 
@@ -80,6 +81,11 @@ type Config struct {
 	// cmd/manager passes domain.DefaultPolicy (raw commands off). Nil =
 	// domain.PermissivePolicy, for embedding and tests.
 	InitialPolicy *domain.Policy
+	// KeepAwake asks the OS not to sleep while workloads run or are
+	// being handed out (and for a couple of minutes after), since a
+	// sleeping manager stops the whole fleet. Never blocks a sleep the
+	// user asks for.
+	KeepAwake bool
 }
 
 // PersistentStore is the subset of persistent storage the manager needs:
@@ -138,7 +144,14 @@ type Server struct {
 	admitMu     sync.Mutex
 	revocations *revocationList
 
-	meta     *nodeMetaStore
+	meta *nodeMetaStore
+	// awake is held while work is in flight (keepAwakeTick); nil unless
+	// Config.KeepAwake. awakeUntil is touched only by the reconcile loop.
+	awake      *keepawake.Request
+	awakeUntil time.Time
+	// metaMu serializes read-modify-write changes to node metadata (the
+	// alias/labels and the availability rule are set separately).
+	metaMu   sync.Mutex
 	auditLog *auditRecorder
 
 	// placeMu serializes "check room, then reserve" (placement plus the
@@ -203,6 +216,9 @@ func NewServer(transport domain.Transport, store PersistentStore, cfg Config) *S
 		grants:       newGrantTable(),
 		jobs:         newJobTable(),
 		policy:       &policyStore{p: domain.PermissivePolicy()},
+	}
+	if cfg.KeepAwake {
+		s.awake = keepawake.New("Home Harness manager: your devices are working on tasks")
 	}
 	if cfg.InitialPolicy != nil {
 		s.policy.set(*cfg.InitialPolicy)
@@ -388,6 +404,7 @@ func (s *Server) Submit(ctx context.Context, spec WorkloadSpec) (domain.Workload
 		// Some ready node could run it, just not right now: queue it.
 		w := newWorkload(target)
 		wrec := s.Workloads.enqueue(w, time.Now().UTC())
+		s.Workloads.setWaiting(w.ID, waitingReason(err))
 		s.placeMu.Unlock()
 		s.persistWorkloadRecord(wrec)
 		log.Printf("workload.queued: %s (%s)", w.ID, err)
@@ -493,15 +510,21 @@ func (s *Server) resolve(p placement, usage map[domain.NodeID]nodeUsage) (*NodeR
 		if ok, reason := offers(rec, p); !ok {
 			return nil, "", fmt.Errorf("%w (%s: %s)", ErrNoEligibleNode, p.target, reason)
 		}
+		notNow := func(reason string) error {
+			return &noRoomError{detail: fmt.Sprintf("%s: %s", p.target, reason), reasons: []string{s.nodeDisplayName(p.target) + ": " + reason}}
+		}
+		if ok, reason := s.availableNow(rec, time.Now()); !ok {
+			return nil, "", notNow(reason)
+		}
 		if ok, reason := nodeFits(rec, p.capability, p.req); !ok {
-			return nil, "", fmt.Errorf("%w (%s: %s)", errNoRoom, p.target, reason)
+			return nil, "", notNow(reason)
 		}
 		u := usageOf(p.target)
 		if ok, reason := hasRoom(rec, u, p.req); !ok {
-			return nil, "", fmt.Errorf("%w (%s: %s)", errNoRoom, p.target, reason)
+			return nil, "", notNow(reason)
 		}
 		if ok, reason := perNodeRoom(u, p.capability); !ok {
-			return nil, "", fmt.Errorf("%w (%s: %s)", errNoRoom, p.target, reason)
+			return nil, "", notNow(reason)
 		}
 		return rec, p.target, nil
 	}
@@ -546,22 +569,31 @@ func (s *Server) resolve(p placement, usage map[domain.NodeID]nodeUsage) (*NodeR
 	if len(preferred) > 0 {
 		eligible = preferred
 	}
-	var notNow []string
+	var notNow, why []string
 	var withRoom []*NodeRecord
 	room := make(map[domain.NodeID]nodeUsage)
+	now := time.Now()
 	for _, rec := range eligible {
 		id := rec.Node.Identity.NodeID
-		if ok, reason := nodeFits(rec, p.capability, p.req); !ok {
+		skip := func(reason string) {
 			notNow = append(notNow, fmt.Sprintf("%s: %s", id, reason))
+			why = append(why, s.nodeDisplayName(id)+": "+reason)
+		}
+		if ok, reason := s.availableNow(rec, now); !ok {
+			skip(reason)
+			continue
+		}
+		if ok, reason := nodeFits(rec, p.capability, p.req); !ok {
+			skip(reason)
 			continue
 		}
 		u := usageOf(id)
 		if ok, reason := hasRoom(rec, u, p.req); !ok {
-			notNow = append(notNow, fmt.Sprintf("%s: %s", id, reason))
+			skip(reason)
 			continue
 		}
 		if ok, reason := perNodeRoom(u, p.capability); !ok {
-			notNow = append(notNow, fmt.Sprintf("%s: %s", id, reason))
+			skip(reason)
 			continue
 		}
 		withRoom = append(withRoom, rec)
@@ -569,7 +601,7 @@ func (s *Server) resolve(p placement, usage map[domain.NodeID]nodeUsage) (*NodeR
 	}
 	best, err := selectNodeWithUsage(withRoom, room, p.capability, p.req)
 	if err != nil {
-		return nil, "", fmt.Errorf("%w (%v)", errNoRoom, notNow)
+		return nil, "", &noRoomError{detail: fmt.Sprint(notNow), reasons: why}
 	}
 	return best, best.Node.Identity.NodeID, nil
 }
@@ -934,6 +966,7 @@ func (s *Server) handleRegister(ctx context.Context, conn domain.Conn, env *prot
 	// first and drop the connection. Everything that sends work or
 	// commands waits for READY.
 	_, isNew := s.Registry.Upsert(payload.Manifest, conn)
+	s.Registry.SetUse(claimedID, payload.Use)
 
 	if s.store != nil {
 		if err := s.store.UpsertNode(payload.Manifest); err != nil {
@@ -1007,7 +1040,12 @@ func (s *Server) handleHeartbeat(nodeID domain.NodeID, env *protocol.Envelope) {
 		log.Printf("manager: bad heartbeat payload from %s: %v", nodeID, err)
 		return
 	}
+	before := true
+	if rec, ok := s.Registry.Get(nodeID); ok {
+		before, _ = s.availableNow(rec, time.Now())
+	}
 	s.Registry.RecordHeartbeat(nodeID, payload.RuntimeState)
+	s.noteAvailability(nodeID, before)
 }
 
 func (s *Server) handlePing(ctx context.Context, conn domain.Conn, nodeID domain.NodeID) {

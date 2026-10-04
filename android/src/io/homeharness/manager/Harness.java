@@ -97,6 +97,11 @@ final class Harness {
         a.finish();
     }
 
+    /** Where DeviceState writes the phone's charging and screen state for the agent. */
+    static File deviceStateFile(Context c) {
+        return new File(workerDir(c), "device-state");
+    }
+
     static File workerDir(Context c) {
         return new File(c.getFilesDir(), "worker");
     }
@@ -139,6 +144,9 @@ final class Harness {
         cmd.add(new File(dir, "work").getAbsolutePath());
         cmd.add("-name");
         cmd.add(deviceName(c));
+        // Charging and screen state, kept current by DeviceState.
+        cmd.add("-device-state-file");
+        cmd.add(deviceStateFile(c).getAbsolutePath());
         String addr = prefs(c).getString(KEY_MANAGER_ADDR, "");
         if (!addr.isEmpty()) {
             cmd.add("-manager-addr");

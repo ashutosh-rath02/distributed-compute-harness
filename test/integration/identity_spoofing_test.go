@@ -122,7 +122,7 @@ func TestHeartbeatCannotSpoofAnotherNodesSource(t *testing.T) {
 	agentCtx, agentCancel := context.WithCancel(context.Background())
 	defer agentCancel()
 
-	victimAgent, err := agent.New(ws.New(), agent.Config{
+	victimAgent, err := agent.New(ws.New(), agent.Config{DeviceUse: pluggedIn,
 		ManagerAddr:       addr,
 		PairingToken:      pairingToken,
 		IdentityDir:       filepath.Join(t.TempDir(), "victim-agent"),

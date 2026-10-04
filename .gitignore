@@ -11,3 +11,6 @@ harness-artifacts/
 harness-operator-token
 /build/
 /dist/
+
+# the AI key the manager creates next to its operator token
+ai-key

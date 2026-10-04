@@ -77,6 +77,13 @@ func NewExecutorWithSlots(slots int) *Executor {
 // Slots reports how many workloads this executor runs at once.
 func (e *Executor) Slots() int { return e.slots }
 
+// Running reports how many workloads are running now.
+func (e *Executor) Running() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return len(e.running)
+}
+
 // Start begins running wl, invoking onStatus once immediately with
 // WorkloadRunning and once more with the terminal status
 // (COMPLETED/FAILED/CANCELED) when it finishes. onStatus is called from a

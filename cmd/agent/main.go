@@ -24,6 +24,7 @@ import (
 	"home-harness/internal/instancelock"
 	"home-harness/internal/mtls"
 	"home-harness/internal/protocol"
+	"home-harness/internal/sysinfo"
 	"home-harness/internal/transport/relay"
 	"home-harness/internal/transport/ws"
 )
@@ -45,6 +46,9 @@ func main() {
 	pair := flag.Bool("pair", false, "join by approval on the manager instead of a pairing token: this device waits, showing a pairing code, until someone approves it there")
 	pairCode := flag.Bool("pair-code", false, "print this device's pairing code (for -manager-fingerprint, creating the identity if needed) and exit")
 	addrFallback := flag.String("manager-addr-fallback", "", "manager address (host:port) to use when LAN discovery finds none")
+	deviceStateFile := flag.String("device-state-file", "", "a file another program keeps current with this device's charging and screen state (the Android app writes one); it overrides what the agent reads itself while it is fresh")
+	priority := flag.String("priority", "low", "low: run tasks below normal priority, so the owner's own apps come first; normal: don't")
+	keepAwake := flag.Bool("keep-awake", true, "ask the OS not to sleep while a task runs here (it never blocks closing the lid or choosing Sleep)")
 	noSelfUpdate := flag.Bool("no-self-update", false, "don't offer self-update (this binary can't be replaced in place; it is updated some other way, e.g. with the Android app)")
 	flag.Parse()
 
@@ -139,6 +143,17 @@ func main() {
 		Pairing:              *pair,
 		ManagerAddrFallback:  *addrFallback,
 		SelfUpdateDisabled:   *noSelfUpdate,
+		DeviceStateFile:      *deviceStateFile,
+		KeepAwake:            *keepAwake,
+	}
+	switch *priority {
+	case "low":
+		if err := sysinfo.LowerPriority(); err != nil {
+			log.Printf("agent: can't lower this process's priority: %v", err)
+		}
+	case "normal":
+	default:
+		log.Fatalf("agent: -priority must be low or normal")
 	}
 	if tofu != nil {
 		cfg.ManagerFingerprintFunc = tofu.fingerprint

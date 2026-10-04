@@ -39,6 +39,9 @@ type nodeView struct {
 	HostFingerprintSource string            `json:"hostFingerprintSource,omitempty"`
 	SameHostAs            []domain.NodeID   `json:"sameHostAs,omitempty"`
 	HostConflict          bool              `json:"hostConflict,omitempty"`
+	// Availability: the operator's rule, and whether the node takes new
+	// work right now and why not (availability.go).
+	Availability availabilityView `json:"availability"`
 }
 
 func (s *Server) toNodeView(rec *NodeRecord, relations map[domain.NodeID]hostRelation) nodeView {
@@ -63,6 +66,7 @@ func (s *Server) toNodeView(rec *NodeRecord, relations map[domain.NodeID]hostRel
 		HostFingerprintSource: rec.Node.HostFingerprintSource,
 		SameHostAs:            rel.sameHostAs,
 		HostConflict:          rel.conflict,
+		Availability:          s.availabilityView(rec.Node.Identity.NodeID),
 	}
 }
 
@@ -94,6 +98,7 @@ func (s *Server) toNodeView(rec *NodeRecord, relations map[domain.NodeID]hostRel
 //	POST /join-requests/{id}/approve admit that device at its next connect; /reject refuses it for a while
 //	GET  /join-window                whether new devices may join now; POST {"minutes":N} opens it, DELETE closes it (joinwindow.go)
 //	PUT  /nodes/{id}/meta            set the operator's alias/labels for a node (fleet.go)
+//	PUT  /nodes/{id}/availability    when the node takes new work: {"mode":"auto|always|idle|charging|paused","idleMinutes":N,"hours":"22:00-07:00"} (availability.go)
 //	GET  /audit?log=&limit=          the audit log, newest first: log=security (default) or noise (audit.go)
 //	GET  /                           a local web dashboard (node list + "add a device" form)
 //	GET  /live                       the one-screen live view (devices, running work, events)
@@ -160,6 +165,7 @@ func (s *Server) NewHTTPHandler() http.Handler {
 	mux.HandleFunc("POST /join-requests/{id}/approve", s.apiDecideJoinRequest(true))
 	mux.HandleFunc("POST /join-requests/{id}/reject", s.apiDecideJoinRequest(false))
 	mux.HandleFunc("PUT /nodes/{id}/meta", s.apiPutNodeMeta)
+	mux.HandleFunc("PUT /nodes/{id}/availability", s.apiPutNodeAvailability)
 	mux.HandleFunc("GET /audit", s.apiListAudit)
 	mux.HandleFunc("POST /artifacts", s.apiPostArtifact)
 	mux.HandleFunc("GET /artifacts", s.apiListArtifacts)
@@ -354,6 +360,8 @@ type workloadSummaryView struct {
 	// invocation — otherwise Command/Args above already say everything,
 	// and every pre-v4 workload continues to show exactly as before.
 	Capability domain.CapabilityName `json:"capability,omitempty"`
+	// Waiting says why a QUEUED workload hasn't started yet.
+	Waiting string `json:"waiting,omitempty"`
 }
 
 // workloadView is the JSON shape for a single workload — the summary plus
@@ -399,7 +407,7 @@ func toWorkloadSummaryView(rec WorkloadRecord) workloadSummaryView {
 	if rec.Workload.Capability != domain.CapabilitySystemExecute {
 		capability = rec.Workload.Capability
 	}
-	return workloadSummaryView{
+	v := workloadSummaryView{
 		ID:         rec.Workload.ID,
 		Target:     rec.Workload.Target,
 		Command:    rec.Workload.Command,
@@ -408,6 +416,10 @@ func toWorkloadSummaryView(rec WorkloadRecord) workloadSummaryView {
 		ExitCode:   exitCode(rec.Status),
 		Capability: capability,
 	}
+	if rec.Status.State == domain.WorkloadQueued {
+		v.Waiting = rec.waiting
+	}
+	return v
 }
 
 func toWorkloadView(rec WorkloadRecord) workloadView {

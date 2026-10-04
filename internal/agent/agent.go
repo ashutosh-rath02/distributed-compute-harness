@@ -136,6 +136,17 @@ type Config struct {
 	// features: this binary can't be replaced in place (the Android app's
 	// worker, updated with the app).
 	SelfUpdateDisabled bool
+	// DeviceStateFile is a file another program keeps current with what
+	// the agent can't see itself (the Android app: charging and screen
+	// state); see sysinfo.DeviceUse.
+	DeviceStateFile string
+	// DeviceUse overrides how the agent reads the device's use (power,
+	// idle time) for its heartbeats — tests inject it. Nil: sysinfo.
+	DeviceUse func(ctx context.Context) domain.DeviceUse
+	// KeepAwake asks the OS not to sleep while a workload runs here (a
+	// sleeping device loses its task). Never blocks a sleep the user asks
+	// for.
+	KeepAwake bool
 }
 
 const defaultAgentVersion = "0.1.0"
@@ -270,6 +281,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	// the Agent before taking the instance lock, and a standby copy must
 	// not clear the running one's directories.
 	cleanWorkRoot(a.cfg.WorkDir)
+	if a.cfg.KeepAwake {
+		go a.keepAwakeWhileWorking(ctx)
+	}
 	backoff := a.cfg.ReconnectBackoff
 	resetThreshold := 3 * a.cfg.HeartbeatInterval
 
@@ -400,8 +414,9 @@ func (a *Agent) register(ctx context.Context, conn domain.Conn) error {
 	manifest := a.buildManifest(ctx)
 	a.setAdvertised(manifest.Capabilities)
 	signature := a.identity.Sign(protocol.RegisterSignedData(a.cfg.PairingToken, a.identity.NodeID))
+	use := a.deviceUse(ctx)
 	if err := a.send(ctx, conn, protocol.MsgRegister, domain.ManagerNodeID,
-		protocol.RegisterPayload{Manifest: manifest, PairingToken: a.cfg.PairingToken, Signature: signature, Pairing: a.cfg.Pairing}); err != nil {
+		protocol.RegisterPayload{Manifest: manifest, PairingToken: a.cfg.PairingToken, Signature: signature, Pairing: a.cfg.Pairing, Use: &use}); err != nil {
 		return fmt.Errorf("send REGISTER: %w", err)
 	}
 
@@ -481,6 +496,7 @@ func (a *Agent) heartbeatLoop(ctx context.Context, conn domain.Conn, errCh chan<
 			if err != nil {
 				log.Printf("agent %s: collecting metrics: %v", a.identity.NodeID, err)
 			}
+			use := a.deviceUse(ctx)
 			payload := protocol.HeartbeatPayload{
 				RuntimeState: domain.RuntimeState{
 					NodeID:               a.identity.NodeID,
@@ -490,6 +506,7 @@ func (a *Agent) heartbeatLoop(ctx context.Context, conn domain.Conn, errCh chan<
 					MemoryAvailableBytes: metrics.MemoryAvailableBytes,
 					LastHeartbeat:        time.Now().UTC(),
 					AgentVersion:         a.cfg.AgentVersion,
+					Use:                  &use,
 				},
 			}
 			if err := a.send(ctx, conn, protocol.MsgHeartbeat, domain.ManagerNodeID, payload); err != nil {
@@ -628,7 +645,7 @@ func (a *Agent) capabilityLoop(ctx context.Context, conn domain.Conn) {
 
 // agentFeatures are the behaviors this build tells the manager it has.
 func (a *Agent) agentFeatures() []string {
-	features := []string{domain.FeatureArtifacts, domain.FeatureTimeout}
+	features := []string{domain.FeatureArtifacts, domain.FeatureTimeout, domain.FeatureAvailability}
 	if !a.cfg.SelfUpdateDisabled {
 		features = append([]string{domain.FeatureSelfUpdatePath}, features...)
 	}

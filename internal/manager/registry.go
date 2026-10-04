@@ -240,6 +240,17 @@ func (r *Registry) RecordHeartbeat(id domain.NodeID, metrics domain.RuntimeState
 	}
 }
 
+// SetUse records a node's use as it reported it on connecting (its
+// heartbeats replace it), so its availability is known before the first
+// heartbeat.
+func (r *Registry) SetUse(id domain.NodeID, use *domain.DeviceUse) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if rec, ok := r.nodes[id]; ok {
+		rec.LastMetrics.Use = use
+	}
+}
+
 // List returns a snapshot of all known nodes.
 func (r *Registry) List() []*NodeRecord {
 	r.mu.RLock()

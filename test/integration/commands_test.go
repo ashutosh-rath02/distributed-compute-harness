@@ -16,7 +16,7 @@ func startRegisteredAgent(t *testing.T, addr, name string) *agent.Agent {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	a, err := agent.New(ws.New(), agent.Config{
+	a, err := agent.New(ws.New(), agent.Config{DeviceUse: pluggedIn,
 		ManagerAddr:       addr,
 		PairingToken:      pairingToken,
 		IdentityDir:       filepath.Join(t.TempDir(), name),

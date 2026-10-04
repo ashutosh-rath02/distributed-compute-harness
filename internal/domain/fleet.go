@@ -8,10 +8,15 @@ import "time"
 type NodeMeta struct {
 	Alias  string            `json:"alias,omitempty"`
 	Labels map[string]string `json:"labels,omitempty"`
+	// Availability is when the device takes new work (availability.go);
+	// nil is the default rule.
+	Availability *Availability `json:"availability,omitempty"`
 }
 
 // Empty reports whether m carries nothing worth persisting.
-func (m NodeMeta) Empty() bool { return m.Alias == "" && len(m.Labels) == 0 }
+func (m NodeMeta) Empty() bool {
+	return m.Alias == "" && len(m.Labels) == 0 && (m.Availability == nil || m.Availability.IsDefault())
+}
 
 // AuditLog selects one of three independently capped audit logs, so
 // nothing a peer does can evict the operator's security history.

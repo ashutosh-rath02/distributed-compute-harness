@@ -81,7 +81,7 @@ func startFileAgent(t *testing.T, ctx context.Context, m artifactManager, addr, 
 // two agents on one PC report slightly differently).
 func startFileAgentWithSlots(t *testing.T, ctx context.Context, m artifactManager, addr, name string, slots int) *agent.Agent {
 	t.Helper()
-	cfg := agent.Config{WorkloadSlots: slots, OllamaURL: "127.0.0.1:1", // hermetic: never a real local Ollama
+	cfg := agent.Config{DeviceUse: pluggedIn, WorkloadSlots: slots, OllamaURL: "127.0.0.1:1", // hermetic: never a real local Ollama
 		ManagerAddr: addr, PairingToken: pairingToken, IdentityDir: filepath.Join(t.TempDir(), name), WorkDir: filepath.Join(t.TempDir(), name+"-work"),
 		Name: name, HeartbeatInterval: 100 * time.Millisecond, ReconnectBackoff: 50 * time.Millisecond, MaxReconnectBackoff: 200 * time.Millisecond, HostFingerprint: "-",
 	}
@@ -248,7 +248,7 @@ func TestWorkloadFilesThroughRelay(t *testing.T) {
 	m := artifactManager{srv: srv, api: api.URL}
 
 	client := relaytransport.NewClient(relaySessionToken)
-	a, err := agent.New(client, agent.Config{
+	a, err := agent.New(client, agent.Config{DeviceUse: pluggedIn,
 		ManagerAddr: relayAddr, PairingToken: pairingToken, IdentityDir: filepath.Join(t.TempDir(), "relay-file-agent"),
 		WorkDir: filepath.Join(t.TempDir(), "relay-work"), Name: "relay-file-agent", HeartbeatInterval: 100 * time.Millisecond,
 		HostFingerprint: "-", Insecure: true,

@@ -58,6 +58,9 @@
   .chip { display: inline-block; font-size: 0.72rem; padding: 1px 7px; margin: 2px 4px 0 0; border-radius: 9px; background: color-mix(in srgb, #2f81f7 18%, transparent); }
   .note { display: block; font-size: 0.76rem; color: #d29922; margin-top: 3px; }
   .subname { display: block; font-size: 0.75rem; color: GrayText; }
+  .avail-yes { color: #3fb950; font-weight: 600; }
+  .avail-no { color: #d29922; font-weight: 600; }
+  select.avail { width: auto; font-size: 0.75rem; padding: 2px 4px; margin-top: 3px; }
   .signin { border-color: #d29922; background: color-mix(in srgb, #d29922 12%, transparent); }
   .hint { font-size: 0.8rem; color: GrayText; margin-top: 4px; }
   .joinreq { border: 2px solid #2f81f7; }
@@ -381,6 +384,60 @@
     }[c]));
   }
 
+  // When a device takes new work: whether it does now (and why not), what
+  // it reported about its use, and the operator's rule as a picker. The
+  // reason and the use come from the manager and the agent: escaped.
+  const availRules = [
+    ["auto", "Auto (not on battery)"], ["always", "Always"], ["idle:5", "When idle 5 min"],
+    ["idle:15", "When idle 15 min"], ["charging", "Only while charging"], ["paused", "Paused"],
+  ];
+  function availabilityCell(n) {
+    const a = n.availability || {rule: {mode: "auto"}, available: true};
+    const rule = a.rule || {mode: "auto"};
+    const key = rule.mode === "idle" ? "idle:" + (rule.idleMinutes || 5) : (rule.mode || "auto");
+    let options = availRules.map(([v, label]) => '<option value="' + v + '"' + (v === key ? " selected" : "") + ">" + label + "</option>").join("");
+    if (!availRules.some(([v]) => v === key)) {
+      options += '<option value="' + escapeHtml(key) + '" selected>When idle ' + escapeHtml(String(rule.idleMinutes)) + " min</option>";
+    }
+    const use = (n.metrics && n.metrics.use) || null;
+    const bits = [];
+    if (use) {
+      if (use.onBattery === true) bits.push("on battery" + (use.batteryPercent != null ? " " + use.batteryPercent + "%" : ""));
+      else if (use.onBattery === false) bits.push("plugged in" + (use.batteryPercent != null ? " " + use.batteryPercent + "%" : ""));
+      if (use.idleSeconds != null) bits.push(use.idleSeconds < 60 ? "in use" : "idle " + Math.floor(use.idleSeconds / 60) + " min");
+    }
+    const now = n.state !== "READY" ? '<span class="subname">-</span>'
+      : a.available ? '<span class="avail-yes">Yes</span>' + (a.reason ? '<span class="subname">' + escapeHtml(a.reason) + "</span>" : "")
+      : '<span class="avail-no">Not now</span><span class="subname">' + escapeHtml(a.reason || "") + "</span>";
+    return now + (bits.length ? '<span class="subname">' + escapeHtml(bits.join(", ")) + "</span>" : "")
+      + '<select class="avail" data-avail="' + escapeHtml(n.nodeId) + '" title="When this device takes new work">' + options + "</select>"
+      + ' <button class="small secondary" data-hours="' + escapeHtml(n.nodeId) + '" title="Only during these hours">'
+      + (rule.hours ? escapeHtml(rule.hours) : "Hours…") + "</button>";
+  }
+
+  async function putAvailability(node, rule) {
+    try {
+      const resp = await api("/nodes/" + encodeURIComponent(node.nodeId) + "/availability", {
+        method: "PUT", headers: {"Content-Type": "application/json"}, body: JSON.stringify(rule),
+      });
+      if (!resp.ok) throw new Error((await resp.text()).trim() || resp.statusText);
+    } catch (e) {
+      alert("Could not change when it takes work: " + e.message);
+    }
+    refreshNodes();
+  }
+
+  document.getElementById("nodes").addEventListener("change", (event) => {
+    const select = event.target.closest("select[data-avail]");
+    if (!select) return;
+    const node = currentNodes.find((n) => n.nodeId === select.dataset.avail);
+    if (!node) return;
+    const [mode, minutes] = select.value.split(":");
+    const rule = {mode: mode, hours: ((node.availability || {}).rule || {}).hours || ""};
+    if (mode === "idle") rule.idleMinutes = Number(minutes) || 5;
+    putAvailability(node, rule);
+  });
+
   function renderNodes(nodes) {
     const el = document.getElementById("nodes");
     if (nodes.length === 0) {
@@ -421,6 +478,7 @@
         + "<td>" + escapeHtml(display) + subname + chips + hostNote + "</td>"
         + "<td>" + escapeHtml(platform) + "</td>"
         + '<td><span class="' + stateClass(n.state) + '">' + escapeHtml(n.state) + "</span>" + outdated + "</td>"
+        + "<td>" + availabilityCell(n) + "</td>"
         + "<td>" + cpu + "</td>"
         + "<td>" + mem + "</td>"
         + "<td>" + escapeHtml(String(n.running || 0) + " / " + String(n.slots || 1)) + "</td>"
@@ -430,7 +488,7 @@
         + "</tr>";
     }).join("");
     el.innerHTML =
-      "<table><thead><tr><th>Name</th><th>Platform</th><th>State</th><th>CPU</th><th>Mem free</th><th title='Workloads running / slots'>Busy</th><th></th></tr></thead>"
+      "<table><thead><tr><th>Name</th><th>Platform</th><th>State</th><th title='When this device takes new work (running work always finishes)'>Takes work</th><th>CPU</th><th>Mem free</th><th title='Workloads running / slots'>Busy</th><th></th></tr></thead>"
       + "<tbody>" + rows + "</tbody></table>";
   }
 
@@ -454,6 +512,17 @@
   // Event delegation: rows are re-rendered on every SSE event, so the
   // buttons inside them can't hold their own listeners.
   document.getElementById("nodes").addEventListener("click", async (event) => {
+    const hoursButton = event.target.closest("button[data-hours]");
+    if (hoursButton) {
+      const node = currentNodes.find((n) => n.nodeId === hoursButton.dataset.hours);
+      if (!node) return;
+      const rule = Object.assign({mode: "auto"}, (node.availability || {}).rule);
+      const hours = prompt("Take new work only during these hours, e.g. 22:00-07:00 (this computer's time). Empty: any time.", rule.hours || "");
+      if (hours === null) return;
+      rule.hours = hours.trim();
+      putAvailability(node, rule);
+      return;
+    }
     const renameButton = event.target.closest("button[data-rename]");
     if (renameButton) {
       const node = currentNodes.find((n) => n.nodeId === renameButton.dataset.rename);
@@ -556,7 +625,7 @@
         + details.map((w) => "<tr><td>" + escapeHtml(w.command || w.capability || "-") + "</td><td>"
           + escapeHtml(w.target || "-") + '</td><td><span class="' + stateClass(w.state) + '">'
           + escapeHtml(w.state) + "</span></td><td><div class=\"output\">"
-          + escapeHtml((w.stdout || w.stderr || w.error || (w.exitCode == null ? "-" : "exit " + w.exitCode)).trim())
+          + escapeHtml((w.stdout || w.stderr || w.error || (w.waiting ? "Waiting: " + w.waiting : "") || (w.exitCode == null ? "-" : "exit " + w.exitCode)).trim())
           + "</div>" + outputButtons(w) + "</td></tr>").join("")
         + "</tbody></table>";
     } catch (e) {
@@ -919,6 +988,7 @@
         await new Promise((resolve) => setTimeout(resolve, 1000));
         const status = await (await api("/workloads/" + encodeURIComponent(created.id))).json();
         progress.textContent = status.state + (status.target ? " on " + status.target : "")
+          + (status.waiting ? "\nWaiting: " + status.waiting : "")
           + (status.error ? "\nError: " + status.error : "")
           + (status.stdout ? "\nOutput: " + status.stdout.trim() : "")
           + ((status.outputFiles || []).length ? "\nFiles ready below in Recent workloads." : "");
@@ -1179,13 +1249,14 @@
       if (!resp.ok) throw new Error(text.trim() || resp.statusText);
       const workload = JSON.parse(text);
       progress.textContent = workload.state === "QUEUED"
-        ? "QUEUED: every eligible device is busy; it starts when one frees a slot (" + workload.id + ")"
+        ? "QUEUED: no device can take it right now; it starts as soon as one can (" + workload.id + ")"
         : "ASSIGNED to " + workload.target + " (" + workload.id + ")";
       for (let attempt = 0; attempt < 150; attempt++) {
         await new Promise((resolve) => setTimeout(resolve, 500));
         const statusResp = await api("/workloads/" + encodeURIComponent(workload.id));
         const status = await statusResp.json();
         progress.textContent = status.state + (status.target ? " on " + status.target : "")
+          + (status.waiting ? "\nWaiting: " + status.waiting : "")
           + (status.stdout ? "\nOutput: " + status.stdout.trim() : "")
           + (status.stderr ? "\nError output: " + status.stderr.trim() : "");
         if (["COMPLETED", "FAILED", "CANCELED"].includes(status.state)) break;
@@ -1253,6 +1324,7 @@
         await new Promise((resolve) => setTimeout(resolve, 1000));
         const status = await (await api("/workloads/" + encodeURIComponent(workload.id))).json();
         progress.textContent = status.state + (status.target ? " on " + status.target : "")
+          + (status.waiting ? "\nWaiting: " + status.waiting : "")
           + (status.error ? "\nError: " + status.error : "")
           + (status.stdout ? "\nOutput: " + status.stdout.trim() : "")
           + ((status.outputFiles || []).length ? "\nFiles ready below in Recent workloads." : "");

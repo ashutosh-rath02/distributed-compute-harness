@@ -132,7 +132,7 @@ func testInternetEnrollmentThroughPublicRelay(t *testing.T, secure bool) {
 	if secure {
 		agentTransport = relaytransport.NewTLSClient(match[1], mtls.PinnedClientConfig(fingerprint))
 	}
-	a, err := agent.New(agentTransport, agent.Config{
+	a, err := agent.New(agentTransport, agent.Config{DeviceUse: pluggedIn,
 		ManagerAddr: rawListener.Addr().String(), PairingToken: invite.Token,
 		IdentityDir: filepath.Join(t.TempDir(), "internet-enrolled-agent"), Name: "internet-enrolled-agent",
 		HeartbeatInterval: 100 * time.Millisecond, ReconnectBackoff: 50 * time.Millisecond,

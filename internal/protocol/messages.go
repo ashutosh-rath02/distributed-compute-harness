@@ -30,6 +30,10 @@ type RegisterPayload struct {
 	// until someone approves it on the manager, comparing PairingCode on
 	// both screens.
 	Pairing bool `json:"pairing,omitempty"`
+	// Use is the device's use right now (power, idle time), so the
+	// operator's availability rule applies from the moment it connects,
+	// before its first heartbeat (domain.FeatureAvailability).
+	Use *domain.DeviceUse `json:"use,omitempty"`
 }
 
 // PairingCode is the short code a device and its manager both show while

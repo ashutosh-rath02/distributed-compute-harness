@@ -21,6 +21,9 @@ type WorkloadRecord struct {
 	// finishedSeen: when retention first saw this finished workload, for
 	// one that ended without a finish time (retention.go). In memory only.
 	finishedSeen time.Time
+	// waiting: why a QUEUED workload hasn't started (which devices held it
+	// back, and why). In memory only.
+	waiting string
 }
 
 // WorkloadRegistry tracks every workload the manager has submitted, keyed
@@ -77,6 +80,18 @@ func (wr *WorkloadRegistry) Get(id domain.WorkloadID) (WorkloadRecord, bool) {
 		return WorkloadRecord{}, false
 	}
 	return *rec, true
+}
+
+// inFlight reports whether any workload is being handed out or running.
+func (wr *WorkloadRegistry) inFlight() bool {
+	wr.mu.RLock()
+	defer wr.mu.RUnlock()
+	for _, rec := range wr.workloads {
+		if s := rec.Status.State; s == domain.WorkloadPending || s == domain.WorkloadRunning {
+			return true
+		}
+	}
+	return false
 }
 
 // List returns a snapshot of every known workload.

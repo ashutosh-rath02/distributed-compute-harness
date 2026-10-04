@@ -49,7 +49,7 @@ func TestV1DemoScenario(t *testing.T) {
 	// separately, see discovery_test.go). Node registers.
 	identityDirB := filepath.Join(t.TempDir(), "laptop-b")
 	ctxB, cancelB := context.WithCancel(context.Background())
-	agentB, err := agent.New(ws.New(), agent.Config{
+	agentB, err := agent.New(ws.New(), agent.Config{DeviceUse: pluggedIn,
 		ManagerAddr:       addr,
 		PairingToken:      pairingToken,
 		IdentityDir:       identityDirB,
@@ -117,7 +117,7 @@ func TestV1DemoScenario(t *testing.T) {
 	// Same Node ID returns RECONNECTED. No duplicate node is created.
 	ctxB2, cancelB2 := context.WithCancel(context.Background())
 	defer cancelB2()
-	agentB2, err := agent.New(ws.New(), agent.Config{
+	agentB2, err := agent.New(ws.New(), agent.Config{DeviceUse: pluggedIn,
 		ManagerAddr:       addr,
 		PairingToken:      pairingToken,
 		IdentityDir:       identityDirB,

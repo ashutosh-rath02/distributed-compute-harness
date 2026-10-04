@@ -26,7 +26,7 @@ func TestInsecureAgentRefusesWorkload(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	a, err := agent.New(ws.New(), agent.Config{
+	a, err := agent.New(ws.New(), agent.Config{DeviceUse: pluggedIn,
 		ManagerAddr:               addr,
 		PairingToken:              pairingToken,
 		IdentityDir:               filepath.Join(t.TempDir(), "insecure-agent"),
@@ -80,7 +80,7 @@ func TestRegisterOverTLSWithPinnedFingerprint(t *testing.T) {
 	go srv.Run(ctx)
 	waitListening(t, addr)
 
-	a, err := agent.New(ws.NewTLSClient(mtls.PinnedClientConfig(mtls.Fingerprint(cert))), agent.Config{
+	a, err := agent.New(ws.NewTLSClient(mtls.PinnedClientConfig(mtls.Fingerprint(cert))), agent.Config{DeviceUse: pluggedIn,
 		ManagerAddr:       addr,
 		PairingToken:      pairingToken,
 		IdentityDir:       filepath.Join(t.TempDir(), "tls-agent"),
@@ -125,7 +125,7 @@ func TestAgentRejectsRogueManagerWithWrongFingerprint(t *testing.T) {
 	go srv.Run(ctx)
 	waitListening(t, addr)
 
-	a, err := agent.New(ws.NewTLSClient(mtls.PinnedClientConfig(mtls.Fingerprint(realCert))), agent.Config{
+	a, err := agent.New(ws.NewTLSClient(mtls.PinnedClientConfig(mtls.Fingerprint(realCert))), agent.Config{DeviceUse: pluggedIn,
 		ManagerAddr:       addr,
 		PairingToken:      pairingToken,
 		IdentityDir:       filepath.Join(t.TempDir(), "pinned-agent"),

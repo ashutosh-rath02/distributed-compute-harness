@@ -38,6 +38,14 @@ func startManager(t *testing.T, addr string, heartbeatTimeout time.Duration) *ma
 	return srv
 }
 
+// pluggedIn is the use every test agent reports unless a test says
+// otherwise: the real readings of the PC running the tests (an unplugged
+// laptop, someone typing) must not hold test work back.
+func pluggedIn(context.Context) domain.DeviceUse {
+	f := false
+	return domain.DeviceUse{OnBattery: &f}
+}
+
 // waitListening returns once something accepts TCP connections at addr:
 // the manager binds its port in its own goroutine (Run), and an agent
 // that dials first waits out its whole reconnect backoff (3 s by
@@ -99,7 +107,7 @@ func TestRegisterAndHeartbeat(t *testing.T) {
 	agentCtx, agentCancel := context.WithCancel(context.Background())
 	defer agentCancel()
 
-	a, err := agent.New(ws.New(), agent.Config{
+	a, err := agent.New(ws.New(), agent.Config{DeviceUse: pluggedIn,
 		ManagerAddr:       addr,
 		PairingToken:      pairingToken,
 		IdentityDir:       filepath.Join(t.TempDir(), "agent-a"),
@@ -135,7 +143,7 @@ func TestOfflineDetectionAndReconnectSameNodeID(t *testing.T) {
 	identityDir := filepath.Join(t.TempDir(), "agent-b")
 
 	agentCtx, agentCancel := context.WithCancel(context.Background())
-	a, err := agent.New(ws.New(), agent.Config{
+	a, err := agent.New(ws.New(), agent.Config{DeviceUse: pluggedIn,
 		ManagerAddr:       addr,
 		PairingToken:      pairingToken,
 		IdentityDir:       identityDir,
@@ -167,7 +175,7 @@ func TestOfflineDetectionAndReconnectSameNodeID(t *testing.T) {
 	// resolve to the same NodeID and must not create a duplicate node.
 	agentCtx2, agentCancel2 := context.WithCancel(context.Background())
 	defer agentCancel2()
-	a2, err := agent.New(ws.New(), agent.Config{
+	a2, err := agent.New(ws.New(), agent.Config{DeviceUse: pluggedIn,
 		ManagerAddr:       addr,
 		PairingToken:      pairingToken,
 		IdentityDir:       identityDir,
@@ -199,7 +207,7 @@ func TestRegistrationRejectedWithBadPairingToken(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	a, err := agent.New(ws.New(), agent.Config{
+	a, err := agent.New(ws.New(), agent.Config{DeviceUse: pluggedIn,
 		ManagerAddr:       addr,
 		PairingToken:      "wrong-token",
 		IdentityDir:       filepath.Join(t.TempDir(), "agent-c"),

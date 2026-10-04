@@ -59,7 +59,7 @@ func startPairingManagerWindow(t *testing.T, addr, token string, firstRun time.D
 
 func startPairingAgent(t *testing.T, ctx context.Context, addr, fingerprint, dir string) *agent.Agent {
 	t.Helper()
-	a, err := agent.New(ws.NewTLSClient(mtls.PinnedClientConfig(fingerprint)), agent.Config{
+	a, err := agent.New(ws.NewTLSClient(mtls.PinnedClientConfig(fingerprint)), agent.Config{DeviceUse: pluggedIn,
 		ManagerAddr: addr, Pairing: true, ManagerFingerprint: fingerprint,
 		IdentityDir: dir, Name: "pairing-laptop", HostFingerprint: "-",
 		HeartbeatInterval: 100 * time.Millisecond, PairingRetry: 100 * time.Millisecond, JoinClosedRetry: 100 * time.Millisecond,

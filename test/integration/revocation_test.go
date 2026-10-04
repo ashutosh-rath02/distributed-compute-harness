@@ -54,7 +54,7 @@ func expectRevokedReject(t *testing.T, resp *protocol.Envelope) {
 
 func startFastReconnectAgent(t *testing.T, ctx context.Context, addr, dir, name string) *agent.Agent {
 	t.Helper()
-	a, err := agent.New(ws.New(), agent.Config{
+	a, err := agent.New(ws.New(), agent.Config{DeviceUse: pluggedIn,
 		ManagerAddr:       addr,
 		PairingToken:      pairingToken,
 		IdentityDir:       dir,

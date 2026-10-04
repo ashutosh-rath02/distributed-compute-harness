@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strings"
 	"time"
 
 	"home-harness/internal/catalog"
@@ -34,6 +35,38 @@ import (
 
 // errNoRoom means every eligible node is full right now: queue it.
 var errNoRoom = errors.New("manager: no eligible node has free capacity right now")
+
+// noRoomError is errNoRoom with what held each device back: detail (by
+// node ID, for logs and errors, as before) and reasons (by device name,
+// shown on a queued workload).
+type noRoomError struct {
+	detail  string
+	reasons []string
+}
+
+func (e *noRoomError) Error() string { return errNoRoom.Error() + " (" + e.detail + ")" }
+func (e *noRoomError) Unwrap() error { return errNoRoom }
+
+// waitingReason is what a queued workload shows as the reason it waits.
+func waitingReason(err error) string {
+	var nr *noRoomError
+	if errors.As(err, &nr) && len(nr.reasons) > 0 {
+		return strings.Join(nr.reasons, "; ")
+	}
+	if err != nil {
+		return strings.TrimPrefix(err.Error(), "manager: ")
+	}
+	return ""
+}
+
+// setWaiting records why a queued workload waits (in memory only).
+func (wr *WorkloadRegistry) setWaiting(id domain.WorkloadID, reason string) {
+	wr.mu.Lock()
+	defer wr.mu.Unlock()
+	if rec, ok := wr.workloads[id]; ok {
+		rec.waiting = reason
+	}
+}
 
 // requeueBackoff bounds how soon a workload refused by a busy agent (a
 // race with the manager's view of its slots) is tried again. busyHoldOff is
@@ -302,6 +335,7 @@ func (s *Server) dispatchQueued(ctx context.Context) {
 			if p.unconstrained() {
 				full[p.capability] = true
 			}
+			s.Workloads.setWaiting(rec.Workload.ID, waitingReason(err))
 			continue // still no room (or its node is away): stays queued
 		}
 		assigned, ok := s.Workloads.assignQueued(rec.Workload.ID, id)

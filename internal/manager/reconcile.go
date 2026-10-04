@@ -59,6 +59,7 @@ func (s *Server) reconcileWorkloads(ctx context.Context) {
 		case <-expire.C:
 			s.expireWorkloads()
 		case <-ticker.C:
+			s.keepAwakeTick(time.Now())
 			s.reconcileOnce(ctx)
 			s.advanceJobs(ctx)
 			s.dispatchQueued(ctx) // also catches requeue backoffs expiring

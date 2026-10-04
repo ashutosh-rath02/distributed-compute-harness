@@ -285,7 +285,7 @@ func TestDeviceCanRefuseRawCommandsItself(t *testing.T) {
 	m := startPolicyManager(t, addr, nil) // the manager would allow them
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	a, err := agent.New(ws.New(), agent.Config{
+	a, err := agent.New(ws.New(), agent.Config{DeviceUse: pluggedIn,
 		ManagerAddr: addr, PairingToken: pairingToken, IdentityDir: filepath.Join(t.TempDir(), "locked"), WorkDir: filepath.Join(t.TempDir(), "locked-work"),
 		Name: "locked", HeartbeatInterval: 100 * time.Millisecond, HostFingerprint: "-", Insecure: true,
 		DisabledCapabilities: []domain.CapabilityName{domain.CapabilitySystemExecute, domain.CapabilityFilesystemRead},
