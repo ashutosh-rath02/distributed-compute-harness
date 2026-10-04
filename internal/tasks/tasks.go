@@ -77,6 +77,7 @@ func builtinHandlers() map[domain.CapabilityName]Handler {
 		"text.count":      textCount{},
 		"render.fractal":  renderFractal{},
 		"image.stack":     imageStack{},
+		"report.collect":  reportCollect{},
 	}
 }
 
@@ -97,6 +98,8 @@ func NewRegistry(opts Options) *Registry {
 	r.handlers["llm.pull"] = ollamaPull{o}
 	r.handlers["llm.remove"] = ollamaRemove{o}
 	r.handlers["llm.inventory"] = ollamaInventory{o}
+	r.handlers["llm.classify"] = ollamaClassify{o}
+	r.handlers["llm.embed"] = ollamaEmbed{o}
 	r.ollama = o
 	return r
 }

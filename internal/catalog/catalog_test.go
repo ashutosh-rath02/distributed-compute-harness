@@ -102,6 +102,8 @@ func TestEveryBuiltinCompilesWithDefaults(t *testing.T) {
 					given[p.Name] = "1"
 				case p.Pattern == SessionPattern:
 					given[p.Name] = strings.Repeat("a", 16)
+				case p.LabelList:
+					given[p.Name] = "yes,no"
 				case strings.Contains(p.Pattern, "gguf"):
 					given[p.Name] = "model.gguf"
 				default:

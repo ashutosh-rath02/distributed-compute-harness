@@ -79,6 +79,12 @@ func main() {
 		})
 	case "ask":
 		err = cmdAsk(client, args[1:])
+	case "summarize", "summarise":
+		err = cmdSummarize(client, args[1:])
+	case "classify":
+		err = cmdClassify(client, args[1:])
+	case "embed":
+		err = cmdEmbed(client, args[1:])
 	case "do":
 		err = cmdDo(client, args[1:])
 	case "policy":
@@ -234,6 +240,18 @@ Commands:
   ask [-model M] [-in FILE ...] [-target ID] "question"
                         ask a local model on whichever device has it; the
                         answer streams back as it is written (Ctrl-C cancels)
+  summarize [-model M] [-prompt "..."] [-out summaries.md] FILE|GLOB ...
+                        summarise every text file with a local model, one
+                        task per file spread over the devices that have it,
+                        into one report by file name, saved here (-dir)
+  classify -labels a,b,c [-model M] [-out labels.csv] FILE|GLOB ...
+                        sort every text file into one of your labels; the
+                        answers land in one table (file, label)
+  embed [-model M] [-out embeddings.json] FILE|GLOB ...
+                        embeddings for every text file with an embedding
+                        model (e.g. ollama pull embeddinggemma), joined into
+                        one JSON file. Files over 32 KiB, or not UTF-8 text,
+                        are skipped; Ctrl-C stops watching, not the job
   ai                    the base URL and API key for apps that speak OpenAI's
                         chat API (/v1/chat/completions), and the models now
   pull <device-id> <model>

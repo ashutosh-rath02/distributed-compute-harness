@@ -246,6 +246,13 @@ func (s *Server) plannableTypes() []plannable {
 		if t.Internal || t.TargetRequired || t.Name == capLLMChat || t.Name == "llm.inventory" {
 			continue
 		}
+		// Not llm.embed: its model choices (embedding models) differ from
+		// the text types', and one name with two sets of choices loosens the
+		// plan schema's model to any value — an embedding model could then
+		// be planned for a prompt.
+		if t.Name == "llm.embed" {
+			continue
+		}
 		if s.checkPolicy(t.Name) != nil {
 			continue
 		}
