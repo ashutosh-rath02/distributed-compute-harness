@@ -145,6 +145,8 @@ type Server struct {
 	revocations *revocationList
 
 	meta *nodeMetaStore
+	// tunnels: device-to-device tunnel grants and waiting connections.
+	tunnels *tunnelTable
 	// awake is held while work is in flight (keepAwakeTick); nil unless
 	// Config.KeepAwake. awakeUntil is touched only by the reconcile loop.
 	awake      *keepawake.Request
@@ -214,6 +216,7 @@ func NewServer(transport domain.Transport, store PersistentStore, cfg Config) *S
 		dispatchKick: make(chan struct{}, 1),
 		requeues:     make(map[domain.WorkloadID]int),
 		grants:       newGrantTable(),
+		tunnels:      newTunnelTable(),
 		jobs:         newJobTable(),
 		policy:       &policyStore{p: domain.PermissivePolicy()},
 	}

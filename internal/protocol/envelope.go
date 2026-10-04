@@ -34,9 +34,12 @@ const (
 	MsgWorkloadAssign   MessageType = "WORKLOAD_ASSIGN"
 	MsgWorkloadStatus   MessageType = "WORKLOAD_STATUS"
 	MsgWorkloadCancel   MessageType = "WORKLOAD_CANCEL"
-	MsgPing             MessageType = "PING"
-	MsgPong             MessageType = "PONG"
-	MsgError            MessageType = "ERROR"
+	// TUNNEL_OPEN asks a helper device to connect its side of one tunnel
+	// connection (manager/tunnel.go).
+	MsgTunnelOpen MessageType = "TUNNEL_OPEN"
+	MsgPing       MessageType = "PING"
+	MsgPong       MessageType = "PONG"
+	MsgError      MessageType = "ERROR"
 )
 
 // Envelope is the outer frame for every Harness Protocol message.

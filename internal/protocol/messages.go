@@ -115,6 +115,15 @@ type WorkloadAssignPayload struct {
 	ArtifactToken string `json:"artifactToken,omitempty"`
 }
 
+// TunnelOpenPayload asks a helper device to connect its local service
+// for session's helper index, and the manager's /tunnel/ route with its
+// token and ConnID, to carry one connection from the main device.
+type TunnelOpenPayload struct {
+	Session string `json:"session"`
+	Index   int    `json:"index"`
+	ConnID  string `json:"connId"`
+}
+
 // WorkloadStatusPayload reports a workload's current or final status. Sent
 // by the agent on state transitions (started, completed, failed, canceled)
 // and stored by the manager against the workload's record.

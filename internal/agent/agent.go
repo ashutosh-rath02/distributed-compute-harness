@@ -184,6 +184,8 @@ type Agent struct {
 	probeLoops atomic.Int32 // running capability probes: one per live connection
 	// reprobe asks the capability probe to look again right away.
 	reprobe chan struct{}
+	// tun: services this device exposes through tunnels (tunnel.go).
+	tun tunnels
 
 	// pendingAddr is the address that last answered "waiting for
 	// approval": retries go straight back to it rather than paying a
@@ -541,6 +543,8 @@ func (a *Agent) receiveLoop(ctx context.Context, conn domain.Conn, errCh chan<- 
 			a.handleWorkloadAssign(ctx, conn, env)
 		case protocol.MsgWorkloadCancel:
 			a.handleWorkloadCancel(ctx, conn, env)
+		case protocol.MsgTunnelOpen:
+			a.handleTunnelOpen(ctx, env)
 		case protocol.MsgError:
 			var payload protocol.ErrorPayload
 			_ = env.DecodePayload(&payload)

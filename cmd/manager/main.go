@@ -225,6 +225,9 @@ func main() {
 	// catalog still download from; /agent-binaries/{os}/{arch} serves each
 	// platform's build.
 	transport.Handle("/agent-binary", srv.AgentBinaryHandler())
+	// Device-to-device tunnels (manager/tunnel.go), on the same pinned
+	// listener as everything else agents reach.
+	transport.Handle("/tunnel/", srv.TunnelHandler())
 	transport.Handle("GET /agent-binaries/{os}/{arch}", srv.AgentBinariesHandler())
 	transport.Handle("/enroll/", srv.EnrollmentHandler())
 	// Workload file transfers, authorized per assignment (manager/artifacts.go).
