@@ -173,6 +173,8 @@ type Server struct {
 	grants *grantTable
 	// jobs holds batch jobs (jobs.go).
 	jobs *jobTable
+	// spots holds spot checks and suspect marks (spotcheck.go).
+	spots *spotCheckTable
 	// plans holds AI plans (planner.go), in memory only.
 	plans *planTable
 	// policy decides what may run (policy.go).
@@ -225,6 +227,7 @@ func NewServer(transport domain.Transport, store PersistentStore, cfg Config) *S
 		tunnels:      newTunnelTable(),
 		splits:       newSplitTable(),
 		jobs:         newJobTable(),
+		spots:        newSpotCheckTable(),
 		plans:        newPlanTable(),
 		policy:       &policyStore{p: domain.PermissivePolicy()},
 	}
@@ -377,6 +380,8 @@ type WorkloadSpec struct {
 	Task       string
 	Attempt    int
 	AvoidNodes []domain.NodeID
+	// ExcludeNodes: never place it there (a spot check, spotcheck.go).
+	ExcludeNodes []domain.NodeID
 }
 
 // ErrInvalidWorkload is a submission that can never be valid as given
@@ -413,7 +418,7 @@ func (s *Server) Submit(ctx context.Context, spec WorkloadSpec) (domain.Workload
 	}
 	newWorkload := func(target domain.NodeID) domain.Workload {
 		return domain.Workload{ID: domain.WorkloadID(id), Target: target, Pinned: pinned, Command: command, Args: args, Capability: capability, Params: params, Requirements: req, RestartPolicy: restartPolicy, Inputs: spec.Inputs, Outputs: spec.Outputs,
-			Job: spec.Job, Task: spec.Task, Attempt: spec.Attempt, AvoidNodes: spec.AvoidNodes, TimeoutSeconds: timeout}
+			Job: spec.Job, Task: spec.Task, Attempt: spec.Attempt, AvoidNodes: spec.AvoidNodes, ExcludeNodes: spec.ExcludeNodes, TimeoutSeconds: timeout}
 	}
 	s.placeMu.Lock()
 	rec, resolved, err := s.resolve(placementFor(newWorkload(target)), nil)
@@ -467,11 +472,12 @@ type placement struct {
 	req        domain.ResourceRequirements
 	features   []string        // agent features required (requiredFeatures)
 	avoid      []domain.NodeID // prefer other nodes (a job task's failed attempts)
+	exclude    []domain.NodeID // never these (a spot check's original device)
 	params     map[string]string
 }
 
 func placementFor(w domain.Workload) placement {
-	p := placement{capability: w.EffectiveCapability(), req: w.Requirements, features: requiredFeatures(w), avoid: w.AvoidNodes, params: w.Params}
+	p := placement{capability: w.EffectiveCapability(), req: w.Requirements, features: requiredFeatures(w), avoid: w.AvoidNodes, exclude: w.ExcludeNodes, params: w.Params}
 	if w.Pinned {
 		p.target = w.Target
 	}
@@ -484,7 +490,7 @@ func (p placement) unconstrained() bool {
 	if t, ok := catalog.Lookup(p.capability); ok && (t.HasChoices() || t.MaxPerNode > 0) {
 		return false // a node-specific miss says nothing about other work
 	}
-	return p.target == "" && p.req.IsEmpty() && len(p.features) == 0 && len(p.avoid) == 0
+	return p.target == "" && p.req.IsEmpty() && len(p.features) == 0 && len(p.avoid) == 0 && len(p.exclude) == 0
 }
 
 // offers reports whether rec matches p's catalog parameters (e.g. has
@@ -517,6 +523,9 @@ func (s *Server) resolve(p placement, usage map[domain.NodeID]nodeUsage) (*NodeR
 		rec, ok := s.Registry.Get(p.target)
 		if !ok || rec.Conn == nil || rec.State != domain.NodeReady {
 			return nil, "", ErrNodeNotConnected
+		}
+		if slices.Contains(p.exclude, p.target) {
+			return nil, "", fmt.Errorf("%w (%s: %s)", ErrNoEligibleNode, p.target, excludedReason)
 		}
 		if ok, reason := couldEverFit(rec, p.capability, p.req, p.features...); !ok {
 			return nil, "", fmt.Errorf("%w (%s: %s)", ErrNoEligibleNode, p.target, reason)
@@ -563,6 +572,10 @@ func (s *Server) resolve(p placement, usage map[domain.NodeID]nodeUsage) (*NodeR
 	selector := s.policyFor(p.capability).NodeLabels
 	for _, rec := range candidates {
 		id := rec.Node.Identity.NodeID
+		if slices.Contains(p.exclude, id) {
+			never = append(never, fmt.Sprintf("%s: %s", id, excludedReason))
+			continue
+		}
 		if ok, reason := couldEverFit(rec, p.capability, p.req, p.features...); !ok {
 			never = append(never, fmt.Sprintf("%s: %s", id, reason))
 			continue

@@ -128,6 +128,8 @@ type jobTaskView struct {
 	Outputs  []domain.ArtifactRef `json:"outputs,omitempty"`
 	Error    string               `json:"error,omitempty"`
 	Waiting  string               `json:"waiting,omitempty"`
+	// SpotCheck: its result re-run elsewhere and compared (spotcheck.go).
+	SpotCheck string `json:"spotCheck,omitempty"`
 }
 
 type jobView struct {
@@ -143,6 +145,8 @@ type jobView struct {
 	Reduce      *jobTaskView    `json:"reduce,omitempty"`
 	// Outputs is the job's result: the reduce's outputs when it has one.
 	Outputs []domain.ArtifactRef `json:"outputs,omitempty"`
+	// SpotChecks counts its tasks' spot checks by outcome.
+	SpotChecks *spotCheckCounts `json:"spotChecks,omitempty"`
 }
 
 func (s *Server) toJobView(job domain.Job, withTasks bool) jobView {
@@ -174,8 +178,10 @@ func (s *Server) jobView(job domain.Job, byTask map[string][]WorkloadRecord, wit
 		if tp.state == taskWaiting && job.State == domain.JobRunning {
 			tv.Waiting = s.jobs.waitingReason(job.ID, key)
 		}
+		tv.SpotCheck = s.spotCheckLabel(job.ID, key)
 		return tv
 	}
+	v.SpotChecks = s.spotCheckCounts(job.ID)
 	v.Counts.Total = len(job.Tasks)
 	for i, t := range job.Tasks {
 		tv := view(domain.TaskKey(i), t.Name)

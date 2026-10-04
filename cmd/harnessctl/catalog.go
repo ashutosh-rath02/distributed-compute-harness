@@ -197,10 +197,14 @@ func cmdPolicy(c *apiClient, args []string) error {
 		for _, name := range []domain.CapabilityName{domain.CapabilitySystemExecute, domain.CapabilityFilesystemRead} {
 			show(name, cat.Raw[name])
 		}
+		fmt.Println("\n" + describeSpotCheck(p.SpotCheckPercent))
 		return nil
 	}
+	if args[0] == "spot-check" {
+		return c.setSpotCheck(p, args[1:])
+	}
 	if len(args) < 3 || args[0] != "type" {
-		return errors.New("usage: harnessctl policy [type <name> on|off | labels key=value,...|- | max-runtime DURATION]")
+		return errors.New("usage: harnessctl policy [type <name> on|off | labels key=value,...|- | max-runtime DURATION] | spot-check <percent>|off")
 	}
 	name := domain.CapabilityName(args[1])
 	if p.Types == nil {

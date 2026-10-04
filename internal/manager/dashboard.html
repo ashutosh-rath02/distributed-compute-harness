@@ -523,8 +523,14 @@
       const hostNote = !peers ? ""
         : n.hostConflict ? '<span class="note">Reports the same machine ID as ' + escapeHtml(peers) + ", but different hardware — capacity counted for both.</span>"
         : '<span class="note">Reports the same machine as ' + escapeHtml(peers) + " — capacity counted once.</span>";
+      // Spot checks found its results differing from other devices'
+      // (spotcheck.go). Informational: nothing acts on it; the operator
+      // looks into it, then clears it (or revokes the device).
+      const suspectNote = !n.suspect ? ""
+        : '<span class="note">Results differed from other devices\' in ' + escapeHtml(String(n.suspect.count)) + " spot check(s): "
+          + escapeHtml(n.suspect.reason || "") + ' <button class="small secondary" data-clear-suspect="' + escapeHtml(n.nodeId) + '">Clear</button></span>';
       return "<tr>"
-        + "<td>" + escapeHtml(display) + subname + chips + hostNote + "</td>"
+        + "<td>" + escapeHtml(display) + subname + chips + hostNote + suspectNote + "</td>"
         + "<td>" + escapeHtml(platform) + "</td>"
         + '<td><span class="' + stateClass(n.state) + '">' + escapeHtml(n.state) + "</span>" + outdated + "</td>"
         + "<td>" + availabilityCell(n) + "</td>"
@@ -561,6 +567,18 @@
   // Event delegation: rows are re-rendered on every SSE event, so the
   // buttons inside them can't hold their own listeners.
   document.getElementById("nodes").addEventListener("click", async (event) => {
+    const clearButton = event.target.closest("button[data-clear-suspect]");
+    if (clearButton) {
+      clearButton.disabled = true;
+      try {
+        const resp = await api("/nodes/" + encodeURIComponent(clearButton.dataset.clearSuspect) + "/suspect", {method: "DELETE"});
+        if (!resp.ok) throw new Error((await resp.text()).trim() || resp.statusText);
+      } catch (e) {
+        alert("Could not clear the mark: " + e.message);
+      }
+      refreshNodes();
+      return;
+    }
     const hoursButton = event.target.closest("button[data-hours]");
     if (hoursButton) {
       const node = currentNodes.find((n) => n.nodeId === hoursButton.dataset.hours);
@@ -983,11 +1001,15 @@
         const rows = (j.tasks || []).concat(j.reduce ? [j.reduce] : []).map((t) =>
           "<tr><td>" + escapeHtml(t.key) + "</td><td>" + escapeHtml(t.name || "") + '</td><td><span class="' + stateClass(t.state) + '">'
           + escapeHtml(t.state) + "</span></td><td>" + escapeHtml(String(t.attempts || 0)) + "</td><td>" + escapeHtml(t.nodeName || t.node || "-")
-          + '</td><td><div class="output">' + escapeHtml(t.error || t.waiting || "") + "</div>" + fileButtons(t.outputs) + "</td></tr>").join("");
+          + '</td><td><div class="output">' + escapeHtml(t.error || t.waiting || "") + "</div>" + fileButtons(t.outputs)
+          + (t.spotCheck ? '<div class="hint">Spot check: ' + escapeHtml(t.spotCheck) + "</div>" : "") + "</td></tr>").join("");
+        const sc = j.spotChecks;
+        const spot = !sc ? "" : ", spot checks: " + [[sc.matched, "matched"], [sc.mismatch, "mismatch"], [sc.unresolved, "differed"], [sc.checking, "checking"], [sc.skipped, "skipped"]]
+          .filter((p) => p[0]).map((p) => p[0] + " " + p[1]).join(", ");
         return '<details class="card job" data-job="' + escapeHtml(j.id) + '"' + (openJobs.has(j.id) ? " open" : "") + "><summary>"
           + escapeHtml(j.name || j.id) + ' <span class="' + stateClass(j.state) + '">' + escapeHtml(j.state) + "</span> "
           + escapeHtml((c.completed || 0) + "/" + (c.total || 0) + " done" + (c.failed ? ", " + c.failed + " failed" : "")
-            + (c.active ? ", " + c.active + " running" : "") + (c.waiting ? ", " + c.waiting + " waiting" : ""))
+            + (c.active ? ", " + c.active + " running" : "") + (c.waiting ? ", " + c.waiting + " waiting" : "") + spot)
           + "</summary>"
           + (j.error ? '<p class="hint">' + escapeHtml(j.error) + "</p>" : "")
           + ((j.outputs || []).length ? "<p>Result: " + fileButtons(j.outputs) + "</p>" : "")
@@ -1196,7 +1218,10 @@
         return '<tr data-cap="' + escapeHtml(n) + '"><td>' + escapeHtml(n) + (n.indexOf(".") > 0 && (n === "system.execute" || n === "filesystem.read") ? " <em>(raw)</em>" : "")
           + '</td><td><input type="checkbox" class="pol-on"' + (p.enabled ? " checked" : "") + '></td><td><input class="pol-labels" placeholder="raw=ok" value="'
           + escapeHtml(labels) + '"></td><td><input type="number" min="0" class="pol-max" value="' + escapeHtml(String(p.maxRuntimeSeconds || 0)) + '"></td></tr>';
-      }).join("") + "</tbody></table>";
+      }).join("") + "</tbody></table>"
+      + '<p><label>Spot-check results: re-run <input type="number" min="0" max="100" id="polSpot" value="' + escapeHtml(String(currentPolicy.spotCheckPercent || 0))
+      + '">% of each job\'s checkable tasks (at least one) on a different device and compare (0 = off).</label>'
+      + ' <span class="hint">Worth it once devices you don\'t control join. A device whose result is the odd one out is marked, never removed.</span></p>';
   }
 
   document.getElementById("savePolicy").addEventListener("click", async () => {
@@ -1218,7 +1243,8 @@
         && !confirm("Allow raw commands on EVERY device? Anyone with this dashboard could run any program on them. (Labels limit it to chosen devices.)")) return;
     try {
       const resp = await api("/policy", {method: "PUT", headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({types, allowUnlisted: currentPolicy ? !!currentPolicy.allowUnlisted : false})});
+        body: JSON.stringify({types, allowUnlisted: currentPolicy ? !!currentPolicy.allowUnlisted : false,
+          spotCheckPercent: Math.min(100, Math.max(0, Math.round(Number(document.getElementById("polSpot").value) || 0)))})});
       if (!resp.ok) throw new Error((await resp.text()).trim() || resp.statusText);
       refreshCatalog();
     } catch (e) {

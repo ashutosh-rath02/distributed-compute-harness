@@ -46,7 +46,7 @@ func (ps *policyStore) set(p domain.Policy) {
 }
 
 func clonePolicy(p domain.Policy) domain.Policy {
-	out := domain.Policy{AllowUnlisted: p.AllowUnlisted, Types: make(map[domain.CapabilityName]domain.TypePolicy, len(p.Types))}
+	out := domain.Policy{AllowUnlisted: p.AllowUnlisted, SpotCheckPercent: p.SpotCheckPercent, Types: make(map[domain.CapabilityName]domain.TypePolicy, len(p.Types))}
 	for k, v := range p.Types {
 		labels := make(map[string]string, len(v.NodeLabels))
 		for lk, lv := range v.NodeLabels {
@@ -90,6 +90,9 @@ func (s *Server) checkPolicy(capability domain.CapabilityName) error {
 }
 
 func validatePolicy(p domain.Policy) error {
+	if p.SpotCheckPercent < 0 || p.SpotCheckPercent > 100 {
+		return fmt.Errorf("spotCheckPercent must be 0-100")
+	}
 	for name, tp := range p.Types {
 		if _, ok := catalog.Lookup(name); !ok && !catalog.IsRaw(name) {
 			return fmt.Errorf("unknown capability %q", name)

@@ -117,6 +117,14 @@ type Type struct {
 	// DefaultMaxRuntimeSeconds is the per-attempt limit when policy sets
 	// none for this type.
 	DefaultMaxRuntimeSeconds int `json:"defaultMaxRuntimeSeconds,omitempty"`
+	// Deterministic: the same inputs and parameters give byte-identical
+	// outputs on every device (integer-only work, no clock, no
+	// randomness), so a result can be spot-checked by running it again
+	// somewhere else and comparing hashes (manager/spotcheck.go). Not
+	// render.fractal: its floating point differs by CPU (arm64 fuses
+	// multiply-adds, amd64 doesn't), and not archive.zip, which stamps
+	// each entry with the time.
+	Deterministic bool `json:"deterministic,omitempty"`
 }
 
 func num(v float64) *float64 { return &v }
@@ -150,9 +158,10 @@ var builtins = []Type{
 			{Name: "format", Type: Enum, Title: "Output format", Default: "jpg", Enum: []string{"jpg", "png"}},
 			{Name: "quality", Type: Int, Title: "JPEG quality", Default: "85", Min: num(1), Max: num(100)},
 		},
-		Inputs:       Inputs{Min: 1, Max: 1, Extensions: []string{"jpg", "jpeg", "png", "gif"}, Description: "one image"},
-		Outputs:      []string{"{{in.stem}}-{{width}}.{{format}}"},
-		Requirements: domain.ResourceRequirements{MinMemoryBytes: 512 << 20},
+		Inputs:        Inputs{Min: 1, Max: 1, Extensions: []string{"jpg", "jpeg", "png", "gif"}, Description: "one image"},
+		Outputs:       []string{"{{in.stem}}-{{width}}.{{format}}"},
+		Requirements:  domain.ResourceRequirements{MinMemoryBytes: 512 << 20},
+		Deterministic: true,
 	},
 	{
 		Name: "archive.zip", Version: "1", Title: "Zip files together",
@@ -171,16 +180,18 @@ var builtins = []Type{
 		Params: []Param{
 			{Name: "algorithm", Type: Enum, Title: "Algorithm", Default: "sha256", Enum: []string{"sha256", "sha1", "md5"}},
 		},
-		Inputs:  Inputs{Min: 1, Max: domain.MaxWorkloadInputs, Description: "the files to checksum"},
-		Outputs: []string{"hashes.txt"},
-		Reduce:  true,
+		Inputs:        Inputs{Min: 1, Max: domain.MaxWorkloadInputs, Description: "the files to checksum"},
+		Outputs:       []string{"hashes.txt"},
+		Reduce:        true,
+		Deterministic: true,
 	},
 	{
 		Name: "text.count", Version: "1", Title: "Count lines and words",
-		Description: "Count lines, words and bytes in every input (like wc) and write counts.json.",
-		Inputs:      Inputs{Min: 1, Max: domain.MaxWorkloadInputs, Description: "text files"},
-		Outputs:     []string{"counts.json"},
-		Reduce:      true,
+		Description:   "Count lines, words and bytes in every input (like wc) and write counts.json.",
+		Inputs:        Inputs{Min: 1, Max: domain.MaxWorkloadInputs, Description: "text files"},
+		Outputs:       []string{"counts.json"},
+		Reduce:        true,
+		Deterministic: true,
 	},
 	{
 		Name: "render.fractal", Version: "1", Title: "Render part of a fractal image",
@@ -204,10 +215,11 @@ var builtins = []Type{
 		Params: []Param{
 			{Name: "name", Type: String, Title: "Result name", Default: "image.png", Pattern: `[A-Za-z0-9._-]{1,60}\.png`},
 		},
-		Inputs:       Inputs{Min: 1, Max: domain.MaxWorkloadInputs, Extensions: []string{"png", "jpg", "jpeg", "gif"}, Description: "the strips, top first by name"},
-		Outputs:      []string{"{{name}}"},
-		Reduce:       true,
-		Requirements: domain.ResourceRequirements{MinMemoryBytes: 512 << 20},
+		Inputs:        Inputs{Min: 1, Max: domain.MaxWorkloadInputs, Extensions: []string{"png", "jpg", "jpeg", "gif"}, Description: "the strips, top first by name"},
+		Outputs:       []string{"{{name}}"},
+		Reduce:        true,
+		Requirements:  domain.ResourceRequirements{MinMemoryBytes: 512 << 20},
+		Deterministic: true,
 	},
 	{
 		Name: "llm.generate", Version: "1", Title: "Ask a local AI model",

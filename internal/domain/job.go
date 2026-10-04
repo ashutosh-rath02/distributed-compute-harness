@@ -57,6 +57,9 @@ type Job struct {
 	Error       string     `json:"error,omitempty"`
 	CreatedAt   time.Time  `json:"createdAt"`
 	FinishedAt  time.Time  `json:"finishedAt,omitempty"`
+	// SpotCheckPercent is the policy's spot-check share when the job was
+	// submitted (spot checks apply to jobs submitted while they are on).
+	SpotCheckPercent int `json:"spotCheckPercent,omitempty"`
 }
 
 // ReduceTask is the task key of a job's fan-in step.

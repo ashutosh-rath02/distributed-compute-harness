@@ -86,6 +86,11 @@ type Workload struct {
 	Task       string   `json:"task,omitempty"`
 	Attempt    int      `json:"attempt,omitempty"`
 	AvoidNodes []NodeID `json:"avoidNodes,omitempty"`
+	// ExcludeNodes are nodes this workload must never be placed on, even
+	// when no other could take it (unlike AvoidNodes): a spot check never
+	// runs on a device whose result it checks. Manager-only; not sent to
+	// agents.
+	ExcludeNodes []NodeID `json:"excludeNodes,omitempty"`
 	// TimeoutSeconds bounds one attempt — fetch, run and upload — on the
 	// agent (FeatureTimeout); 0 = none. Set from policy at submission.
 	TimeoutSeconds int `json:"timeoutSeconds,omitempty"`
