@@ -44,6 +44,9 @@ type nodeView struct {
 	Availability availabilityView `json:"availability"`
 	// GPUs the device reported.
 	GPUs []domain.GPU `json:"gpus,omitempty"`
+	// Suspect: spot checks found its results differing from other
+	// devices' (spotcheck.go). Informational; the operator clears it.
+	Suspect *domain.SuspectMark `json:"suspect,omitempty"`
 }
 
 func (s *Server) toNodeView(rec *NodeRecord, relations map[domain.NodeID]hostRelation) nodeView {
@@ -70,6 +73,7 @@ func (s *Server) toNodeView(rec *NodeRecord, relations map[domain.NodeID]hostRel
 		HostConflict:          rel.conflict,
 		Availability:          s.availabilityView(rec.Node.Identity.NodeID),
 		GPUs:                  rec.GPUs,
+		Suspect:               s.suspectView(rec.Node.Identity.NodeID),
 	}
 }
 
@@ -102,6 +106,7 @@ func (s *Server) toNodeView(rec *NodeRecord, relations map[domain.NodeID]hostRel
 //	GET  /join-window                whether new devices may join now; POST {"minutes":N} opens it, DELETE closes it (joinwindow.go)
 //	PUT  /nodes/{id}/meta            set the operator's alias/labels for a node (fleet.go)
 //	PUT  /nodes/{id}/availability    when the node takes new work: {"mode":"auto|always|idle|charging|paused","idleMinutes":N,"hours":"22:00-07:00"} (availability.go)
+//	DELETE /nodes/{id}/suspect       clear the mark spot checks put on a device whose results differed (spotcheck.go)
 //	GET  /audit?log=&limit=          the audit log, newest first: log=security (default) or noise (audit.go)
 //	GET  /                           a local web dashboard (node list + "add a device" form)
 //	GET  /live                       the one-screen live view (devices, running work, events)
@@ -175,6 +180,7 @@ func (s *Server) NewHTTPHandler() http.Handler {
 	mux.HandleFunc("POST /join-requests/{id}/reject", s.apiDecideJoinRequest(false))
 	mux.HandleFunc("PUT /nodes/{id}/meta", s.apiPutNodeMeta)
 	mux.HandleFunc("PUT /nodes/{id}/availability", s.apiPutNodeAvailability)
+	mux.HandleFunc("DELETE /nodes/{id}/suspect", s.apiClearSuspect)
 	mux.HandleFunc("GET /audit", s.apiListAudit)
 	mux.HandleFunc("POST /artifacts", s.apiPostArtifact)
 	mux.HandleFunc("GET /artifacts", s.apiListArtifacts)

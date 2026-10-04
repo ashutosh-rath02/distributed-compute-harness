@@ -254,6 +254,7 @@ func (s *Server) SubmitJob(ctx context.Context, spec JobSpec) (domain.Job, error
 		ID: domain.JobID(id), Name: spec.Name, Tasks: spec.Tasks, Reduce: spec.Reduce,
 		MaxAttempts: spec.MaxAttempts, State: domain.JobRunning, CreatedAt: time.Now().UTC(), Priority: spec.Priority,
 		Workflow: spec.Workflow, Stage: spec.Stage,
+		SpotCheckPercent: s.policy.get().SpotCheckPercent,
 	}
 	if s.store != nil {
 		if err := s.store.UpsertJob(job); err != nil {

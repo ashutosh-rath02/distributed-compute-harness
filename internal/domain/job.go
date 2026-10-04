@@ -64,6 +64,9 @@ type Job struct {
 	// (workflow.go): the workflow's progress is derived from them.
 	Workflow WorkflowID `json:"workflow,omitempty"`
 	Stage    int        `json:"stage,omitempty"`
+	// SpotCheckPercent is the policy's spot-check share when the job was
+	// submitted (spot checks apply to jobs submitted while they are on).
+	SpotCheckPercent int `json:"spotCheckPercent,omitempty"`
 }
 
 // ReduceTask is the task key of a job's fan-in step.

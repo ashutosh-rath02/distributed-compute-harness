@@ -135,6 +135,8 @@ func main() {
 		err = requireArgs(args, 2, "revoke <id>", func() error { return client.cmdRevokeNode(args[1]) })
 	case "revocations":
 		err = client.cmdRevocations()
+	case "clear-suspect":
+		err = requireArgs(args, 2, "clear-suspect <id>", func() error { return client.cmdClearSuspect(args[1]) })
 	case "join-requests":
 		err = client.cmdJoinRequests()
 	case "join-window":
@@ -289,6 +291,13 @@ Commands:
                         which images containers may run (REF: a repository,
                         name@sha256:..., or registry/namespace/*), whether by
                         tag instead of digest, and whether with a network
+  policy spot-check <percent>|off
+                        re-run that share of each job's checkable tasks (at
+                        least one) on a different device and compare the
+                        results; a device whose result is the odd one out
+                        is marked suspect (worth it once devices you don't
+                        control join)
+  clear-suspect <id>    clear a device's suspect mark once you looked into it
   map -type T [-each FILE|GLOB ... | -count N] [key=value ...]
       [-reduce-type T2 [-reduce-param key=value ...]]
                         a job of typed tasks, e.g.
@@ -612,6 +621,8 @@ type nodeView struct {
 		Reason    string              `json:"reason"`
 	} `json:"availability"`
 	GPUs []domain.GPU `json:"gpus"`
+	// Suspect: spot checks found its results differing (spotcheck.go).
+	Suspect *domain.SuspectMark `json:"suspect"`
 }
 
 // displayName is the operator's alias when set, else the agent's name.
@@ -656,6 +667,7 @@ func (c *apiClient) cmdNodes() error {
 		if n.State == domain.NodeReady && !n.Availability.Available {
 			agent += "  [no new work: " + n.Availability.Reason + "]"
 		}
+		agent += suspectNote(n.Suspect)
 		busy := fmt.Sprintf("%d/%d", n.Running, max(n.Slots, 1))
 		fmt.Printf("%-24s %-20s %-12s %-8.1f %-6s %-14s %s\n",
 			n.NodeID, truncate(n.displayName(), 20), n.State, n.Metrics.CPUPercent, busy, lastSeen, agent)
@@ -687,6 +699,9 @@ func (c *apiClient) cmdNode(id string) error {
 	}
 	if u := n.Metrics.Use; u != nil {
 		fmt.Printf("Use            %s\n", describeUse(*u))
+	}
+	if m := n.Suspect; m != nil {
+		fmt.Printf("Spot checks    %s (%d time(s), last %s); once looked into: harnessctl clear-suspect %s\n", m.Reason, m.Count, m.Last.Local().Format(time.RFC3339), n.NodeID)
 	}
 
 	var resources []domain.Resource

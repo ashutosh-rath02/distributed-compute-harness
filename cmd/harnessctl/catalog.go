@@ -210,7 +210,11 @@ func cmdPolicy(c *apiClient, args []string) error {
 				fmt.Printf("\n%s: %s\n", t.Name, containerPolicyLine(t.Policy))
 			}
 		}
+		fmt.Println("\n" + describeSpotCheck(p.SpotCheckPercent))
 		return nil
+	}
+	if args[0] == "spot-check" {
+		return c.setSpotCheck(p, args[1:])
 	}
 	if len(args) < 3 || args[0] != "type" {
 		return errors.New("usage: harnessctl policy [type <name> on|off | labels key=value,...|- | max-runtime DURATION]\n       " + containerPolicyUsage)

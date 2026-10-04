@@ -27,6 +27,11 @@ type TypePolicy struct {
 type Policy struct {
 	Types         map[CapabilityName]TypePolicy `json:"types,omitempty"`
 	AllowUnlisted bool                          `json:"allowUnlisted,omitempty"`
+	// SpotCheckPercent is the share (0-100) of each job's deterministic
+	// tasks the manager re-runs on a different device to compare results,
+	// at least one per job; 0 = off (spotcheck.go). Only worth it once
+	// devices you don't control join.
+	SpotCheckPercent int `json:"spotCheckPercent,omitempty"`
 }
 
 // PermissivePolicy allows everything (embedding and tests, and the

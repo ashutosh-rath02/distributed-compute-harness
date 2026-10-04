@@ -183,6 +183,7 @@ func (g *grantTable) verifiedOutputs(w domain.Workload, claimed []domain.Artifac
 // so garbage collection keeps them for another retention period).
 func (s *Server) assign(ctx context.Context, conn domain.Conn, w domain.Workload) {
 	payload := protocol.WorkloadAssignPayload{Workload: w}
+	payload.Workload.ExcludeNodes = nil // a spot check must look like any other task to the device
 	if w.HasFiles() {
 		token, err := s.grants.mint(w.ID, w.Target)
 		if err != nil {

@@ -192,6 +192,8 @@ type jobTaskView struct {
 	Outputs  []domain.ArtifactRef `json:"outputs"`
 	Error    string               `json:"error"`
 	Waiting  string               `json:"waiting"`
+	// SpotCheck: its result re-run on another device and compared.
+	SpotCheck string `json:"spotCheck"`
 }
 
 type jobView struct {
@@ -203,10 +205,11 @@ type jobView struct {
 	Counts      struct {
 		Total, Completed, Active, Waiting, Failed, Canceled int
 	} `json:"counts"`
-	Tasks    []jobTaskView        `json:"tasks"`
-	Reduce   *jobTaskView         `json:"reduce"`
-	Outputs  []domain.ArtifactRef `json:"outputs"`
-	Priority domain.Priority      `json:"priority"`
+	Priority   domain.Priority      `json:"priority"`
+	Tasks      []jobTaskView        `json:"tasks"`
+	Reduce     *jobTaskView         `json:"reduce"`
+	Outputs    []domain.ArtifactRef `json:"outputs"`
+	SpotChecks *spotCheckCounts     `json:"spotChecks"`
 }
 
 func (c *apiClient) cmdJobs() error {
@@ -229,6 +232,9 @@ func printTask(t jobTaskView) {
 	detail := t.Error
 	if t.Waiting != "" {
 		detail = "waiting: " + t.Waiting
+	}
+	if t.SpotCheck != "" {
+		detail = strings.TrimSpace(detail + "  [spot check: " + t.SpotCheck + "]")
 	}
 	files := ""
 	if len(t.Outputs) > 0 {
@@ -256,6 +262,9 @@ func (c *apiClient) cmdJob(id string) error {
 	}
 	fmt.Printf("\nProgress  %d/%d completed, %d running, %d waiting, %d failed, %d canceled (up to %d attempts each)\n\n",
 		j.Counts.Completed, j.Counts.Total, j.Counts.Active, j.Counts.Waiting, j.Counts.Failed, j.Counts.Canceled, j.MaxAttempts)
+	if j.SpotChecks != nil {
+		fmt.Printf("Checks    %s\n\n", j.SpotChecks)
+	}
 	fmt.Printf("  %-7s %-20s %-10s %-8s %-26s %-10s %s\n", "TASK", "NAME", "STATE", "ATTEMPTS", "NODE", "OUTPUTS", "")
 	for _, t := range j.Tasks {
 		printTask(t)
