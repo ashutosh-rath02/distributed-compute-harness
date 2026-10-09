@@ -218,6 +218,7 @@ func (s *Server) NewHTTPHandler() http.Handler {
 	mux.HandleFunc("DELETE /standby", s.apiRemoveStandby)
 	mux.HandleFunc("POST /standby/promote", s.apiPromoteActive)
 	s.registerRemoteAccessRoutes(mux) // GET/PUT /remote-access, POST /remote-access/rotate (remote.go)
+	s.registerUserRoutes(mux)        // GET /whoami, /users..., POST /rotate/{what} (secrets.go)
 	// Host check and CSRF protection first (apiguard.go), then operator
 	// authentication (operatorauth.go) — browser defenses and the
 	// credential check are independent layers.

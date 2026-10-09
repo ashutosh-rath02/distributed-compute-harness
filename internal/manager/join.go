@@ -52,7 +52,7 @@ func (s *Server) JoinInfo() JoinInfo {
 		JoinURL:        s.joinURL(),
 		JoinPort:       s.joinPort(),
 		Fingerprint:    s.cfg.Fingerprint,
-		PairingToken:   s.cfg.PairingToken,
+		PairingToken:   s.pairingToken(),
 		Insecure:       s.cfg.Fingerprint == "",
 		AgentBinaries:  s.agents.views(),
 		RelayAvailable: s.cfg.RelayAddr != "" && s.cfg.RelayToken != "",
@@ -109,7 +109,7 @@ func (s *Server) scriptInfo(platform string) joinscript.Info {
 	}
 	return joinscript.Info{
 		Fingerprint:          s.cfg.Fingerprint,
-		PairingToken:         s.cfg.PairingToken,
+		PairingToken:         s.pairingToken(),
 		Insecure:             s.cfg.Fingerprint == "",
 		AgentBinaryAvailable: ok,
 		AgentBinarySHA256:    build.SHA256,

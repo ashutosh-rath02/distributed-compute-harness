@@ -61,6 +61,9 @@ type Config struct {
 	// AIKey is the OpenAI-compatible API's own credential (openai.go):
 	// accepted only on /v1/. Empty: only the operator credentials work.
 	AIKey string
+	// OperatorTokenFile, AIKeyFile and PairingTokenFile are where rotation
+	// (secrets.go) saves a new secret; empty = not saved to a file.
+	OperatorTokenFile, AIKeyFile, PairingTokenFile string
 	// Artifacts stores workload input/output files (artifacts.go); nil
 	// disables workload files. ArtifactRetention is how long an unused
 	// artifact is kept (default 7 days).
@@ -210,6 +213,10 @@ type Server struct {
 	failover *failoverState
 	// remote: the remote dashboard through the relay (remote.go).
 	remote *remoteAccess
+	// users, secrets, authFail: named users, rotatable secrets and the failed-sign-in limiter (users.go, secrets.go).
+	users    userTable
+	secrets  secretState
+	authFail authLimiter
 }
 
 // pendingCommand tracks who a dispatched command was sent to, so its
@@ -1033,7 +1040,7 @@ func (s *Server) handleRegister(ctx context.Context, conn domain.Conn, env *prot
 				return ""
 			}
 			admittedBy = "approval:" + code
-		case payload.PairingToken == s.cfg.PairingToken:
+		case s.pairingMatches(payload.PairingToken):
 			admittedBy = "pairing-token"
 		case s.enrollments.consume(payload.PairingToken):
 			admittedBy = "enrollment:" + tokenPrefix(payload.PairingToken)
