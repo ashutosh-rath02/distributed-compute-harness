@@ -39,6 +39,8 @@ type TaskSpec struct {
 	Inputs       []ArtifactRef        `json:"inputs,omitempty"`
 	Outputs      []string             `json:"outputs,omitempty"`
 	Requirements ResourceRequirements `json:"requirements,omitempty"`
+	// TimeoutSeconds limits one attempt (never above the policy's limit).
+	TimeoutSeconds int `json:"timeoutSeconds,omitempty"`
 }
 
 // Job is one request fanned out as many tasks (each run as ordinary
@@ -67,6 +69,10 @@ type Job struct {
 	// SpotCheckPercent is the policy's spot-check share when the job was
 	// submitted (spot checks apply to jobs submitted while they are on).
 	SpotCheckPercent int `json:"spotCheckPercent,omitempty"`
+	// Schedule and Slot say which schedule run started it (schedules.go);
+	// empty for one submitted by hand.
+	Schedule string `json:"schedule,omitempty"`
+	Slot     string `json:"slot,omitempty"`
 }
 
 // ReduceTask is the task key of a job's fan-in step.

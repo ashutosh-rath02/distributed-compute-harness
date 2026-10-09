@@ -230,6 +230,8 @@ type JobSpec struct {
 	// (workflows.go).
 	Workflow domain.WorkflowID
 	Stage    int
+	// Schedule and Slot tag a job a schedule started (schedules.go).
+	Schedule, Slot string
 	// ahead: the tasks' inputs don't exist yet (a later workflow stage,
 	// checked before the stages before it have run). checkJob compiles
 	// and places them as placeholders, like a reduce's parts, and never
@@ -253,7 +255,7 @@ func (s *Server) SubmitJob(ctx context.Context, spec JobSpec) (domain.Job, error
 	job := domain.Job{
 		ID: domain.JobID(id), Name: spec.Name, Tasks: spec.Tasks, Reduce: spec.Reduce,
 		MaxAttempts: spec.MaxAttempts, State: domain.JobRunning, CreatedAt: time.Now().UTC(), Priority: spec.Priority,
-		Workflow: spec.Workflow, Stage: spec.Stage,
+		Workflow: spec.Workflow, Stage: spec.Stage, Schedule: spec.Schedule, Slot: spec.Slot,
 		SpotCheckPercent: s.policy.get().SpotCheckPercent,
 	}
 	if s.store != nil {
@@ -513,6 +515,7 @@ func (s *Server) submitAttempt(ctx context.Context, job domain.Job, key string, 
 		Target: t.Target, Command: t.Command, Args: t.Args, Capability: t.Capability, Params: t.Params,
 		Requirements: t.Requirements, RestartPolicy: domain.RestartNever, Inputs: inputs, Outputs: t.Outputs,
 		Job: job.ID, Task: key, Attempt: tp.attempts + 1, AvoidNodes: tp.avoid, Priority: job.Priority,
+		TimeoutSeconds: t.TimeoutSeconds,
 	}
 	if _, typed := catalog.Lookup(t.Capability); typed {
 		spec.Outputs = nil // the type names them again for these inputs

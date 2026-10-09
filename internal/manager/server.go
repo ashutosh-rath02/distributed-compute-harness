@@ -412,6 +412,9 @@ type WorkloadSpec struct {
 	Priority domain.Priority
 	// ExcludeNodes: never place it there (a spot check, spotcheck.go).
 	ExcludeNodes []domain.NodeID
+	// TimeoutSeconds limits one attempt, never above the policy's limit
+	// (a workflow stage's timeoutSeconds); 0 = the policy's.
+	TimeoutSeconds int
 }
 
 // ErrInvalidWorkload is a submission that can never be valid as given
@@ -440,6 +443,9 @@ func (s *Server) Submit(ctx context.Context, spec WorkloadSpec) (domain.Workload
 		return domain.Workload{}, err
 	}
 	timeout := s.policyFor(spec.Capability).MaxRuntimeSeconds
+	if spec.TimeoutSeconds > 0 && (timeout == 0 || spec.TimeoutSeconds < timeout) {
+		timeout = spec.TimeoutSeconds
+	}
 	target, command, args, capability, params, req, restartPolicy := spec.Target, spec.Command, spec.Args, spec.Capability, spec.Params, spec.Requirements, spec.RestartPolicy
 	if spec.Attempt < 0 || (spec.Job == "") != (spec.Task == "") {
 		return domain.Workload{}, fmt.Errorf("%w: job, task and attempt go together", ErrInvalidWorkload)
