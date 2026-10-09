@@ -109,6 +109,8 @@ func main() {
 		err = cmdWorkflow(client, args[1:])
 	case "workflows":
 		err = client.cmdWorkflows()
+	case "mapreduce":
+		err = cmdMapReduce(client, args[1:])
 	case "node":
 		err = requireArgs(args, 2, "node <id>", func() error { return client.cmdNode(args[1]) })
 	case "resources":
@@ -348,6 +350,10 @@ Commands:
   workflow outputs <workflow-id> [dir]
                         download a finished workflow's results
   workflows             list workflows and how far each got
+  mapreduce -in BIG.txt -chunks N -map "TYPE ..." -reduce "TYPE ..."
+                        cut a big text file into chunks, run a task on each
+                        across the fleet, fold the results into one
+                        (docs/examples/wordcount.md)
   workloads             list all known workloads
   workload <id>         show one workload's request, state, and captured output
   cancel <workload-id>  request cancellation of a running workload

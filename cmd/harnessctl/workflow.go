@@ -251,6 +251,8 @@ type workflowStageView struct {
 	} `json:"counts"`
 	Error   string               `json:"error"`
 	Waiting string               `json:"waiting"`
+	Reason  string               `json:"reason"`
+	When    string               `json:"when"`
 	Outputs []domain.ArtifactRef `json:"outputs"`
 }
 
@@ -315,6 +317,12 @@ func (c *apiClient) cmdWorkflowShow(id string) error {
 		fmt.Printf("  %-5d %-28s %-14s %-10s %-6s %s\n", st.Stage, truncate(what, 28), stageHow(st), st.State, done, st.Job)
 		if st.Combine != nil {
 			fmt.Printf("        then combined: %s (%s)\n", st.Combine.Title, st.Combine.Type)
+		}
+		if st.When != "" {
+			fmt.Printf("        when: %s\n", st.When)
+		}
+		if st.Reason != "" && st.Reason != st.Error {
+			fmt.Printf("        %s\n", st.Reason)
 		}
 		if st.Waiting != "" {
 			fmt.Printf("        waiting: %s\n", st.Waiting)
