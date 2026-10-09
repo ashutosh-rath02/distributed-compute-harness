@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push to the same branch makes the older run pointless. The tests
+# bind fixed 127.0.0.1 ports, so two runs never share a machine anyway.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# Action pinning policy for every workflow here: first-party actions
+# (actions/*, github/*) by major version tag, which GitHub maintains and
+# Dependabot (.github/dependabot.yml) bumps with a reviewable PR. Nothing
+# third-party is used; the release is made with the preinstalled `gh`.
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4 # major tag: see the policy at the top
+      - uses: actions/setup-go@v5 # major tag: see the policy at the top
+        with:
+          go-version-file: go.mod
+      - name: Build
+        run: go build ./...
+      - name: Vet
+        run: go vet ./...
+      - name: gofmt (line endings ignored)
+        run: bash scripts/fmt-check.sh
+      # -p 1 everywhere: several packages and every integration test bind
+      # fixed 127.0.0.1 ports, so packages must not run in parallel.
+      - name: Unit tests
+        run: go test -p 1 ./internal/... ./cmd/... ./scripts/...
+      - name: Integration tests
+        run: go test -p 1 ./test/integration
+
+  race:
+    name: race detector (linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4 # major tag: see the policy at the top
+      - uses: actions/setup-go@v5 # major tag: see the policy at the top
+        with:
+          go-version-file: go.mod
+      # -race needs cgo, so a C compiler (preinstalled on the runner image,
+      # installed here so the job does not depend on that).
+      - name: Install gcc
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc libc6-dev
+      - name: Unit tests with -race
+        env:
+          CGO_ENABLED: "1"
+        run: go test -race -p 1 ./internal/... ./cmd/... ./scripts/...
+      - name: Integration tests with -race
+        env:
+          CGO_ENABLED: "1"
+        run: go test -race -p 1 ./test/integration
+
+  agents:
+    name: cross-compile agents
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4 # major tag: see the policy at the top
+      - uses: actions/setup-go@v5 # major tag: see the policy at the top
+        with:
+          go-version-file: go.mod
+      - name: Build every agent target
+        run: bash scripts/build-agents.sh
+      - name: Manager accepts the set
+        run: bash scripts/check-agents.sh
+      - name: Agent reports the injected version
+        run: |
+          out="$(HARNESS_VERSION=9.9.9 bash -c 'source scripts/version.sh && go build -ldflags "$VERSION_LDFLAGS" -o /tmp/agent-version-check ./cmd/agent && /tmp/agent-version-check -version')"
+          echo "$out"
+          case "$out" in "agent 9.9.9 "*) ;; *) echo "version was not injected" >&2; exit 1;; esac
