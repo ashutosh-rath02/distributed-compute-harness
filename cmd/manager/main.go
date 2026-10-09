@@ -242,6 +242,9 @@ func main() {
 		EnrollmentPublisher: enrollmentPublisher,
 		OperatorToken:       operatorToken,
 		AIKey:               aiKey,
+		OperatorTokenFile:   *operatorTokenFile,
+		AIKeyFile:           *aiKeyFile,
+		PairingTokenFile:    filepath.Join(filepath.Dir(*dbPath), "pairing-token"), // where the launchers keep it (rotation rewrites it)
 		KeepAwake:           *keepAwake,
 		Artifacts:           artifactStore,
 		ArtifactRetention:   *artifactRetention,
