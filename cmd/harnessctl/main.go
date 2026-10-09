@@ -172,6 +172,7 @@ func main() {
 			return client.cmdJoin(mode, addr, platform)
 		})
 	default:
+		fmt.Fprintf(os.Stderr, "harnessctl: unknown command %q\n\n", args[0])
 		usage()
 		os.Exit(2)
 	}
@@ -184,6 +185,14 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `harnessctl [-api-addr URL] <command> [args]
+
+First steps (run on the manager's machine, in the folder holding harness-operator-token,
+or pass -token-file / set HARNESS_OPERATOR_TOKEN):
+  harnessctl nodes                         is any device connected? (State READY means it can take work)
+  harnessctl join-window open              let new devices ask to join, then approve them: harnessctl join-requests
+  harnessctl tasks                         what the fleet can run
+  harnessctl do cpu.burn seconds=10        run one task on whichever device has room
+  harnessctl do -in photo.jpg image.resize width=800
 
 Commands:
   nodes                 list all known nodes
@@ -601,6 +610,9 @@ func (t *bearerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		req.Header.Set("Authorization", "Bearer "+t.token)
 	}
 	resp, err := t.base.RoundTrip(req)
+	if err != nil && isConnectionRefused(err) {
+		return nil, fmt.Errorf("cannot reach the manager at %s: is it running? harnessctl talks to the manager on this machine (127.0.0.1:7421) unless you pass -api-addr http://HOST:PORT", req.URL.Host)
+	}
 	if err == nil && resp.StatusCode == http.StatusUnauthorized {
 		resp.Body.Close()
 		if t.token == "" {
@@ -669,7 +681,8 @@ func (c *apiClient) cmdNodes() error {
 		return err
 	}
 	if len(nodes) == 0 {
-		fmt.Println("No nodes known to the harness yet.")
+		fmt.Println("No devices have joined yet.")
+		fmt.Println("To add one: harnessctl join-window open, then open the address the dashboard shows in the new device's browser and approve it with harnessctl approve <code>. Or press \"Allow new devices\" on the dashboard (harnessctl login-url prints its link).")
 		return nil
 	}
 
