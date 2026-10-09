@@ -1,0 +1,25 @@
+# Home Harness relay image: lets devices that are not on your home network reach
+# the manager. It holds no secrets about your fleet and no state.
+#
+#   docker build -f packaging/docker/Dockerfile.relay -t home-harness-relay .     (from the repo root)
+#
+# NOT BUILT OR RUN by the author (no Docker available); reviewed by hand only.
+# There is no HEALTHCHECK: the relay has no token-free status route yet and the
+# image has no shell or curl. Use your orchestrator's TCP check on port 8420.
+
+ARG GO_VERSION=1.27
+FROM golang:${GO_VERSION} AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/relay ./cmd/relay
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build /out/relay /relay
+USER 65532:65532
+EXPOSE 8420
+# Plain TCP relay on 8420. For internet enrollment links also pass
+# -public-addr, -public-tls-cert, -public-tls-key, -alias-key and
+# -enrollment-publish-token (mount the certificate read-only): see docker-compose.yml.
+ENTRYPOINT ["/relay", "-addr", ":8420"]

@@ -1,0 +1,69 @@
+# Home Harness manager (and optionally the relay) with Docker Compose.
+#
+#   cp .env.example .env      # then fill in the two values; see below
+#   docker compose up -d --build
+#   docker compose exec manager /harnessctl nodes      # operate it from inside the container
+#
+# NOT RUN by the author (no Docker available); reviewed by hand only.
+#
+# Build context is the repository root, so run it from the repo root:
+#   docker compose -f packaging/docker/docker-compose.yml up -d --build
+#
+# Required .env values:
+#   HH_PAIRING_TOKEN   a long random secret devices present to join: openssl rand -hex 32
+#   HH_ADVERTISE_ADDR  this computer's address on your network, host:port, e.g. 192.168.1.20:7420
+# (The pairing token is visible in `docker inspect`: fine on a home server you
+# alone use, otherwise put the file in a secret manager and generate the file.)
+#
+# Networking: agents connect to port 7420 and the join page is 7419, both on your
+# LAN. The operator API (7421) is published on THIS computer only (127.0.0.1);
+# every call still needs the operator token (docker compose exec manager cat /data/operator-token).
+# LAN discovery by multicast does not cross Docker's network, so devices are told
+# the address (HH_ADVERTISE_ADDR) instead. Don't publish 7421 on 0.0.0.0.
+
+services:
+  manager:
+    build:
+      context: ../..
+      dockerfile: packaging/docker/Dockerfile.manager
+    image: home-harness-manager
+    restart: unless-stopped
+    command:
+      - "-pairing-token"
+      - "${HH_PAIRING_TOKEN:?set HH_PAIRING_TOKEN in .env (openssl rand -hex 32)}"
+      - "-advertise-addr"
+      - "${HH_ADVERTISE_ADDR:?set HH_ADVERTISE_ADDR in .env (host:port that devices can reach, e.g. 192.168.1.20:7420)}"
+    ports:
+      - "7420:7420"
+      - "7419:7419"
+      - "127.0.0.1:7421:7421"
+    volumes:
+      - harness-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      HOME_HARNESS_SUPERVISED: "1"
+
+  # Optional: for devices outside your home network. Start with
+  #   docker compose --profile relay up -d
+  # and give the manager -relay-addr / -relay-token (add them to its command above).
+  relay:
+    profiles: ["relay"]
+    build:
+      context: ../..
+      dockerfile: packaging/docker/Dockerfile.relay
+    image: home-harness-relay
+    restart: unless-stopped
+    ports:
+      - "8420:8420"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  harness-data:

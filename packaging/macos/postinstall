@@ -1,0 +1,12 @@
+#!/bin/bash
+# Runs as root at the end of the .pkg install (pkgbuild --scripts). It starts
+# the manager for the user who is logged in at the console, if any; everyone
+# else gets it at their next login (the plists live in /Library/LaunchAgents).
+set -u
+user="$(stat -f%Su /dev/console 2>/dev/null || true)"
+if [ -n "$user" ] && [ "$user" != "root" ]; then
+  uid="$(id -u "$user")"
+  launchctl bootout "gui/$uid/com.homeharness.manager" 2>/dev/null || true
+  launchctl bootstrap "gui/$uid" /Library/LaunchAgents/com.homeharness.manager.plist 2>/dev/null || true
+fi
+exit 0

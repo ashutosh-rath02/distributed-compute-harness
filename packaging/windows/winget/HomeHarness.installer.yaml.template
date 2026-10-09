@@ -1,0 +1,29 @@
+# winget manifest TEMPLATE (installer file). NOT submitted or validated: it
+# needs a published, code-signed release zip and `winget validate`. Replace
+# every @...@ value, drop the ".template" suffix, and keep the three files
+# (version, installer, locale) together in
+#   manifests/h/HomeHarness/HomeHarness/<version>/
+# Schema: https://github.com/microsoft/winget-pkgs/tree/master/doc/manifest
+#
+# This installs the programs as portable commands (home-harness-agent,
+# home-harness-manager, harnessctl). It does NOT start them at sign-in: run
+# scripts\windows-manager\install.ps1 from the bundle for the managed install,
+# or join from the dashboard. Remove with `winget uninstall`; to also remove the
+# scheduled tasks and data, use packaging\windows\uninstall.ps1.
+PackageIdentifier: HomeHarness.HomeHarness
+PackageVersion: "@VERSION@"
+InstallerType: zip
+NestedInstallerType: portable
+NestedInstallerFiles:
+  - RelativeFilePath: agent.exe
+    PortableCommandAlias: home-harness-agent
+  - RelativeFilePath: manager.exe
+    PortableCommandAlias: home-harness-manager
+  - RelativeFilePath: harnessctl.exe
+    PortableCommandAlias: harnessctl
+Installers:
+  - Architecture: x64
+    InstallerUrl: "@BASE_URL@/home-harness-@VERSION@-windows-amd64.zip"
+    InstallerSha256: "@SHA256_WINDOWS_AMD64@"
+ManifestType: installer
+ManifestVersion: 1.6.0

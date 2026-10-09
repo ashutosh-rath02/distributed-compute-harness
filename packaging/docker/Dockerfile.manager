@@ -1,0 +1,54 @@
+# Home Harness manager image.
+#
+#   docker build -f packaging/docker/Dockerfile.manager -t home-harness-manager .     (from the repo root)
+#
+# NOT BUILT OR RUN by the author (no Docker on the machine it was written on);
+# reviewed by hand only. Treat the first build as a test.
+#
+# Inside the container the API listens on 0.0.0.0 because that is the only
+# address a published port can reach. Safety comes from how you publish it:
+# docker-compose.yml maps it to 127.0.0.1 on the host, and every API call
+# still needs the operator token. Never publish 7421 on a LAN or the internet.
+
+ARG GO_VERSION=1.27
+FROM golang:${GO_VERSION} AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+ARG VERSION=dev
+# Static, no cgo, stripped; also builds the agents the manager hands out to new devices.
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/manager ./cmd/manager \
+ && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/harnessctl ./cmd/harnessctl \
+ && mkdir -p /out/agents \
+ && for t in linux/amd64 linux/arm64 windows/amd64 darwin/arm64 darwin/amd64; do \
+      os="${t%/*}"; arch="${t#*/}"; ext=""; [ "$os" = windows ] && ext=".exe"; \
+      CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags "-s -w" -o "/out/agents/agent-$os-$arch$ext" ./cmd/agent; \
+    done \
+ && mkdir -p /seed/data && chown -R 65532:65532 /seed/data
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build /out/manager /manager
+COPY --from=build /out/harnessctl /harnessctl
+COPY --from=build /out/agents /agents
+# An owned, empty state folder, so the named volume mounted here starts writable by the non-root user.
+COPY --from=build --chown=65532:65532 /seed/data /data
+USER 65532:65532
+WORKDIR /data
+VOLUME ["/data"]
+# 7420 agents (TLS WebSocket), 7419 join page, 7421 operator API
+EXPOSE 7419 7420 7421
+# Exec form only: distroless has no shell. -healthcheck asks the API's token-free
+# /server-proof route, so the check needs no secret.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD ["/manager", "-healthcheck", "-api-addr", "127.0.0.1:7421"]
+ENTRYPOINT ["/manager", \
+  "-addr", ":7420", "-api-addr", "0.0.0.0:7421", "-join-addr", ":7419", \
+  "-db", "/data/manager.db", "-tls-dir", "/data/tls", \
+  "-operator-token-file", "/data/operator-token", "-ai-key-file", "/data/ai-key", \
+  "-remote-access-file", "/data/remote-access", "-artifact-dir", "/data/artifacts", \
+  "-disable-discovery", \
+  "-agent-binary", "/agents/agent-linux-amd64", "-agent-binary", "/agents/agent-linux-arm64", \
+  "-agent-binary", "/agents/agent-windows-amd64.exe", \
+  "-agent-binary", "/agents/agent-darwin-arm64", "-agent-binary", "/agents/agent-darwin-amd64"]
+# Pass -pairing-token (required) and -advertise-addr as arguments: see docker-compose.yml.

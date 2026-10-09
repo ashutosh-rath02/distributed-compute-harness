@@ -1,0 +1,19 @@
+# winget manifest TEMPLATE (default locale file). See HomeHarness.installer.yaml.template.
+PackageIdentifier: HomeHarness.HomeHarness
+PackageVersion: "@VERSION@"
+PackageLocale: en-US
+Publisher: Home Harness maintainers
+PackageName: Home Harness
+PackageUrl: https://github.com/ashutosh-rath02/distributed-compute-harness
+License: "@LICENSE@"
+ShortDescription: Use the spare computers in your home as one pool.
+Description: |-
+  Home Harness is a small manager that coordinates agents on your own
+  Windows, macOS, Linux and Android devices, so a task can run on whichever
+  device has room. Everything stays on your network.
+Tags:
+  - distributed-computing
+  - self-hosted
+  - homelab
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

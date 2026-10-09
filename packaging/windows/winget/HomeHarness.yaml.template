@@ -1,0 +1,6 @@
+# winget manifest TEMPLATE (version file). See HomeHarness.installer.yaml.template.
+PackageIdentifier: HomeHarness.HomeHarness
+PackageVersion: "@VERSION@"
+DefaultLocale: en-US
+ManifestType: version
+ManifestVersion: 1.6.0
