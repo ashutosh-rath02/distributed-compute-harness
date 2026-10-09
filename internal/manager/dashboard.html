@@ -121,7 +121,7 @@
     <div class="card"><span class="hint">Running / queued</span><div class="metric" id="queueCount">-</div></div>
   </div>
   <p id="standbyLine" class="hint" hidden></p>
-  <p class="sub">Operator dashboard — your sign-in is kept only in this browser, for this exact address. Generated onboarding scripts below include this harness's pairing token in plain text. <a href="#" id="signout">Sign out of this browser</a></p>
+  <p class="sub">Operator dashboard — your sign-in is kept only in this browser, for this exact address. Generated onboarding scripts below include this harness's pairing token in plain text. <span id="whoami"></span> <a href="#" id="signout">Sign out of this browser</a></p>
 
   <h2>Nodes</h2>
   <div id="nodes"></div>
@@ -1634,6 +1634,7 @@
     await signInFromLink();
     await refreshNodes();
     if (signedOut) return;
+    api("/whoami").then((r) => r.json()).then((w) => { document.getElementById("whoami").textContent = "Signed in as " + w.user + " (" + w.role + ")."; }).catch(() => {});
     refreshWorkloads();
     refreshJobs();
     refreshWorkflows();

@@ -131,7 +131,7 @@ func FuzzAPIBodies(f *testing.F) {
 		case <-time.After(10 * time.Second):
 			t.Fatalf("%s %s hung on body %q", route.method, route.path, body)
 		}
-		if rec.Code >= 500 && rec.Code != http.StatusBadGateway && rec.Code != http.StatusGatewayTimeout {
+		if rec.Code >= 500 && rec.Code != http.StatusBadGateway && rec.Code != http.StatusGatewayTimeout && rec.Code != http.StatusServiceUnavailable { // 503: a feature that is switched off (no artifact store)
 			io.Copy(io.Discard, rec.Body)
 			t.Fatalf("%s %s -> %d for body %q: %s", route.method, route.path, rec.Code, body, rec.Body.String())
 		}

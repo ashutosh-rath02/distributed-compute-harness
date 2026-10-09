@@ -1,0 +1,2 @@
+# Go fuzz corpus files must keep LF line endings.
+**/testdata/fuzz/** -text
