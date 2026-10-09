@@ -121,7 +121,7 @@ func testInternetEnrollmentThroughPublicRelay(t *testing.T, secure bool) {
 	if strings.Contains(setupText, privateSession) {
 		t.Fatal("public setup exposed the manager's private relay session")
 	}
-	match := regexp.MustCompile(`-relay-token ([^\s;]+)`).FindStringSubmatch(setupText)
+	match := regexp.MustCompile(`-relay-token '?([A-Za-z0-9._-]+)`).FindStringSubmatch(setupText)
 	if len(match) != 2 || !strings.HasPrefix(match[1], "ha1.") {
 		t.Fatalf("setup missing opaque per-device relay credential: %s", setupText)
 	}
