@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"log/slog"
 
 	"home-harness/internal/domain"
 	"home-harness/internal/protocol"
@@ -20,7 +21,8 @@ func (a *Agent) handleWorkloadAssign(ctx context.Context, conn domain.Conn, env 
 		return // malformed assignment from the manager: nothing sensible to run
 	}
 	wl := payload.Workload
-	log.Printf("agent %s: WORKLOAD_ASSIGN %s: %s %v", a.identity.NodeID, wl.ID, wl.Command, wl.Args)
+	// Capability only: the command line may hold secrets and is never logged.
+	slog.Info("agent: WORKLOAD_ASSIGN", "node", a.identity.NodeID, "workload", wl.ID, "capability", wl.EffectiveCapability())
 	a.rememberTunnels(wl.ID, payload.Tunnels)
 
 	if a.cfg.InsecureWorkloadsDisabled {
@@ -41,7 +43,7 @@ func (a *Agent) handleWorkloadAssign(ctx context.Context, conn domain.Conn, env 
 			return
 		}
 		if a.inputs != nil {
-			xfer = &cachingTransfer{ArtifactTransfer: xfer, cache: a.inputs, node: a.identity.NodeID, workload: wl.ID}
+			xfer = &cachingTransfer{ArtifactTransfer: xfer, cache: a.inputs, node: a.identity.NodeID, workload: wl.ID, self: &a.self}
 		}
 	}
 	err := a.executor.StartWithFiles(ctx, wl, xfer, func(status domain.WorkloadStatus) {
@@ -81,6 +83,7 @@ func (a *Agent) handleWorkloadCancel(ctx context.Context, conn domain.Conn, env 
 }
 
 func (a *Agent) sendWorkloadStatus(ctx context.Context, conn domain.Conn, status domain.WorkloadStatus) {
+	a.self.noteStatus(status)
 	log.Printf("agent %s: workload %s -> %s", a.identity.NodeID, status.ID, status.State)
 	if err := a.send(ctx, conn, protocol.MsgWorkloadStatus, domain.ManagerNodeID, protocol.WorkloadStatusPayload{Status: status}); err != nil {
 		log.Printf("agent %s: send WORKLOAD_STATUS for %s: %v", a.identity.NodeID, status.ID, err)
