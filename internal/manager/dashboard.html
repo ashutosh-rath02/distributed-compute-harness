@@ -1106,8 +1106,7 @@
           + escapeHtml(j.name || j.id) + ' <span class="' + stateClass(j.state) + '">' + escapeHtml(j.state) + "</span> "
           + escapeHtml((c.completed || 0) + "/" + (c.total || 0) + " done" + (c.failed ? ", " + c.failed + " failed" : "")
             + (c.active ? ", " + c.active + " running" : "") + (c.waiting ? ", " + c.waiting + " waiting" : "")
-            + (j.priority && j.priority !== "normal" ? ", " + j.priority + " priority" : ""))
-            + (c.active ? ", " + c.active + " running" : "") + (c.waiting ? ", " + c.waiting + " waiting" : "") + spot)
+            + (j.priority && j.priority !== "normal" ? ", " + j.priority + " priority" : "") + spot)
           + "</summary>"
           + (j.error ? '<p class="hint">' + escapeHtml(j.error) + "</p>" : "")
           + ((j.outputs || []).length ? "<p>Result: " + fileButtons(j.outputs) + "</p>" : "")
@@ -1381,8 +1380,6 @@
           + '</td><td><input type="checkbox" class="pol-on"' + (p.enabled ? " checked" : "") + '></td><td><input class="pol-labels" placeholder="raw=ok" value="'
           + escapeHtml(labels) + '"></td><td><input type="number" min="0" class="pol-max" value="' + escapeHtml(String(p.maxRuntimeSeconds || 0)) + '"></td></tr>'
           + (imageTypes().includes(n) ? imagePolicyRow(n, p) : "");
-      }).join("") + "</tbody></table>";
-          + escapeHtml(labels) + '"></td><td><input type="number" min="0" class="pol-max" value="' + escapeHtml(String(p.maxRuntimeSeconds || 0)) + '"></td></tr>';
       }).join("") + "</tbody></table>"
       + '<p><label>Spot-check results: re-run <input type="number" min="0" max="100" id="polSpot" value="' + escapeHtml(String(currentPolicy.spotCheckPercent || 0))
       + '">% of each job\'s checkable tasks (at least one) on a different device and compare (0 = off).</label>'
