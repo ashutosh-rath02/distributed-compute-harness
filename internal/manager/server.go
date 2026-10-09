@@ -553,11 +553,22 @@ func offers(rec *NodeRecord, p placement) (bool, string) {
 // against (a dispatch pass's snapshot, kept current as it assigns);
 // otherwise each node's is derived fresh.
 func (s *Server) resolve(p placement, usage map[domain.NodeID]nodeUsage) (*NodeRecord, domain.NodeID, error) {
+	// Untargeted placement looks at every ready node: derive all the
+	// reservations in one scan of the workloads (once, on first use) rather
+	// than one scan per node, which was O(nodes x workloads) per submission
+	// and the manager's top CPU cost at 500 devices.
+	var snap map[domain.NodeID]nodeUsage
 	usageOf := func(id domain.NodeID) nodeUsage {
 		if usage != nil {
 			return usage[id]
 		}
-		return s.Workloads.usageOn(id)
+		if p.target != "" {
+			return s.Workloads.usageOn(id)
+		}
+		if snap == nil {
+			snap = s.Workloads.usageByNode()
+		}
+		return snap[id]
 	}
 	if p.target != "" {
 		rec, ok := s.Registry.Get(p.target)

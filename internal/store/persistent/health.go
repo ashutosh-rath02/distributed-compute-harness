@@ -43,7 +43,12 @@ func (d healthDB) Update(fn func(*bbolt.Tx) error) error {
 		d.h.observe(fault)
 		return fault
 	}
-	err := d.DB.Update(fn)
+	// Batch, not Update: writers that arrive together share one commit and
+	// one fsync (each still returns only after its data is durable). One
+	// fsync per write capped the whole manager at the disk's sync rate
+	// (see docs/operations.md); fns here are plain puts, safe to re-run if
+	// bbolt retries a batch without a failing neighbour.
+	err := d.DB.Batch(fn)
 	d.h.observe(err)
 	return err
 }
