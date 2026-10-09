@@ -1,0 +1,332 @@
+{
+  "$schema": "http://cyclonedx.org/schema/bom-1.6.schema.json",
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "serialNumber": "urn:uuid:de41aeb8-d173-467b-b71b-0f6d82b27961",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-10-09T21:54:40+05:30",
+    "tools": [
+      {
+        "vendor": "CycloneDX",
+        "name": "cyclonedx-gomod",
+        "version": "v1.12.0",
+        "hashes": [
+          {
+            "alg": "MD5",
+            "content": "6c0e94c241d0177da4abe13319b22b26"
+          },
+          {
+            "alg": "SHA-1",
+            "content": "06c56f59a7c687a69f25da38c2d6df0d4cdbbbf9"
+          },
+          {
+            "alg": "SHA-256",
+            "content": "e14c3d5cab21ad05292b1170d2b1e189fd26e134fa359de5c75f5b92dcdd2c00"
+          },
+          {
+            "alg": "SHA-384",
+            "content": "5145f6fdebf9bf7ba9dea8e9147478003d90ffd5e147388169616a84dcf4ec9f68280ce4c26115412e4680c997b13623"
+          },
+          {
+            "alg": "SHA-512",
+            "content": "ccd844bb791e0396f4b823d07914c036f9e07207584f2713560e2ef0c020b6d0c4c1bfc29603eee7a69c41738659e1501e0dc03856eb4a0111c0710057c7c8be"
+          }
+        ],
+        "externalReferences": [
+          {
+            "url": "https://github.com/CycloneDX/cyclonedx-gomod",
+            "type": "vcs"
+          },
+          {
+            "url": "https://cyclonedx.org",
+            "type": "website"
+          }
+        ]
+      }
+    ],
+    "component": {
+      "bom-ref": "pkg:golang/home-harness?type=module",
+      "type": "application",
+      "name": "home-harness",
+      "purl": "pkg:golang/home-harness?goarch=amd64\u0026goos=windows\u0026type=module"
+    }
+  },
+  "components": [
+    {
+      "bom-ref": "pkg:golang/github.com/ebitengine/purego@v0.10.2?type=module",
+      "type": "library",
+      "name": "github.com/ebitengine/purego",
+      "version": "v0.10.2",
+      "scope": "required",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "5bcd3d1db9efcc0c60766f9a3af9527a4accd7ac0609d4ff7bbebef6d4bb8331"
+        }
+      ],
+      "purl": "pkg:golang/github.com/ebitengine/purego@v0.10.2?goarch=amd64\u0026goos=windows\u0026type=module",
+      "externalReferences": [
+        {
+          "url": "https://github.com/ebitengine/purego",
+          "type": "vcs"
+        }
+      ]
+    },
+    {
+      "bom-ref": "pkg:golang/github.com/go-ole/go-ole@v1.2.6?type=module",
+      "type": "library",
+      "name": "github.com/go-ole/go-ole",
+      "version": "v1.2.6",
+      "scope": "required",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "fc5a5fea814fa1e16293db72eec8a86f41ba29ef10bd012e55cb82869c17ce96"
+        }
+      ],
+      "purl": "pkg:golang/github.com/go-ole/go-ole@v1.2.6?goarch=amd64\u0026goos=windows\u0026type=module",
+      "externalReferences": [
+        {
+          "url": "https://github.com/go-ole/go-ole",
+          "type": "vcs"
+        }
+      ]
+    },
+    {
+      "bom-ref": "pkg:golang/github.com/lufia/plan9stats@v0.0.0-20211012122336-39d0f177ccd0?type=module",
+      "type": "library",
+      "name": "github.com/lufia/plan9stats",
+      "version": "v0.0.0-20211012122336-39d0f177ccd0",
+      "scope": "required",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "e84fb86b418ee736449d9f35a48af4c8bbed51693689ff7cdaa037177403e87e"
+        }
+      ],
+      "purl": "pkg:golang/github.com/lufia/plan9stats@v0.0.0-20211012122336-39d0f177ccd0?goarch=amd64\u0026goos=windows\u0026type=module",
+      "externalReferences": [
+        {
+          "url": "https://github.com/lufia/plan9stats",
+          "type": "vcs"
+        }
+      ]
+    },
+    {
+      "bom-ref": "pkg:golang/github.com/power-devops/perfstat@v0.0.0-20240221224432-82ca36839d55?type=module",
+      "type": "library",
+      "name": "github.com/power-devops/perfstat",
+      "version": "v0.0.0-20240221224432-82ca36839d55",
+      "scope": "required",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "a38257875115b7d93ffa0e36a02a6b8ff162b0ce2a5fd2f7b19077ba918dd995"
+        }
+      ],
+      "purl": "pkg:golang/github.com/power-devops/perfstat@v0.0.0-20240221224432-82ca36839d55?goarch=amd64\u0026goos=windows\u0026type=module",
+      "externalReferences": [
+        {
+          "url": "https://github.com/power-devops/perfstat",
+          "type": "vcs"
+        }
+      ]
+    },
+    {
+      "bom-ref": "pkg:golang/github.com/shirou/gopsutil/v4@v4.26.8?type=module",
+      "type": "library",
+      "name": "github.com/shirou/gopsutil/v4",
+      "version": "v4.26.8",
+      "scope": "required",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "61031317fd49e74079f98d2f968d5e0d17f90e847b1a4ebd858fbcc2362441ea"
+        }
+      ],
+      "purl": "pkg:golang/github.com/shirou/gopsutil/v4@v4.26.8?goarch=amd64\u0026goos=windows\u0026type=module",
+      "externalReferences": [
+        {
+          "url": "https://github.com/shirou/gopsutil",
+          "type": "vcs"
+        }
+      ]
+    },
+    {
+      "bom-ref": "pkg:golang/github.com/tklauser/go-sysconf@v0.3.16?type=module",
+      "type": "library",
+      "name": "github.com/tklauser/go-sysconf",
+      "version": "v0.3.16",
+      "scope": "required",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "7eb8a82da0904ac1790b2d6381106bcebeade74d8a208c10d0c02b608094d270"
+        }
+      ],
+      "purl": "pkg:golang/github.com/tklauser/go-sysconf@v0.3.16?goarch=amd64\u0026goos=windows\u0026type=module",
+      "externalReferences": [
+        {
+          "url": "https://github.com/tklauser/go-sysconf",
+          "type": "vcs"
+        }
+      ]
+    },
+    {
+      "bom-ref": "pkg:golang/github.com/tklauser/numcpus@v0.11.0?type=module",
+      "type": "library",
+      "name": "github.com/tklauser/numcpus",
+      "version": "v0.11.0",
+      "scope": "required",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "9d24f084a1f97b574c36c09d541ba4499ad44494681db4844237446d8fbd457c"
+        }
+      ],
+      "purl": "pkg:golang/github.com/tklauser/numcpus@v0.11.0?goarch=amd64\u0026goos=windows\u0026type=module",
+      "externalReferences": [
+        {
+          "url": "https://github.com/tklauser/numcpus",
+          "type": "vcs"
+        }
+      ]
+    },
+    {
+      "bom-ref": "pkg:golang/github.com/yusufpapurcu/wmi@v1.2.4?type=module",
+      "type": "library",
+      "name": "github.com/yusufpapurcu/wmi",
+      "version": "v1.2.4",
+      "scope": "required",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "cc550acde840151790c0bcacd5bfe248c97e2501920928ed56a427f5b06b3e8d"
+        }
+      ],
+      "purl": "pkg:golang/github.com/yusufpapurcu/wmi@v1.2.4?goarch=amd64\u0026goos=windows\u0026type=module",
+      "externalReferences": [
+        {
+          "url": "https://github.com/yusufpapurcu/wmi",
+          "type": "vcs"
+        }
+      ]
+    },
+    {
+      "bom-ref": "pkg:golang/go.etcd.io/bbolt@v1.5.0?type=module",
+      "type": "library",
+      "name": "go.etcd.io/bbolt",
+      "version": "v1.5.0",
+      "scope": "required",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "4bb18097b171bf5db2a216f015f21b40218359b41bb4318f113e0ffdb0f89715"
+        }
+      ],
+      "purl": "pkg:golang/go.etcd.io/bbolt@v1.5.0?goarch=amd64\u0026goos=windows\u0026type=module"
+    },
+    {
+      "bom-ref": "pkg:golang/golang.org/x/sys@v0.48.0?type=module",
+      "type": "library",
+      "name": "golang.org/x/sys",
+      "version": "v0.48.0",
+      "scope": "required",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "6db5ff8bfe8c813f4154b33d453d6d866c4bd38c9e4c085b133e12c9a75b5e8a"
+        }
+      ],
+      "purl": "pkg:golang/golang.org/x/sys@v0.48.0?goarch=amd64\u0026goos=windows\u0026type=module"
+    },
+    {
+      "bom-ref": "pkg:golang/nhooyr.io/websocket@v1.8.17?type=module",
+      "type": "library",
+      "name": "nhooyr.io/websocket",
+      "version": "v1.8.17",
+      "scope": "required",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "28455e2c9914cb008a56c9cb203943ff982d6b22a9f15a02924b0708619f4fd6"
+        }
+      ],
+      "purl": "pkg:golang/nhooyr.io/websocket@v1.8.17?goarch=amd64\u0026goos=windows\u0026type=module"
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "pkg:golang/home-harness?type=module",
+      "dependsOn": [
+        "pkg:golang/github.com/shirou/gopsutil/v4@v4.26.8?type=module",
+        "pkg:golang/go.etcd.io/bbolt@v1.5.0?type=module",
+        "pkg:golang/golang.org/x/sys@v0.48.0?type=module",
+        "pkg:golang/nhooyr.io/websocket@v1.8.17?type=module"
+      ]
+    },
+    {
+      "ref": "pkg:golang/github.com/ebitengine/purego@v0.10.2?type=module"
+    },
+    {
+      "ref": "pkg:golang/github.com/go-ole/go-ole@v1.2.6?type=module",
+      "dependsOn": [
+        "pkg:golang/golang.org/x/sys@v0.48.0?type=module"
+      ]
+    },
+    {
+      "ref": "pkg:golang/github.com/lufia/plan9stats@v0.0.0-20211012122336-39d0f177ccd0?type=module"
+    },
+    {
+      "ref": "pkg:golang/github.com/power-devops/perfstat@v0.0.0-20240221224432-82ca36839d55?type=module",
+      "dependsOn": [
+        "pkg:golang/golang.org/x/sys@v0.48.0?type=module"
+      ]
+    },
+    {
+      "ref": "pkg:golang/github.com/shirou/gopsutil/v4@v4.26.8?type=module",
+      "dependsOn": [
+        "pkg:golang/github.com/ebitengine/purego@v0.10.2?type=module",
+        "pkg:golang/github.com/go-ole/go-ole@v1.2.6?type=module",
+        "pkg:golang/github.com/lufia/plan9stats@v0.0.0-20211012122336-39d0f177ccd0?type=module",
+        "pkg:golang/github.com/power-devops/perfstat@v0.0.0-20240221224432-82ca36839d55?type=module",
+        "pkg:golang/github.com/tklauser/go-sysconf@v0.3.16?type=module",
+        "pkg:golang/github.com/tklauser/numcpus@v0.11.0?type=module",
+        "pkg:golang/github.com/yusufpapurcu/wmi@v1.2.4?type=module",
+        "pkg:golang/golang.org/x/sys@v0.48.0?type=module"
+      ]
+    },
+    {
+      "ref": "pkg:golang/github.com/tklauser/go-sysconf@v0.3.16?type=module",
+      "dependsOn": [
+        "pkg:golang/github.com/tklauser/numcpus@v0.11.0?type=module",
+        "pkg:golang/golang.org/x/sys@v0.48.0?type=module"
+      ]
+    },
+    {
+      "ref": "pkg:golang/github.com/tklauser/numcpus@v0.11.0?type=module",
+      "dependsOn": [
+        "pkg:golang/golang.org/x/sys@v0.48.0?type=module"
+      ]
+    },
+    {
+      "ref": "pkg:golang/github.com/yusufpapurcu/wmi@v1.2.4?type=module",
+      "dependsOn": [
+        "pkg:golang/github.com/go-ole/go-ole@v1.2.6?type=module"
+      ]
+    },
+    {
+      "ref": "pkg:golang/go.etcd.io/bbolt@v1.5.0?type=module",
+      "dependsOn": [
+        "pkg:golang/golang.org/x/sys@v0.48.0?type=module"
+      ]
+    },
+    {
+      "ref": "pkg:golang/golang.org/x/sys@v0.48.0?type=module"
+    },
+    {
+      "ref": "pkg:golang/nhooyr.io/websocket@v1.8.17?type=module"
+    }
+  ]
+}

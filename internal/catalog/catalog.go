@@ -677,6 +677,11 @@ func (t Type) Compile(params map[string]string, inputs []domain.ArtifactRef) (ma
 		}
 		return nil, nil, fmt.Errorf("%w: %s takes %d-%d input files, got %d", ErrInvalid, t.Name, t.Inputs.Min, t.Inputs.Max, n)
 	}
+	for _, in := range inputs {
+		if err := domain.ValidArtifactName(in.Name); err != nil {
+			return nil, nil, fmt.Errorf("%w: %s: input: %v", ErrInvalid, t.Name, err)
+		}
+	}
 	if len(t.Inputs.Extensions) > 0 {
 		for _, in := range inputs {
 			ext := strings.ToLower(strings.TrimPrefix(path.Ext(in.Name), "."))
@@ -704,6 +709,11 @@ func (t Type) Compile(params map[string]string, inputs []domain.ArtifactRef) (ma
 		}
 		if strings.Contains(name, "{{") {
 			return nil, nil, fmt.Errorf("%w: %s: output %q has an unfilled placeholder", ErrInvalid, t.Name, tmpl)
+		}
+		// Found by fuzzing: a rendered name takes parts from the input names
+		// and parameters, so it is checked here, not only by the caller.
+		if err := domain.ValidArtifactName(name); err != nil {
+			return nil, nil, fmt.Errorf("%w: %s: output %q: %v", ErrInvalid, t.Name, name, err)
 		}
 		outputs = append(outputs, name)
 	}

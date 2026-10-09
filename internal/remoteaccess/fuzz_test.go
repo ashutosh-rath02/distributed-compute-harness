@@ -3,6 +3,7 @@ package remoteaccess
 import (
 	"bytes"
 	"testing"
+	"unicode/utf8"
 )
 
 func fuzzAEAD(t testing.TB) (open func(sid string, seq uint64, sealed []byte) (Request, error), seal func(sid string, seq uint64, r Request) ([]byte, error)) {
@@ -47,6 +48,9 @@ func FuzzSealOpenRoundTrip(f *testing.F) {
 	f.Add("GET", "/nodes", "", []byte(nil))
 	f.Add("POST", "/jobs", "application/json", []byte(`{"a":1}`))
 	f.Fuzz(func(t *testing.T, method, path, ctype string, body []byte) {
+		if !utf8.ValidString(method + path + ctype) {
+			return // JSON turns invalid UTF-8 into U+FFFD: not a round trip, not a flaw
+		}
 		sealed, err := seal("s1", 7, Request{Method: method, Path: path, ContentType: ctype, Body: body})
 		if err != nil {
 			return
