@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Concepts - Home Harness</title>
+<style>
+:root{--bg:#fbfbfa;--fg:#1d2024;--muted:#5b6470;--line:#dcdfe3;--panel:#f1f2f4;--accent:#1f5fbf;--code:#eceef1;--warn:#fff4d6;--warnline:#e5c24d}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#14161a;--fg:#e6e8eb;--muted:#9aa3ae;--line:#2c3138;--panel:#1b1e23;--accent:#7db3ff;--code:#22262c;--warn:#3a3217;--warnline:#8a7424}}
+:root[data-theme=dark]{--bg:#14161a;--fg:#e6e8eb;--muted:#9aa3ae;--line:#2c3138;--panel:#1b1e23;--accent:#7db3ff;--code:#22262c;--warn:#3a3217;--warnline:#8a7424}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--accent)}
+header{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:2}
+header .brand{font-weight:650;color:var(--fg);text-decoration:none}
+header button{margin-left:auto;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 10px;font:inherit;cursor:pointer}
+#menu{display:none}
+.wrap{display:flex;max-width:1100px;margin:0 auto}
+nav{width:230px;flex:none;padding:16px;border-right:1px solid var(--line);font-size:15px}
+nav h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:18px 0 4px}
+nav ul{list-style:none;margin:0;padding:0}
+nav a{display:block;padding:3px 0;color:var(--fg);text-decoration:none}
+nav a[aria-current=page]{color:var(--accent);font-weight:600}
+main{flex:1;min-width:0;padding:8px 24px 64px}
+h1{font-size:2rem;line-height:1.2;margin:1.2rem 0 .6rem}h2{margin-top:2rem;border-bottom:1px solid var(--line);padding-bottom:.2rem}h3{margin-top:1.5rem}
+code{background:var(--code);padding:.1em .35em;border-radius:4px;font:0.9em ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+pre{background:var(--code);padding:12px 14px;border-radius:8px;overflow:auto;line-height:1.45}pre code{background:none;padding:0}
+table{border-collapse:collapse;display:block;overflow-x:auto;max-width:100%}th,td{border:1px solid var(--line);padding:6px 10px;text-align:left;vertical-align:top}th{background:var(--panel)}
+blockquote{margin:1rem 0;padding:.6rem 1rem;background:var(--warn);border-left:4px solid var(--warnline);border-radius:4px}blockquote p{margin:.3rem 0}
+.note{background:var(--panel);padding:.6rem 1rem;border-radius:6px;border:1px solid var(--line)}
+.tag{display:inline-block;font-size:.75rem;padding:0 .45rem;border:1px solid var(--line);border-radius:999px;color:var(--muted);margin-left:.3rem}
+@media (max-width:760px){
+  #menu{display:inline-block}
+  .wrap{display:block}
+  nav{display:none;width:auto;border-right:0;border-bottom:1px solid var(--line)}
+  nav.open{display:block}
+  main{padding:8px 16px 48px}
+}
+</style>
+<script>
+(function(){try{var t=localStorage.getItem('hh-theme');if(t)document.documentElement.setAttribute('data-theme',t)}catch(e){}})();
+</script>
+</head>
+<body>
+<header>
+<button id="menu" type="button" aria-label="Menu" onclick="document.querySelector('nav').classList.toggle('open')">Menu</button>
+<a class="brand" href="index.html">Home Harness</a>
+<button type="button" onclick="(function(){var r=document.documentElement,d=r.getAttribute('data-theme');if(!d)d=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';var n=d==='dark'?'light':'dark';r.setAttribute('data-theme',n);try{localStorage.setItem('hh-theme',n)}catch(e){}})()">Light / dark</button>
+</header>
+<div class="wrap">
+<nav>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Home</a></li>
+<li><a href="quickstart.html">Quickstart</a></li>
+<li><a href="concepts.html" aria-current="page">Concepts</a></li>
+</ul>
+<h2>Reference</h2>
+<ul>
+<li><a href="tasks.html">Task types</a></li>
+<li><a href="api.html">HTTP API</a></li>
+<li><a href="clients.html">Client libraries</a></li>
+</ul>
+<h2>Run it</h2>
+<ul>
+<li><a href="operations.html">Operations</a></li>
+<li><a href="observability.html">Observability</a></li>
+<li><a href="backup-restore.html">Backup and restore</a></li>
+<li><a href="workflows.html">Workflows</a></li>
+<li><a href="schedules.html">Schedules</a></li>
+<li><a href="uninstall.html">Uninstall</a></li>
+</ul>
+<h2>Trust</h2>
+<ul>
+<li><a href="security.html">Security overview</a></li>
+<li><a href="threat-model.html">Threat model</a></li>
+</ul>
+<h2>Help</h2>
+<ul>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+<li><a href="faq.html">FAQ</a></li>
+<li><a href="compare.html">Compared with others</a></li>
+</ul>
+</nav>
+<main>
+<h1 id="concepts">Concepts</h1>
+<h2 id="manager-and-agents">Manager and agents</h2>
+<p>The <strong>manager</strong> is the one coordinator. It keeps the list of devices, decides where work goes, serves the dashboard and the HTTP API, and stores files that tasks read and write. Its state (database, tokens, certificate) lives in one folder, so it is easy to back up and move.</p>
+<p>An <strong>agent</strong> runs on each worker device. It connects <em>out</em> to the manager over a mutually authenticated TLS WebSocket, reports what the device has (CPU, memory, GPUs, which task types it can run, installed AI models), and runs what it is assigned. Windows, macOS, Linux and Android (through Termux or the app) are supported.</p>
+<p>The manager never trusts an agent: it checks what an agent reports, and it never executes anything an agent sends. Agents never trust the manager blindly either: they pin its certificate fingerprint.</p>
+<p>A device that is not on your home network can join through a <strong>relay</strong>, a small public server that only passes encrypted traffic between the two. It never sees your fleet&#39;s data in the clear.</p>
+<h2 id="joining-and-approval">Joining and approval</h2>
+<p>A new device asks to join and shows a six-digit <strong>pairing code</strong>. The same code appears on the dashboard; if they match, you approve. A device that has joined once reconnects by itself. You can <strong>revoke</strong> a device, which makes the manager refuse it even with a valid token.</p>
+<h2 id="task-types-the-catalog">Task types: the catalog</h2>
+<p>Instead of &#34;run any program&#34;, the fleet offers a <strong>catalog</strong> of typed tasks: <code>image.resize</code>, <code>archive.zip</code>, <code>file.hash</code>, <code>llm.generate</code>, and so on. Each has a fixed list of parameters with limits, and is implemented inside the agent itself, so it behaves the same on every operating system and cannot reach outside its own working folder. See the <a href="tasks.html">task reference</a>.</p>
+<p>Raw commands (<code>system.execute</code>) and host file reads exist but are <strong>off by default</strong>. You turn them on in the policy, per device label if you wish.</p>
+<h2 id="policy">Policy</h2>
+<p>The <strong>policy</strong> is your rule for what the fleet may run: which task types are switched on, on which devices (by label), with what maximum run time, and (for containers) which images. It applies to everything: the dashboard, the CLI, the API and the AI planner. Change it with <code>harnessctl policy</code> or <code>PUT /policy</code>.</p>
+<h2 id="workloads-jobs-workflows">Workloads, jobs, workflows</h2>
+<ul>
+<li>A <strong>workload</strong> is one task on one device. It is queued if every eligible device is full, and starts when one has room.</li>
+<li>A <strong>job</strong> is many tasks, spread over the fleet, with retries on a different device when one fails, and an optional <strong>reduce</strong> step that combines the results (for example, zip all the thumbnails). A job&#39;s progress counts completed, running, waiting and failed tasks.</li>
+<li>A <strong>workflow</strong> is steps that run in order, each on the results of the step before: resize every photo, then zip the results. Each step becomes an ordinary job when it is its turn.</li>
+<li><strong>Priority</strong> (<code>high</code>, <code>normal</code>, <code>low</code>) decides who goes first when everything is busy; waiting work gains priority over time, and running work is never stopped.</li>
+</ul>
+<h2 id="files">Files</h2>
+<p>Tasks read and write <strong>files</strong>. You upload a file to the manager (stored by its SHA-256, so identical bytes are stored once), name it as a task input, and download the task&#39;s output files afterwards. Stored files not needed by live work expire after a retention period.</p>
+<h2 id="plans-a-job-from-plain-words">Plans: a job from plain words</h2>
+<p>You can describe what you want (&#34;make thumbnails of these photos and zip them&#34;). A local AI model proposes a <strong>plan</strong>: a catalog task or workflow with parameters. The plan is validated against the catalog and your policy and shown to you. <strong>Nothing runs until you approve it</strong>, and the AI key (see below) cannot approve.</p>
+<h2 id="credentials">Credentials</h2>
+<ul>
+<li><strong>Operator token</strong>: full control of the manager. It lives in a file in the manager&#39;s state folder. The dashboard exchanges it for a session value kept in the browser; no cookies are used.</li>
+<li><strong>AI key</strong>: opens only the OpenAI-compatible <code>/v1</code> routes, so a chat app can use your models without being able to run anything else.</li>
+<li><strong>Pairing token</strong>: what a device presents to join without approval. Treat it like a password.</li>
+<li><strong>Remote key</strong>: for optional remote dashboard access through the relay.</li>
+</ul>
+<h2 id="availability">Availability</h2>
+<p>Each device has an <strong>availability rule</strong>: by default it takes no new work while on battery. You can set it to always, only when idle, only when charging, paused, or limited to a daily time window. Running work always finishes.</p>
+</main>
+</div>
+</body>
+</html>

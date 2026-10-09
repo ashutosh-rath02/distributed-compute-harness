@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Compared with others - Home Harness</title>
+<style>
+:root{--bg:#fbfbfa;--fg:#1d2024;--muted:#5b6470;--line:#dcdfe3;--panel:#f1f2f4;--accent:#1f5fbf;--code:#eceef1;--warn:#fff4d6;--warnline:#e5c24d}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#14161a;--fg:#e6e8eb;--muted:#9aa3ae;--line:#2c3138;--panel:#1b1e23;--accent:#7db3ff;--code:#22262c;--warn:#3a3217;--warnline:#8a7424}}
+:root[data-theme=dark]{--bg:#14161a;--fg:#e6e8eb;--muted:#9aa3ae;--line:#2c3138;--panel:#1b1e23;--accent:#7db3ff;--code:#22262c;--warn:#3a3217;--warnline:#8a7424}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--accent)}
+header{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:2}
+header .brand{font-weight:650;color:var(--fg);text-decoration:none}
+header button{margin-left:auto;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 10px;font:inherit;cursor:pointer}
+#menu{display:none}
+.wrap{display:flex;max-width:1100px;margin:0 auto}
+nav{width:230px;flex:none;padding:16px;border-right:1px solid var(--line);font-size:15px}
+nav h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:18px 0 4px}
+nav ul{list-style:none;margin:0;padding:0}
+nav a{display:block;padding:3px 0;color:var(--fg);text-decoration:none}
+nav a[aria-current=page]{color:var(--accent);font-weight:600}
+main{flex:1;min-width:0;padding:8px 24px 64px}
+h1{font-size:2rem;line-height:1.2;margin:1.2rem 0 .6rem}h2{margin-top:2rem;border-bottom:1px solid var(--line);padding-bottom:.2rem}h3{margin-top:1.5rem}
+code{background:var(--code);padding:.1em .35em;border-radius:4px;font:0.9em ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+pre{background:var(--code);padding:12px 14px;border-radius:8px;overflow:auto;line-height:1.45}pre code{background:none;padding:0}
+table{border-collapse:collapse;display:block;overflow-x:auto;max-width:100%}th,td{border:1px solid var(--line);padding:6px 10px;text-align:left;vertical-align:top}th{background:var(--panel)}
+blockquote{margin:1rem 0;padding:.6rem 1rem;background:var(--warn);border-left:4px solid var(--warnline);border-radius:4px}blockquote p{margin:.3rem 0}
+.note{background:var(--panel);padding:.6rem 1rem;border-radius:6px;border:1px solid var(--line)}
+.tag{display:inline-block;font-size:.75rem;padding:0 .45rem;border:1px solid var(--line);border-radius:999px;color:var(--muted);margin-left:.3rem}
+@media (max-width:760px){
+  #menu{display:inline-block}
+  .wrap{display:block}
+  nav{display:none;width:auto;border-right:0;border-bottom:1px solid var(--line)}
+  nav.open{display:block}
+  main{padding:8px 16px 48px}
+}
+</style>
+<script>
+(function(){try{var t=localStorage.getItem('hh-theme');if(t)document.documentElement.setAttribute('data-theme',t)}catch(e){}})();
+</script>
+</head>
+<body>
+<header>
+<button id="menu" type="button" aria-label="Menu" onclick="document.querySelector('nav').classList.toggle('open')">Menu</button>
+<a class="brand" href="index.html">Home Harness</a>
+<button type="button" onclick="(function(){var r=document.documentElement,d=r.getAttribute('data-theme');if(!d)d=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';var n=d==='dark'?'light':'dark';r.setAttribute('data-theme',n);try{localStorage.setItem('hh-theme',n)}catch(e){}})()">Light / dark</button>
+</header>
+<div class="wrap">
+<nav>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Home</a></li>
+<li><a href="quickstart.html">Quickstart</a></li>
+<li><a href="concepts.html">Concepts</a></li>
+</ul>
+<h2>Reference</h2>
+<ul>
+<li><a href="tasks.html">Task types</a></li>
+<li><a href="api.html">HTTP API</a></li>
+<li><a href="clients.html">Client libraries</a></li>
+</ul>
+<h2>Run it</h2>
+<ul>
+<li><a href="operations.html">Operations</a></li>
+<li><a href="observability.html">Observability</a></li>
+<li><a href="backup-restore.html">Backup and restore</a></li>
+<li><a href="workflows.html">Workflows</a></li>
+<li><a href="schedules.html">Schedules</a></li>
+<li><a href="uninstall.html">Uninstall</a></li>
+</ul>
+<h2>Trust</h2>
+<ul>
+<li><a href="security.html">Security overview</a></li>
+<li><a href="threat-model.html">Threat model</a></li>
+</ul>
+<h2>Help</h2>
+<ul>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+<li><a href="faq.html">FAQ</a></li>
+<li><a href="compare.html" aria-current="page">Compared with others</a></li>
+</ul>
+</nav>
+<main>
+<h1 id="compared-with-others">Compared with others</h1>
+<p>Short version: Home Harness is for <strong>a person or a small household</strong> who wants their own mixed pile of computers to share work, with almost no setup and no trust assumptions beyond &#34;my own network&#34;. The tools below are bigger, more mature and better at their own jobs. If one of them fits your problem, use it.</p>
+<p>These notes describe the other projects as we understand them; they change, so check their own documentation before deciding.</p>
+<h2 id="at-a-glance">At a glance</h2>
+<table>
+<tr><th></th><th>Home Harness</th><th>Ray</th><th>Nomad</th><th>K3s / Kubernetes</th><th>Exo</th><th>BOINC</th></tr>
+<tr><td>Main job</td><td>Spread typed tasks and files over home devices</td><td>Scale Python and ML code over a cluster</td><td>Schedule any workload (containers, binaries) over servers</td><td>Run containerized services</td><td>Run one large AI model across your devices</td><td>Volunteer computing for a science project</td></tr>
+<tr><td>Typical scale</td><td>A few to a few dozen personal devices</td><td>Up to thousands of nodes</td><td>Up to thousands of nodes</td><td>Up to thousands of nodes</td><td>A handful of devices</td><td>Millions of volunteer machines</td></tr>
+<tr><td>Runs on</td><td>Windows, macOS, Linux, Android</td><td>Mostly Linux (macOS and Windows partly)</td><td>Linux, macOS, Windows</td><td>Linux (Windows nodes possible)</td><td>macOS, Linux</td><td>Windows, macOS, Linux, Android</td></tr>
+<tr><td>What you submit</td><td>A task from a fixed catalog, or a job or workflow of them</td><td>Python functions and actors</td><td>A job spec (Docker, exec, VMs)</td><td>Container images and manifests</td><td>A model to serve</td><td>Work units for a project&#39;s own app</td></tr>
+<tr><td>Setup</td><td>An installer per device; approve by code</td><td>Cluster config; Python environments</td><td>Servers and a config file; ACL setup</td><td>Install and learn Kubernetes</td><td>Install on each device</td><td>Join a project in the client</td></tr>
+<tr><td>Untrusted devices</td><td>Designed in (approval, spot checks), but not for hostile code</td><td>No: a trusted cluster</td><td>Trusted cluster</td><td>Trusted cluster</td><td>Trusted peers</td><td>Yes: that is its design</td></tr>
+</table>
+<h2 id="when-to-choose-which">When to choose which</h2>
+<p><strong>Home Harness</strong> when your fleet is laptops, desktops, a spare Mac, an old phone; you want to batch-process files, serve a local model from the best machine, and look at it on a phone; and you want every device to be approved by you. Strengths: tiny setup, runs on Windows, Mac, Linux and Android alike, typed tasks that behave the same everywhere, operator policy and an audit log, an OpenAI-compatible endpoint for your own models, one folder of state.</p>
+<p><strong>Ray</strong> when you are writing Python (or ML training and serving) that should scale from a laptop to a real cluster, with actors, object sharing and libraries such as Ray Data, Train and Serve. Home Harness has no programming model like that: it runs catalog tasks, not your arbitrary functions. It would be the wrong tool for distributed training.</p>
+<p><strong>Nomad</strong> when you want a general scheduler for containers, binaries and VMs on servers you run, with service discovery and the HashiCorp ecosystem, and operators who will maintain it. Home Harness is not a general scheduler, and Nomad has a far larger feature set (constraints, affinities, rolling deploys, multi-region).</p>
+<p><strong>K3s / Kubernetes</strong> when you run long-lived services in containers and want the whole Kubernetes ecosystem. Home Harness does not run your services; it runs finite tasks. K3s gives you a standard API, real multi-tenancy tooling and a large community, at the price of learning it and mostly Linux nodes.</p>
+<p><strong>Exo</strong> when your goal is to run one large AI model split across several of your own Apple or Linux machines, easily. Home Harness can split a model across devices too (a llama.cpp based &#34;split session&#34;) and can serve many small models, but that is one feature among several; Exo is focused on it and is likely to be ahead there.</p>
+<p><strong>BOINC</strong> when you want to donate cycles to a research project, or to run your own volunteer-computing project with thousands of anonymous machines, with result validation by redundancy built in. Home Harness is for machines you own: it has optional spot checks, not a volunteer-grade validation system.</p>
+<h2 id="honest-weaknesses-of-home-harness">Honest weaknesses of Home Harness</h2>
+<ul>
+<li><strong>Young and small.</strong> One manager (a standby copy can take over, but it is not a consensus cluster), no outside security audit, a small community, and few third-party integrations.</li>
+<li><strong>A fixed menu of tasks.</strong> The catalog is the safety model and also the limit. Raw commands exist but are off by default, and containers are opt-in and need a container engine on the device.</li>
+<li><strong>Not for hostile code or multi-tenant use.</strong> Devices are checked and tasks are confined, but there is no strong isolation (no VM or microVM sandbox), and it assumes you know whose machines they are.</li>
+<li><strong>Scale and performance are unproven beyond a home fleet.</strong> It has not been run with hundreds of devices, and scheduling is simple (resource-aware, with priorities and retries), not a research-grade scheduler.</li>
+<li><strong>No GPU scheduling depth.</strong> It reports GPUs and routes AI work by installed models, but does not manage GPU memory or time-slicing the way dedicated systems do.</li>
+<li><strong>Platform rough edges.</strong> Windows laptops that sleep, Android background limits, unsigned binaries that SmartScreen warns about, and a few Mac and Linux paths that have had little hardware time.</li>
+</ul>
+<p>If those are acceptable for your situation, Home Harness is meant to be the least effort way to put a home&#39;s spare compute to use.</p>
+</main>
+</div>
+</body>
+</html>

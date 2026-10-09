@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Task types - Home Harness</title>
+<style>
+:root{--bg:#fbfbfa;--fg:#1d2024;--muted:#5b6470;--line:#dcdfe3;--panel:#f1f2f4;--accent:#1f5fbf;--code:#eceef1;--warn:#fff4d6;--warnline:#e5c24d}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#14161a;--fg:#e6e8eb;--muted:#9aa3ae;--line:#2c3138;--panel:#1b1e23;--accent:#7db3ff;--code:#22262c;--warn:#3a3217;--warnline:#8a7424}}
+:root[data-theme=dark]{--bg:#14161a;--fg:#e6e8eb;--muted:#9aa3ae;--line:#2c3138;--panel:#1b1e23;--accent:#7db3ff;--code:#22262c;--warn:#3a3217;--warnline:#8a7424}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--accent)}
+header{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:2}
+header .brand{font-weight:650;color:var(--fg);text-decoration:none}
+header button{margin-left:auto;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 10px;font:inherit;cursor:pointer}
+#menu{display:none}
+.wrap{display:flex;max-width:1100px;margin:0 auto}
+nav{width:230px;flex:none;padding:16px;border-right:1px solid var(--line);font-size:15px}
+nav h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:18px 0 4px}
+nav ul{list-style:none;margin:0;padding:0}
+nav a{display:block;padding:3px 0;color:var(--fg);text-decoration:none}
+nav a[aria-current=page]{color:var(--accent);font-weight:600}
+main{flex:1;min-width:0;padding:8px 24px 64px}
+h1{font-size:2rem;line-height:1.2;margin:1.2rem 0 .6rem}h2{margin-top:2rem;border-bottom:1px solid var(--line);padding-bottom:.2rem}h3{margin-top:1.5rem}
+code{background:var(--code);padding:.1em .35em;border-radius:4px;font:0.9em ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+pre{background:var(--code);padding:12px 14px;border-radius:8px;overflow:auto;line-height:1.45}pre code{background:none;padding:0}
+table{border-collapse:collapse;display:block;overflow-x:auto;max-width:100%}th,td{border:1px solid var(--line);padding:6px 10px;text-align:left;vertical-align:top}th{background:var(--panel)}
+blockquote{margin:1rem 0;padding:.6rem 1rem;background:var(--warn);border-left:4px solid var(--warnline);border-radius:4px}blockquote p{margin:.3rem 0}
+.note{background:var(--panel);padding:.6rem 1rem;border-radius:6px;border:1px solid var(--line)}
+.tag{display:inline-block;font-size:.75rem;padding:0 .45rem;border:1px solid var(--line);border-radius:999px;color:var(--muted);margin-left:.3rem}
+@media (max-width:760px){
+  #menu{display:inline-block}
+  .wrap{display:block}
+  nav{display:none;width:auto;border-right:0;border-bottom:1px solid var(--line)}
+  nav.open{display:block}
+  main{padding:8px 16px 48px}
+}
+</style>
+<script>
+(function(){try{var t=localStorage.getItem('hh-theme');if(t)document.documentElement.setAttribute('data-theme',t)}catch(e){}})();
+</script>
+</head>
+<body>
+<header>
+<button id="menu" type="button" aria-label="Menu" onclick="document.querySelector('nav').classList.toggle('open')">Menu</button>
+<a class="brand" href="index.html">Home Harness</a>
+<button type="button" onclick="(function(){var r=document.documentElement,d=r.getAttribute('data-theme');if(!d)d=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';var n=d==='dark'?'light':'dark';r.setAttribute('data-theme',n);try{localStorage.setItem('hh-theme',n)}catch(e){}})()">Light / dark</button>
+</header>
+<div class="wrap">
+<nav>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Home</a></li>
+<li><a href="quickstart.html">Quickstart</a></li>
+<li><a href="concepts.html">Concepts</a></li>
+</ul>
+<h2>Reference</h2>
+<ul>
+<li><a href="tasks.html" aria-current="page">Task types</a></li>
+<li><a href="api.html">HTTP API</a></li>
+<li><a href="clients.html">Client libraries</a></li>
+</ul>
+<h2>Run it</h2>
+<ul>
+<li><a href="operations.html">Operations</a></li>
+<li><a href="observability.html">Observability</a></li>
+<li><a href="backup-restore.html">Backup and restore</a></li>
+<li><a href="workflows.html">Workflows</a></li>
+<li><a href="schedules.html">Schedules</a></li>
+<li><a href="uninstall.html">Uninstall</a></li>
+</ul>
+<h2>Trust</h2>
+<ul>
+<li><a href="security.html">Security overview</a></li>
+<li><a href="threat-model.html">Threat model</a></li>
+</ul>
+<h2>Help</h2>
+<ul>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+<li><a href="faq.html">FAQ</a></li>
+<li><a href="compare.html">Compared with others</a></li>
+</ul>
+</nav>
+<main>
+<h1>Task types</h1>
+<p class="note">Generated from the catalog the manager and agents are built with, so it is always what this version accepts. Every parameter value is sent as a string. Your operator policy decides which types are switched on (<code>harnessctl policy</code>).</p>
+<ul>
+<li><a href="#archive-zip"><code>archive.zip</code></a>: Zip files together</li>
+<li><a href="#audio-transcribe"><code>audio.transcribe</code></a>: Transcribe speech to text</li>
+<li><a href="#container-run"><code>container.run</code></a>: Run a container</li>
+<li><a href="#cpu-burn"><code>cpu.burn</code></a>: CPU load test</li>
+<li><a href="#doc-text"><code>doc.text</code></a>: Get the text out of a PDF or picture</li>
+<li><a href="#file-hash"><code>file.hash</code></a>: Checksum files</li>
+<li><a href="#image-resize"><code>image.resize</code></a>: Resize an image</li>
+<li><a href="#image-stack"><code>image.stack</code></a>: Stack image strips</li>
+<li><a href="#image-upscale"><code>image.upscale</code></a>: Upscale an image</li>
+<li><a href="#llm-chat"><code>llm.chat</code></a>: Chat with a local AI model</li>
+<li><a href="#llm-classify"><code>llm.classify</code></a>: Sort a text file into one of your labels</li>
+<li><a href="#llm-embed"><code>llm.embed</code></a>: Embed text with a local AI model</li>
+<li><a href="#llm-generate"><code>llm.generate</code></a>: Ask a local AI model</li>
+<li><a href="#llm-inventory"><code>llm.inventory</code></a>: List local AI models</li>
+<li><a href="#llm-pull"><code>llm.pull</code></a>: Download a local AI model</li>
+<li><a href="#llm-remove"><code>llm.remove</code></a>: Remove a local AI model</li>
+<li><a href="#media-transcode"><code>media.transcode</code></a>: Convert a video or audio file</li>
+<li><a href="#render-fractal"><code>render.fractal</code></a>: Render part of a fractal image</li>
+<li><a href="#report-collect"><code>report.collect</code></a>: Collect results into one report</li>
+<li><a href="#system-identity"><code>system.identity</code></a>: Device identity</li>
+<li><a href="#text-count"><code>text.count</code></a>: Count lines and words</li>
+</ul>
+<h2 id="archive-zip"><code>archive.zip</code><span class="tag">can combine results</span></h2>
+<p><strong>Zip files together.</strong> Pack every input into one zip archive (by file name). Use it as a job&#39;s final step to get one download.</p>
+<table>
+<tr><th>Parameter</th><th>Type</th><th>Required</th><th>Default</th><th>Meaning and limits</th></tr>
+<tr><td><code>name</code></td><td>string</td><td></td><td>archive.zip</td><td>Archive name. pattern [A-Za-z0-9._-]{1,60}\.zip</td></tr>
+</table>
+<p>Takes 1 to 256 input files. the files to pack</p>
+<p>Result files: <code>{{name}}</code>.</p>
+<h2 id="audio-transcribe"><code>audio.transcribe</code><span class="tag">streams output</span></h2>
+<p><strong>Transcribe speech to text.</strong> Write down what is said in a recording with whisper.cpp, on the device: transcript.txt and subtitles (transcript.srt). A .wav works anywhere it is offered; other audio and video files need ffmpeg on that device too. Offered by devices with whisper.cpp and a model.</p>
+<table>
+<tr><th>Parameter</th><th>Type</th><th>Required</th><th>Default</th><th>Meaning and limits</th></tr>
+<tr><td><code>model</code></td><td>string</td><td>yes</td><td></td><td>Model. up to 64 characters. pattern [A-Za-z0-9][A-Za-z0-9._-]{0,63}</td></tr>
+<tr><td><code>language</code></td><td>string</td><td></td><td>auto</td><td>Spoken language (auto, or a code like en, de, fr). pattern auto|[a-z]{2,3}</td></tr>
+</table>
+<p>Takes exactly 1 input file(s). File types: wav, mp3, m4a, aac, flac, ogg, opus, wma, webm, mp4, m4v, mov, mkv. one recording</p>
+<p>Result files: <code>transcript.txt&lt;/code&gt;, &lt;code&gt;transcript.srt</code>.</p>
+<h2 id="container-run"><code>container.run</code><span class="tag">off until policy enables it</span><span class="tag">streams output</span></h2>
+<p><strong>Run a container.</strong> Run a container image with the device&#39;s own Docker or Podman: no network unless allowed, a read-only filesystem, no privileges, CPU, memory and process limits. Input files are at /in (read-only); the files it writes to /out that you name come back. Off until policy turns it on and allows the image.</p>
+<table>
+<tr><th>Parameter</th><th>Type</th><th>Required</th><th>Default</th><th>Meaning and limits</th></tr>
+<tr><td><code>image</code></td><td>string</td><td>yes</td><td></td><td>Image (pinned: name@sha256:...). up to 512 characters. pattern (?:(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9])(?:\.(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]))*(?::[0-9]{1,5})?/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@sha256:[a-f0-9]{64})?</td></tr>
+<tr><td><code>args</code></td><td>string</td><td></td><td></td><td>Command as a JSON list, e.g. [&#34;sh&#34;,&#34;-c&#34;,&#34;wc -l /in/*&#34;] (empty = the image&#39;s own). up to 16384 characters</td></tr>
+<tr><td><code>outputs</code></td><td>string</td><td></td><td></td><td>Files to bring back from /out (comma-separated). up to 2200 characters. pattern [A-Za-z0-9._/-]+(?:,[A-Za-z0-9._/-]+)*</td></tr>
+<tr><td><code>cpus</code></td><td>number</td><td></td><td>1</td><td>CPUs. at least 0.1. at most 64</td></tr>
+<tr><td><code>memory_mb</code></td><td>int</td><td></td><td>512</td><td>Memory limit (MB). at least 16. at most 65536</td></tr>
+<tr><td><code>network</code></td><td>enum</td><td></td><td>none</td><td>Network. one of: none, bridge</td></tr>
+<tr><td><code>timeout</code></td><td>int</td><td></td><td>600</td><td>Time limit (seconds). at least 1. at most 86400</td></tr>
+<tr><td><code>platform</code></td><td>string</td><td></td><td></td><td>Platform, e.g. linux/arm64 (empty = any). up to 32 characters. pattern [a-z0-9]+/[a-z0-9_]+</td></tr>
+</table>
+<p>Takes 0 to 256 input files. files for /in (read-only)</p>
+<h2 id="cpu-burn"><code>cpu.burn</code></h2>
+<p><strong>CPU load test.</strong> Keep the device&#39;s CPUs busy for a while, to watch load move across the fleet.</p>
+<table>
+<tr><th>Parameter</th><th>Type</th><th>Required</th><th>Default</th><th>Meaning and limits</th></tr>
+<tr><td><code>seconds</code></td><td>int</td><td></td><td>20</td><td>Seconds. at least 1. at most 600</td></tr>
+<tr><td><code>threads</code></td><td>int</td><td></td><td>0</td><td>Threads (0 = every CPU). at least 0. at most 256</td></tr>
+</table>
+<p>Takes no input files.</p>
+<h2 id="doc-text"><code>doc.text</code></h2>
+<p><strong>Get the text out of a PDF or picture.</strong> Write a PDF&#39;s or a scanned page&#39;s text to text.txt. text: the PDF&#39;s own text (poppler&#39;s pdftotext); ocr: recognize it in the picture or the PDF&#39;s pages (tesseract); auto: the PDF&#39;s text where it has some, recognition otherwise. Offered by devices with pdftotext or tesseract.</p>
+<table>
+<tr><th>Parameter</th><th>Type</th><th>Required</th><th>Default</th><th>Meaning and limits</th></tr>
+<tr><td><code>method</code></td><td>enum</td><td></td><td>auto</td><td>How to read it. one of: auto, text, ocr</td></tr>
+<tr><td><code>language</code></td><td>string</td><td></td><td>eng</td><td>Language for recognition (e.g. eng, deu, eng+fra). pattern [a-z]{3}(_[a-z]{3,4})?(\+[a-z]{3}(_[a-z]{3,4})?){0,3}</td></tr>
+</table>
+<p>Takes exactly 1 input file(s). File types: pdf, png, jpg, jpeg. one PDF or picture</p>
+<p>Result files: <code>text.txt</code>.</p>
+<h2 id="file-hash"><code>file.hash</code><span class="tag">can combine results</span></h2>
+<p><strong>Checksum files.</strong> Write a checksum line for every input to hashes.txt.</p>
+<table>
+<tr><th>Parameter</th><th>Type</th><th>Required</th><th>Default</th><th>Meaning and limits</th></tr>
+<tr><td><code>algorithm</code></td><td>enum</td><td></td><td>sha256</td><td>Algorithm. one of: sha256, sha1, md5</td></tr>
+</table>
+<p>Takes 1 to 256 input files. the files to checksum</p>
+<p>Result files: <code>hashes.txt</code>.</p>
+<h2 id="image-resize"><code>image.resize</code></h2>
+<p><strong>Resize an image.</strong> Scale a JPEG, PNG or GIF to a new width (height follows the aspect ratio unless given). Run it once per photo as a job to spread a batch over the fleet.</p>
+<table>
+<tr><th>Parameter</th><th>Type</th><th>Required</th><th>Default</th><th>Meaning and limits</th></tr>
+<tr><td><code>width</code></td><td>int</td><td>yes</td><td>1024</td><td>Width (pixels). at least 1. at most 10000</td></tr>
+<tr><td><code>height</code></td><td>int</td><td></td><td>0</td><td>Height (0 = keep aspect). at least 0. at most 10000</td></tr>
+<tr><td><code>format</code></td><td>enum</td><td></td><td>jpg</td><td>Output format. one of: jpg, png</td></tr>
+<tr><td><code>quality</code></td><td>int</td><td></td><td>85</td><td>JPEG quality. at least 1. at most 100</td></tr>
+</table>
+<p>Takes exactly 1 input file(s). File types: jpg, jpeg, png, gif. one image</p>
+<p>Result files: <code>{{in.stem}}-{{width}}.{{format}}</code>.</p>
+<h2 id="image-stack"><code>image.stack</code><span class="tag">can combine results</span></h2>
+<p><strong>Stack image strips.</strong> Join images top to bottom, in name order, into one PNG: the last step of a job that renders a picture in strips.</p>
+<table>
+<tr><th>Parameter</th><th>Type</th><th>Required</th><th>Default</th><th>Meaning and limits</th></tr>
+<tr><td><code>name</code></td><td>string</td><td></td><td>image.png</td><td>Result name. pattern [A-Za-z0-9._-]{1,60}\.png</td></tr>
+</table>
+<p>Takes 1 to 256 input files. File types: png, jpg, jpeg, gif. the strips, top first by name</p>
+<p>Result files: <code>{{name}}</code>.</p>
+<h2 id="image-upscale"><code>image.upscale</code></h2>
+<p><strong>Upscale an image.</strong> Enlarge a JPEG, PNG or GIF 2, 3 or 4 times with a smooth, sharp resampler (Catmull-Rom). The result may have at most 40 million pixels.</p>
+<table>
+<tr><th>Parameter</th><th>Type</th><th>Required</th><th>Default</th><th>Meaning and limits</th></tr>
+<tr><td><code>scale</code></td><td>int</td><td></td><td>2</td><td>Scale (times). at least 2. at most 4</td></tr>
+<tr><td><code>format</code></td><td>enum</td><td></td><td>png</td><td>Output format. one of: png, jpg</td></tr>
+<tr><td><code>quality</code></td><td>int</td><td></td><td>92</td><td>JPEG quality. at least 1. at most 100</td></tr>
+</table>
+<p>Takes exactly 1 input file(s). File types: jpg, jpeg, png, gif. one image</p>
+<p>Result files: <code>{{in.stem}}-x{{scale}}.{{format}}</code>.</p>
+<h2 id="llm-chat"><code>llm.chat</code><span class="tag">streams output</span></h2>
+<p><strong>Chat with a local AI model.</strong> One turn of a conversation with a local model (Ollama) on whichever device has it: the messages so far in, the reply streamed back. What AI apps use through the manager&#39;s OpenAI-compatible API (/v1).</p>
+<table>
+<tr><th>Parameter</th><th>Type</th><th>Required</th><th>Default</th><th>Meaning and limits</th></tr>
+<tr><td><code>model</code></td><td>string</td><td>yes</td><td></td><td>Model. up to 128 characters. pattern [A-Za-z0-9][A-Za-z0-9._:/-]{0,127}</td></tr>
+<tr><td><code>messages</code></td><td>string</td><td>yes</td><td></td><td>Messages (JSON: [{role, content}]). up to 65536 characters</td></tr>
+<tr><td><code>temperature</code></td><td>number</td><td></td><td></td><td>Temperature (empty = the model&#39;s default). at least 0. at most 2</td></tr>
+<tr><td><code>max_tokens</code></td><td>int</td><td></td><td></td><td>Max tokens (empty = no limit). at least 1. at most 131072</td></tr>
+<tr><td><code>seed</code></td><td>int</td><td></td><td>0</td><td>Seed (0 = random). at least 0. at most 2.147483647e+09</td></tr>
+<tr><td><code>format</code></td><td>string</td><td></td><td></td><td>Answer format (empty = free text; json, or a JSON schema). up to 16384 characters</td></tr>
+</table>
+<p>Takes no input files.</p>
+<p>Result files: <code>response.txt</code>.</p>
+<h2 id="llm-classify"><code>llm.classify</code></h2>
+<p><strong>Sort a text file into one of your labels.</strong> A local AI model (Ollama) reads one text file and picks the one label that fits it best from yours (e.g. invoice, receipt, letter); writes label.json. Run it once per file as a job and collect the labels into one table with report.collect.</p>
+<table>
+<tr><th>Parameter</th><th>Type</th><th>Required</th><th>Default</th><th>Meaning and limits</th></tr>
+<tr><td><code>model</code></td><td>string</td><td>yes</td><td></td><td>Model. up to 128 characters. pattern [A-Za-z0-9][A-Za-z0-9._:/-]{0,127}</td></tr>
+<tr><td><code>labels</code></td><td>string</td><td>yes</td><td></td><td>Labels (2-32, separated by commas). up to 2048 characters</td></tr>
+</table>
+<p>Takes exactly 1 input file(s). one text file (UTF-8, at most 32 KiB)</p>
+<p>Result files: <code>label.json</code>.</p>
+<h2 id="llm-embed"><code>llm.embed</code><span class="tag">streams output</span></h2>
+<p><strong>Embed text with a local AI model.</strong> Turn text files into embeddings: lists of numbers that place texts with similar meaning close together, for search and grouping. Needs an embedding model (Ollama, e.g. embeddinggemma or nomic-embed-text) on some device; writes embeddings.json. Each file must fit the model&#39;s context.</p>
+<table>
+<tr><th>Parameter</th><th>Type</th><th>Required</th><th>Default</th><th>Meaning and limits</th></tr>
+<tr><td><code>model</code></td><td>string</td><td>yes</td><td></td><td>Embedding model. up to 128 characters. pattern [A-Za-z0-9][A-Za-z0-9._:/-]{0,127}</td></tr>
+</table>
+<p>Takes 1 to 16 input files. text files (UTF-8, at most 32 KiB each)</p>
+<p>Result files: <code>embeddings.json</code>.</p>
+<h2 id="llm-generate"><code>llm.generate</code><span class="tag">streams output</span></h2>
+<p><strong>Ask a local AI model.</strong> Run a prompt on a local model (Ollama) on whichever device has it, streaming the answer back. Text files given as input are included as context.</p>
+<table>
+<tr><th>Parameter</th><th>Type</th><th>Required</th><th>Default</th><th>Meaning and limits</th></tr>
+<tr><td><code>model</code></td><td>string</td><td>yes</td><td></td><td>Model. up to 128 characters. pattern [A-Za-z0-9][A-Za-z0-9._:/-]{0,127}</td></tr>
+<tr><td><code>prompt</code></td><td>string</td><td>yes</td><td></td><td>Prompt. up to 16384 characters</td></tr>
+<tr><td><code>system</code></td><td>string</td><td></td><td></td><td>System instructions (optional). up to 4096 characters</td></tr>
+<tr><td><code>temperature</code></td><td>number</td><td></td><td>0.7</td><td>Temperature. at least 0. at most 2</td></tr>
+<tr><td><code>max_tokens</code></td><td>int</td><td></td><td>512</td><td>Max tokens. at least 1. at most 8192</td></tr>
+<tr><td><code>seed</code></td><td>int</td><td></td><td>0</td><td>Seed (0 = random). at least 0. at most 2.147483647e+09</td></tr>
+</table>
+<p>Takes 0 to 16 input files. text files to use as context (at most 32 KiB together)</p>
+<p>Result files: <code>response.txt</code>.</p>
+<h2 id="llm-inventory"><code>llm.inventory</code></h2>
+<p><strong>List local AI models.</strong> List the models the device&#39;s local runtime (Ollama) has.</p>
+<p>No parameters.</p>
+<p>Takes no input files.</p>
+<h2 id="llm-pull"><code>llm.pull</code><span class="tag">names a device</span><span class="tag">streams output</span></h2>
+<p><strong>Download a local AI model.</strong> Download a model into one device&#39;s own Ollama (ollama pull), showing its progress. Models are stored per device, so name the device.</p>
+<table>
+<tr><th>Parameter</th><th>Type</th><th>Required</th><th>Default</th><th>Meaning and limits</th></tr>
+<tr><td><code>model</code></td><td>string</td><td>yes</td><td></td><td>Model (e.g. llama3.2:1b). up to 128 characters. pattern [A-Za-z0-9][A-Za-z0-9._:/-]{0,127}</td></tr>
+</table>
+<p>Takes no input files.</p>
+<h2 id="llm-remove"><code>llm.remove</code><span class="tag">names a device</span></h2>
+<p><strong>Remove a local AI model.</strong> Delete a model from one device&#39;s own Ollama (ollama rm), freeing its disk space.</p>
+<table>
+<tr><th>Parameter</th><th>Type</th><th>Required</th><th>Default</th><th>Meaning and limits</th></tr>
+<tr><td><code>model</code></td><td>string</td><td>yes</td><td></td><td>Model. up to 128 characters. pattern [A-Za-z0-9][A-Za-z0-9._:/-]{0,127}</td></tr>
+</table>
+<p>Takes no input files.</p>
+<h2 id="media-transcode"><code>media.transcode</code></h2>
+<p><strong>Convert a video or audio file.</strong> Convert with ffmpeg to a fixed preset: 720p.mp4 or 1080p.mp4 (H.264 video, never enlarged), audio.mp3, audio.m4a, or clip.gif (a short animated GIF, at most 30 seconds). Optionally only a part: start and length in seconds. Offered by devices that have ffmpeg.</p>
+<table>
+<tr><th>Parameter</th><th>Type</th><th>Required</th><th>Default</th><th>Meaning and limits</th></tr>
+<tr><td><code>preset</code></td><td>enum</td><td></td><td>720p.mp4</td><td>Convert to. one of: 720p.mp4, 1080p.mp4, audio.mp3, audio.m4a, clip.gif</td></tr>
+<tr><td><code>start</code></td><td>int</td><td></td><td>0</td><td>Start at (seconds). at least 0. at most 86400</td></tr>
+<tr><td><code>duration</code></td><td>int</td><td></td><td>0</td><td>Length (seconds, 0 = to the end; a GIF: 10). at least 0. at most 14400</td></tr>
+</table>
+<p>Takes exactly 1 input file(s). File types: mp4, m4v, mov, mkv, webm, avi, mpg, mpeg, ts, mts, m2ts, flv, wmv, 3gp, gif, mp3, m4a, aac, wav, flac, ogg, opus, wma. one video or audio file</p>
+<p>Result files: <code>{{in.stem}}-{{preset}}</code>.</p>
+<h2 id="render-fractal"><code>render.fractal</code><span class="tag">runs in parts</span></h2>
+<p><strong>Render part of a fractal image.</strong> Draw one horizontal strip of a Mandelbrot fractal, using every CPU core. Split a big image into many parts as a job and every device renders strips; image.stack joins them into one picture.</p>
+<table>
+<tr><th>Parameter</th><th>Type</th><th>Required</th><th>Default</th><th>Meaning and limits</th></tr>
+<tr><td><code>width</code></td><td>int</td><td></td><td>3200</td><td>Image width (pixels). at least 16. at most 8000</td></tr>
+<tr><td><code>height</code></td><td>int</td><td></td><td>2400</td><td>Image height (pixels). at least 16. at most 8000</td></tr>
+<tr><td><code>part</code></td><td>int</td><td></td><td>0</td><td>Which strip (0 = top). at least 0. at most 999</td></tr>
+<tr><td><code>parts</code></td><td>int</td><td></td><td>1</td><td>Strips in the whole image. at least 1. at most 1000</td></tr>
+<tr><td><code>iterations</code></td><td>int</td><td></td><td>2000</td><td>Detail (iterations). at least 16. at most 50000</td></tr>
+<tr><td><code>scene</code></td><td>enum</td><td></td><td>seahorse</td><td>Where to look. one of: seahorse, spiral, classic</td></tr>
+</table>
+<p>Takes no input files.</p>
+<p>Result files: <code>fractal-{{part}}.png</code>.</p>
+<h2 id="report-collect"><code>report.collect</code><span class="tag">can combine results</span></h2>
+<p><strong>Collect results into one report.</strong> Join a job&#39;s per-file results into one file, by the file each came from: answers and summaries (.txt), labels (label.json) and embeddings (embeddings.json). The report&#39;s extension picks the format: .md (Markdown), .csv (a table) or .json; embeddings join into .json only. Use it as the combine step of a per-file AI job.</p>
+<table>
+<tr><th>Parameter</th><th>Type</th><th>Required</th><th>Default</th><th>Meaning and limits</th></tr>
+<tr><td><code>name</code></td><td>string</td><td></td><td>report.md</td><td>Report file (.md, .csv or .json). pattern [A-Za-z0-9._-]{1,60}\.(md|csv|json)</td></tr>
+</table>
+<p>Takes 1 to 256 input files. File types: txt, md, json. per-file results: .txt answers, label.json, embeddings.json</p>
+<p>Result files: <code>{{name}}</code>.</p>
+<h2 id="system-identity"><code>system.identity</code></h2>
+<p><strong>Device identity.</strong> Report the device&#39;s hostname, OS, architecture and CPU count. A quick check that a device runs work.</p>
+<p>No parameters.</p>
+<p>Takes no input files.</p>
+<h2 id="text-count"><code>text.count</code><span class="tag">can combine results</span></h2>
+<p><strong>Count lines and words.</strong> Count lines, words and bytes in every input (like wc) and write counts.json.</p>
+<p>No parameters.</p>
+<p>Takes 1 to 256 input files. text files</p>
+<p>Result files: <code>counts.json</code>.</p>
+</main>
+</div>
+</body>
+</html>

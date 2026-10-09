@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HTTP API - Home Harness</title>
+<style>
+:root{--bg:#fbfbfa;--fg:#1d2024;--muted:#5b6470;--line:#dcdfe3;--panel:#f1f2f4;--accent:#1f5fbf;--code:#eceef1;--warn:#fff4d6;--warnline:#e5c24d}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#14161a;--fg:#e6e8eb;--muted:#9aa3ae;--line:#2c3138;--panel:#1b1e23;--accent:#7db3ff;--code:#22262c;--warn:#3a3217;--warnline:#8a7424}}
+:root[data-theme=dark]{--bg:#14161a;--fg:#e6e8eb;--muted:#9aa3ae;--line:#2c3138;--panel:#1b1e23;--accent:#7db3ff;--code:#22262c;--warn:#3a3217;--warnline:#8a7424}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--accent)}
+header{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:2}
+header .brand{font-weight:650;color:var(--fg);text-decoration:none}
+header button{margin-left:auto;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 10px;font:inherit;cursor:pointer}
+#menu{display:none}
+.wrap{display:flex;max-width:1100px;margin:0 auto}
+nav{width:230px;flex:none;padding:16px;border-right:1px solid var(--line);font-size:15px}
+nav h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:18px 0 4px}
+nav ul{list-style:none;margin:0;padding:0}
+nav a{display:block;padding:3px 0;color:var(--fg);text-decoration:none}
+nav a[aria-current=page]{color:var(--accent);font-weight:600}
+main{flex:1;min-width:0;padding:8px 24px 64px}
+h1{font-size:2rem;line-height:1.2;margin:1.2rem 0 .6rem}h2{margin-top:2rem;border-bottom:1px solid var(--line);padding-bottom:.2rem}h3{margin-top:1.5rem}
+code{background:var(--code);padding:.1em .35em;border-radius:4px;font:0.9em ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+pre{background:var(--code);padding:12px 14px;border-radius:8px;overflow:auto;line-height:1.45}pre code{background:none;padding:0}
+table{border-collapse:collapse;display:block;overflow-x:auto;max-width:100%}th,td{border:1px solid var(--line);padding:6px 10px;text-align:left;vertical-align:top}th{background:var(--panel)}
+blockquote{margin:1rem 0;padding:.6rem 1rem;background:var(--warn);border-left:4px solid var(--warnline);border-radius:4px}blockquote p{margin:.3rem 0}
+.note{background:var(--panel);padding:.6rem 1rem;border-radius:6px;border:1px solid var(--line)}
+.tag{display:inline-block;font-size:.75rem;padding:0 .45rem;border:1px solid var(--line);border-radius:999px;color:var(--muted);margin-left:.3rem}
+@media (max-width:760px){
+  #menu{display:inline-block}
+  .wrap{display:block}
+  nav{display:none;width:auto;border-right:0;border-bottom:1px solid var(--line)}
+  nav.open{display:block}
+  main{padding:8px 16px 48px}
+}
+</style>
+<script>
+(function(){try{var t=localStorage.getItem('hh-theme');if(t)document.documentElement.setAttribute('data-theme',t)}catch(e){}})();
+</script>
+</head>
+<body>
+<header>
+<button id="menu" type="button" aria-label="Menu" onclick="document.querySelector('nav').classList.toggle('open')">Menu</button>
+<a class="brand" href="index.html">Home Harness</a>
+<button type="button" onclick="(function(){var r=document.documentElement,d=r.getAttribute('data-theme');if(!d)d=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';var n=d==='dark'?'light':'dark';r.setAttribute('data-theme',n);try{localStorage.setItem('hh-theme',n)}catch(e){}})()">Light / dark</button>
+</header>
+<div class="wrap">
+<nav>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Home</a></li>
+<li><a href="quickstart.html">Quickstart</a></li>
+<li><a href="concepts.html">Concepts</a></li>
+</ul>
+<h2>Reference</h2>
+<ul>
+<li><a href="tasks.html">Task types</a></li>
+<li><a href="api.html" aria-current="page">HTTP API</a></li>
+<li><a href="clients.html">Client libraries</a></li>
+</ul>
+<h2>Run it</h2>
+<ul>
+<li><a href="operations.html">Operations</a></li>
+<li><a href="observability.html">Observability</a></li>
+<li><a href="backup-restore.html">Backup and restore</a></li>
+<li><a href="workflows.html">Workflows</a></li>
+<li><a href="schedules.html">Schedules</a></li>
+<li><a href="uninstall.html">Uninstall</a></li>
+</ul>
+<h2>Trust</h2>
+<ul>
+<li><a href="security.html">Security overview</a></li>
+<li><a href="threat-model.html">Threat model</a></li>
+</ul>
+<h2>Help</h2>
+<ul>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+<li><a href="faq.html">FAQ</a></li>
+<li><a href="compare.html">Compared with others</a></li>
+</ul>
+</nav>
+<main>
+<h1>HTTP API</h1>
+<p>The manager's operator API is described in <a href="openapi.yaml">openapi.yaml</a> (OpenAPI 3.1): every route, its request and response shapes, and how it authenticates. A test fails the build if a route exists that the file does not describe. This page lists the routes from that file.</p>
+<p>Every route needs <code>Authorization: Bearer &lt;operator token&gt;</code>, except a few public ones noted in the file; the <code>/v1</code> routes also accept the AI key. Most errors are a short plain-text message that says what to do next.</p>
+<table>
+<tr><th>Method</th><th>Path</th><th>What it does</th><th>Area</th></tr>
+<tr><td><code>GET</code></td><td><code>/</code></td><td>The local web dashboard (HTML shell)</td><td>Dashboard</td></tr>
+<tr><td><code>GET</code></td><td><code>/live</code></td><td>The one-screen live view (HTML shell)</td><td>Dashboard</td></tr>
+<tr><td><code>POST</code></td><td><code>/login</code></td><td>Exchange the operator token for a dashboard session value</td><td>Operations</td></tr>
+<tr><td><code>GET</code></td><td><code>/server-proof</code></td><td>Prove this manager holds the operator token</td><td>Operations</td></tr>
+<tr><td><code>GET</code></td><td><code>/events</code></td><td>Server-Sent Events stream of harness events</td><td>Operations</td></tr>
+<tr><td><code>GET</code></td><td><code>/nodes</code></td><td>List every known node</td><td>Nodes</td></tr>
+<tr><td><code>GET</code></td><td><code>/nodes/{id}</code></td><td>One node&#39;s identity, state and metrics</td><td>Nodes</td></tr>
+<tr><td><code>GET</code></td><td><code>/nodes/{id}/resources</code></td><td>One node&#39;s declared resources</td><td>Nodes</td></tr>
+<tr><td><code>GET</code></td><td><code>/nodes/{id}/capabilities</code></td><td>One node&#39;s declared capabilities (the task types it offers)</td><td>Nodes</td></tr>
+<tr><td><code>GET</code></td><td><code>/resources/total</code></td><td>Resource totals across the fleet</td><td>Nodes</td></tr>
+<tr><td><code>POST</code></td><td><code>/nodes/{id}/commands</code></td><td>Send a built-in command to a node and wait for the answer</td><td>Nodes</td></tr>
+<tr><td><code>POST</code></td><td><code>/nodes/{id}/update</code></td><td>Push a self-update to a node</td><td>Nodes</td></tr>
+<tr><td><code>POST</code></td><td><code>/nodes/{id}/revoke</code></td><td>Permanently refuse a node identity</td><td>Nodes</td></tr>
+<tr><td><code>PUT</code></td><td><code>/nodes/{id}/meta</code></td><td>Set the operator&#39;s name and labels for a node</td><td>Nodes</td></tr>
+<tr><td><code>PUT</code></td><td><code>/nodes/{id}/availability</code></td><td>Choose when a node takes new work</td><td>Nodes</td></tr>
+<tr><td><code>DELETE</code></td><td><code>/nodes/{id}/suspect</code></td><td>Clear the mark spot checks put on a device</td><td>Nodes</td></tr>
+<tr><td><code>GET</code></td><td><code>/revocations</code></td><td>List revoked node identities</td><td>Nodes</td></tr>
+<tr><td><code>DELETE</code></td><td><code>/revocations/{id}</code></td><td>Lift a revocation</td><td>Nodes</td></tr>
+<tr><td><code>GET</code></td><td><code>/agent-binaries</code></td><td>The agent builds this manager serves</td><td>Joining</td></tr>
+<tr><td><code>GET</code></td><td><code>/agent-binary/hash</code></td><td>The primary agent build&#39;s hash (legacy)</td><td>Joining</td></tr>
+<tr><td><code>GET</code></td><td><code>/join-info</code></td><td>What a new device needs to onboard</td><td>Joining</td></tr>
+<tr><td><code>GET</code></td><td><code>/join-script</code></td><td>A ready-to-paste onboarding script</td><td>Joining</td></tr>
+<tr><td><code>POST</code></td><td><code>/enrollments</code></td><td>Create a short-lived invitation link and QR code</td><td>Joining</td></tr>
+<tr><td><code>GET</code></td><td><code>/enrollments/{token}/qr</code></td><td>The invitation as a QR code (SVG)</td><td>Joining</td></tr>
+<tr><td><code>GET</code></td><td><code>/join-requests</code></td><td>Devices waiting to be approved</td><td>Joining</td></tr>
+<tr><td><code>POST</code></td><td><code>/join-requests/{id}/approve</code></td><td>Admit a waiting device</td><td>Joining</td></tr>
+<tr><td><code>POST</code></td><td><code>/join-requests/{id}/reject</code></td><td>Refuse a waiting device for a while</td><td>Joining</td></tr>
+<tr><td><code>GET</code></td><td><code>/join-window</code></td><td>Whether new devices may ask to join now</td><td>Joining</td></tr>
+<tr><td><code>POST</code></td><td><code>/join-window</code></td><td>Let new devices ask to join for a while</td><td>Joining</td></tr>
+<tr><td><code>DELETE</code></td><td><code>/join-window</code></td><td>Stop new devices asking to join</td><td>Joining</td></tr>
+<tr><td><code>POST</code></td><td><code>/workloads</code></td><td>Submit one workload</td><td>Workloads</td></tr>
+<tr><td><code>GET</code></td><td><code>/workloads</code></td><td>List workloads (without their output)</td><td>Workloads</td></tr>
+<tr><td><code>GET</code></td><td><code>/workloads/{id}</code></td><td>One workload with its output</td><td>Workloads</td></tr>
+<tr><td><code>POST</code></td><td><code>/workloads/{id}/cancel</code></td><td>Ask for a workload to stop</td><td>Workloads</td></tr>
+<tr><td><code>POST</code></td><td><code>/artifacts</code></td><td>Store a file</td><td>Files</td></tr>
+<tr><td><code>GET</code></td><td><code>/artifacts</code></td><td>List stored files and store usage</td><td>Files</td></tr>
+<tr><td><code>GET</code></td><td><code>/artifacts/{sha}</code></td><td>Download a stored file</td><td>Files</td></tr>
+<tr><td><code>DELETE</code></td><td><code>/artifacts/{sha}</code></td><td>Delete a stored file</td><td>Files</td></tr>
+<tr><td><code>GET</code></td><td><code>/catalog</code></td><td>The task types, their parameters, policy and how many nodes offer each</td><td>Catalog and policy</td></tr>
+<tr><td><code>GET</code></td><td><code>/policy</code></td><td>What the fleet may run</td><td>Catalog and policy</td></tr>
+<tr><td><code>PUT</code></td><td><code>/policy</code></td><td>Replace the policy</td><td>Catalog and policy</td></tr>
+<tr><td><code>POST</code></td><td><code>/jobs</code></td><td>Submit a batch job</td><td>Jobs</td></tr>
+<tr><td><code>GET</code></td><td><code>/jobs</code></td><td>List jobs with progress counts</td><td>Jobs</td></tr>
+<tr><td><code>GET</code></td><td><code>/jobs/{id}</code></td><td>One job with every task&#39;s state</td><td>Jobs</td></tr>
+<tr><td><code>POST</code></td><td><code>/jobs/{id}/cancel</code></td><td>Cancel a job and its running attempts</td><td>Jobs</td></tr>
+<tr><td><code>POST</code></td><td><code>/workflows</code></td><td>Submit a workflow</td><td>Workflows</td></tr>
+<tr><td><code>GET</code></td><td><code>/workflows</code></td><td>List workflows with each step&#39;s progress</td><td>Workflows</td></tr>
+<tr><td><code>GET</code></td><td><code>/workflows/{id}</code></td><td>One workflow with its steps, jobs and results</td><td>Workflows</td></tr>
+<tr><td><code>POST</code></td><td><code>/workflows/{id}/cancel</code></td><td>Cancel a workflow and its running step&#39;s job</td><td>Workflows</td></tr>
+<tr><td><code>POST</code></td><td><code>/plans</code></td><td>Ask a local AI model to plan a job from plain words</td><td>Plans</td></tr>
+<tr><td><code>GET</code></td><td><code>/plans</code></td><td>List plans, newest first, and the models that can plan now</td><td>Plans</td></tr>
+<tr><td><code>GET</code></td><td><code>/plans/{id}</code></td><td>One plan</td><td>Plans</td></tr>
+<tr><td><code>POST</code></td><td><code>/plans/{id}/approve</code></td><td>Approve a proposed plan and run it as a job</td><td>Plans</td></tr>
+<tr><td><code>POST</code></td><td><code>/plans/{id}/reject</code></td><td>Reject a proposed plan</td><td>Plans</td></tr>
+<tr><td><code>GET</code></td><td><code>/models</code></td><td>Local AI models the ready devices have, and where</td><td>AI</td></tr>
+<tr><td><code>GET</code></td><td><code>/ai-devices</code></td><td>Devices that run models, with their models and GPUs</td><td>AI</td></tr>
+<tr><td><code>GET</code></td><td><code>/llm/split</code></td><td>The split session (one model run across several devices)</td><td>AI</td></tr>
+<tr><td><code>POST</code></td><td><code>/llm/split</code></td><td>Start a split session</td><td>AI</td></tr>
+<tr><td><code>DELETE</code></td><td><code>/llm/split</code></td><td>Stop the split session</td><td>AI</td></tr>
+<tr><td><code>GET</code></td><td><code>/ai-info</code></td><td>The OpenAI-compatible base URL and AI key</td><td>AI</td></tr>
+<tr><td><code>GET</code></td><td><code>/v1/models</code></td><td>OpenAI-compatible model list</td><td>AI</td></tr>
+<tr><td><code>POST</code></td><td><code>/v1/chat/completions</code></td><td>OpenAI-compatible chat completion</td><td>AI</td></tr>
+<tr><td><code>GET</code></td><td><code>/audit</code></td><td>The audit log, newest first</td><td>Operations</td></tr>
+<tr><td><code>GET</code></td><td><code>/standby</code></td><td>The standby manager&#39;s role, term and lag</td><td>Operations</td></tr>
+<tr><td><code>POST</code></td><td><code>/standby</code></td><td>Create a one-time standby enrollment</td><td>Operations</td></tr>
+<tr><td><code>DELETE</code></td><td><code>/standby</code></td><td>Forget the standby</td><td>Operations</td></tr>
+<tr><td><code>POST</code></td><td><code>/standby/promote</code></td><td>Promote this standby to active</td><td>Operations</td></tr>
+<tr><td><code>GET</code></td><td><code>/remote-access</code></td><td>Remote dashboard settings</td><td>Operations</td></tr>
+<tr><td><code>PUT</code></td><td><code>/remote-access</code></td><td>Turn remote access on or off and set its mode</td><td>Operations</td></tr>
+<tr><td><code>POST</code></td><td><code>/remote-access/rotate</code></td><td>Replace the remote key</td><td>Operations</td></tr>
+</table>
+</main>
+</div>
+</body>
+</html>

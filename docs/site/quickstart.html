@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quickstart - Home Harness</title>
+<style>
+:root{--bg:#fbfbfa;--fg:#1d2024;--muted:#5b6470;--line:#dcdfe3;--panel:#f1f2f4;--accent:#1f5fbf;--code:#eceef1;--warn:#fff4d6;--warnline:#e5c24d}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#14161a;--fg:#e6e8eb;--muted:#9aa3ae;--line:#2c3138;--panel:#1b1e23;--accent:#7db3ff;--code:#22262c;--warn:#3a3217;--warnline:#8a7424}}
+:root[data-theme=dark]{--bg:#14161a;--fg:#e6e8eb;--muted:#9aa3ae;--line:#2c3138;--panel:#1b1e23;--accent:#7db3ff;--code:#22262c;--warn:#3a3217;--warnline:#8a7424}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--accent)}
+header{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:2}
+header .brand{font-weight:650;color:var(--fg);text-decoration:none}
+header button{margin-left:auto;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 10px;font:inherit;cursor:pointer}
+#menu{display:none}
+.wrap{display:flex;max-width:1100px;margin:0 auto}
+nav{width:230px;flex:none;padding:16px;border-right:1px solid var(--line);font-size:15px}
+nav h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:18px 0 4px}
+nav ul{list-style:none;margin:0;padding:0}
+nav a{display:block;padding:3px 0;color:var(--fg);text-decoration:none}
+nav a[aria-current=page]{color:var(--accent);font-weight:600}
+main{flex:1;min-width:0;padding:8px 24px 64px}
+h1{font-size:2rem;line-height:1.2;margin:1.2rem 0 .6rem}h2{margin-top:2rem;border-bottom:1px solid var(--line);padding-bottom:.2rem}h3{margin-top:1.5rem}
+code{background:var(--code);padding:.1em .35em;border-radius:4px;font:0.9em ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+pre{background:var(--code);padding:12px 14px;border-radius:8px;overflow:auto;line-height:1.45}pre code{background:none;padding:0}
+table{border-collapse:collapse;display:block;overflow-x:auto;max-width:100%}th,td{border:1px solid var(--line);padding:6px 10px;text-align:left;vertical-align:top}th{background:var(--panel)}
+blockquote{margin:1rem 0;padding:.6rem 1rem;background:var(--warn);border-left:4px solid var(--warnline);border-radius:4px}blockquote p{margin:.3rem 0}
+.note{background:var(--panel);padding:.6rem 1rem;border-radius:6px;border:1px solid var(--line)}
+.tag{display:inline-block;font-size:.75rem;padding:0 .45rem;border:1px solid var(--line);border-radius:999px;color:var(--muted);margin-left:.3rem}
+@media (max-width:760px){
+  #menu{display:inline-block}
+  .wrap{display:block}
+  nav{display:none;width:auto;border-right:0;border-bottom:1px solid var(--line)}
+  nav.open{display:block}
+  main{padding:8px 16px 48px}
+}
+</style>
+<script>
+(function(){try{var t=localStorage.getItem('hh-theme');if(t)document.documentElement.setAttribute('data-theme',t)}catch(e){}})();
+</script>
+</head>
+<body>
+<header>
+<button id="menu" type="button" aria-label="Menu" onclick="document.querySelector('nav').classList.toggle('open')">Menu</button>
+<a class="brand" href="index.html">Home Harness</a>
+<button type="button" onclick="(function(){var r=document.documentElement,d=r.getAttribute('data-theme');if(!d)d=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';var n=d==='dark'?'light':'dark';r.setAttribute('data-theme',n);try{localStorage.setItem('hh-theme',n)}catch(e){}})()">Light / dark</button>
+</header>
+<div class="wrap">
+<nav>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Home</a></li>
+<li><a href="quickstart.html" aria-current="page">Quickstart</a></li>
+<li><a href="concepts.html">Concepts</a></li>
+</ul>
+<h2>Reference</h2>
+<ul>
+<li><a href="tasks.html">Task types</a></li>
+<li><a href="api.html">HTTP API</a></li>
+<li><a href="clients.html">Client libraries</a></li>
+</ul>
+<h2>Run it</h2>
+<ul>
+<li><a href="operations.html">Operations</a></li>
+<li><a href="observability.html">Observability</a></li>
+<li><a href="backup-restore.html">Backup and restore</a></li>
+<li><a href="workflows.html">Workflows</a></li>
+<li><a href="schedules.html">Schedules</a></li>
+<li><a href="uninstall.html">Uninstall</a></li>
+</ul>
+<h2>Trust</h2>
+<ul>
+<li><a href="security.html">Security overview</a></li>
+<li><a href="threat-model.html">Threat model</a></li>
+</ul>
+<h2>Help</h2>
+<ul>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+<li><a href="faq.html">FAQ</a></li>
+<li><a href="compare.html">Compared with others</a></li>
+</ul>
+</nav>
+<main>
+<h1 id="quickstart">Quickstart</h1>
+<p>About five minutes, two computers on the same Wi-Fi or network. You need one that stays on (it will be the <strong>manager</strong>) and one to add (the <strong>worker</strong>). They can be the same machine for a first look.</p>
+<h2 id="1-install-the-manager">1. Install the manager</h2>
+<p>Pick the machine that will coordinate the others.</p>
+<p><strong>Windows.</strong> Copy the Windows bundle folder to the PC (or build it with <code>scripts/build-windows-manager.sh</code>) and double-click <code>install.cmd</code>. It needs no administrator rights. It installs into <code>%LOCALAPPDATA%\HomeHarness\manager</code>, starts the manager when you sign in, and opens the dashboard. If Windows asks whether <code>manager.exe</code> may accept network connections, allow it on private networks, so your other devices can reach it.</p>
+<p><strong>Linux.</strong> Build the programs, then run the installer as root. It creates a hardened systemd service:</p>
+<pre><code>go build -o bin/manager ./cmd/manager
+go build -o bin/agent ./cmd/agent
+go build -o bin/harnessctl ./cmd/harnessctl
+sudo sh packaging/linux/install.sh --bin-dir ./bin --manager</code></pre>
+<p><strong>macOS.</strong> Build and run it for your user (a launch agent starts it at login): see <code>packaging/macos/</code> for the package and launch agent files.</p>
+<p><strong>Docker.</strong> <code>docker compose -f packaging/docker/docker-compose.yml up -d --build</code> after filling in <code>.env</code> from <code>.env.example</code>. See <a href="uninstall.html">Uninstall</a> for how to remove any of these again.</p>
+<p>Open the dashboard at <strong>http://127.0.0.1:7421</strong> on that machine. The first time, use the sign-in link the manager prints when it starts (it ends in <code>#login=...</code> and carries a secret, so keep it to yourself). Windows: it opens by itself. Linux: <code>journalctl -u home-harness-manager | grep &#39;#login=&#39;</code>.</p>
+<h2 id="2-add-a-laptop">2. Add a laptop</h2>
+<p>On the dashboard, click <strong>Allow new devices for 15 minutes</strong>. The dashboard shows an address like <code>http://192.168.1.20:7419</code>.</p>
+<p>On the laptop, open that address in a browser. It shows one command for that laptop&#39;s operating system. Paste it into a terminal:</p>
+<ul>
+<li>Windows: a <code>powershell ... irm ... | iex</code> line.</li>
+<li>Mac or Linux: a <code>curl ... | bash</code> line.</li>
+</ul>
+<p>The command downloads the agent, checks its checksum, starts it, and prints a <strong>pairing code</strong> (six digits). Back on the dashboard a card appears: &#34;Waiting for approval&#34;, with the same six digits. If the digits match, click <strong>Approve</strong>. Within a couple of seconds the laptop shows up as <strong>READY</strong>.</p>
+<p>Only add devices on a network you trust. The join page is plain HTTP so no device has to click through certificate warnings; the matching codes are what protect which manager the laptop trusts and which laptop gets in.</p>
+<h2 id="3-run-a-task">3. Run a task</h2>
+<p>Install nothing more: <code>harnessctl</code> came with the manager. From the manager&#39;s folder (where <code>harness-operator-token</code> lives; on Linux pass <code>-token-file</code>, see below):</p>
+<pre><code>harnessctl nodes
+harnessctl tasks
+harnessctl do cpu.burn seconds=10</code></pre>
+<p><code>nodes</code> shows your laptop. <code>tasks</code> lists what the fleet can run. <code>do</code> runs one task on whichever device has room and prints the result. A file task looks like this:</p>
+<pre><code>harnessctl do -in photo.jpg image.resize width=800</code></pre>
+<p>If <code>harnessctl</code> says it cannot sign in, give it the token: <code>harnessctl -token-file /var/lib/home-harness/manager/operator-token nodes</code> (Linux package), or set <code>HARNESS_OPERATOR_TOKEN</code>.</p>
+<h2 id="4-where-next">4. Where next</h2>
+<ul>
+<li>Many files at once: a <strong>job</strong> (<code>harnessctl map ...</code>), or a <strong>workflow</strong> of steps. See <a href="concepts.html">Concepts</a>.</li>
+<li>Use it from code: <a href="clients.html">Python and JavaScript clients</a>.</li>
+<li>Ask a local AI model: install <a href="https://ollama.com">Ollama</a> on one device, then <code>harnessctl ask &#34;What is the capital of France?&#34;</code>.</li>
+<li>Something not working? <a href="troubleshooting.html">Troubleshooting</a>.</li>
+</ul>
+</main>
+</div>
+</body>
+</html>

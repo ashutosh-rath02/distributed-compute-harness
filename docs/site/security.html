@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Security overview - Home Harness</title>
+<style>
+:root{--bg:#fbfbfa;--fg:#1d2024;--muted:#5b6470;--line:#dcdfe3;--panel:#f1f2f4;--accent:#1f5fbf;--code:#eceef1;--warn:#fff4d6;--warnline:#e5c24d}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#14161a;--fg:#e6e8eb;--muted:#9aa3ae;--line:#2c3138;--panel:#1b1e23;--accent:#7db3ff;--code:#22262c;--warn:#3a3217;--warnline:#8a7424}}
+:root[data-theme=dark]{--bg:#14161a;--fg:#e6e8eb;--muted:#9aa3ae;--line:#2c3138;--panel:#1b1e23;--accent:#7db3ff;--code:#22262c;--warn:#3a3217;--warnline:#8a7424}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--accent)}
+header{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:2}
+header .brand{font-weight:650;color:var(--fg);text-decoration:none}
+header button{margin-left:auto;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 10px;font:inherit;cursor:pointer}
+#menu{display:none}
+.wrap{display:flex;max-width:1100px;margin:0 auto}
+nav{width:230px;flex:none;padding:16px;border-right:1px solid var(--line);font-size:15px}
+nav h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:18px 0 4px}
+nav ul{list-style:none;margin:0;padding:0}
+nav a{display:block;padding:3px 0;color:var(--fg);text-decoration:none}
+nav a[aria-current=page]{color:var(--accent);font-weight:600}
+main{flex:1;min-width:0;padding:8px 24px 64px}
+h1{font-size:2rem;line-height:1.2;margin:1.2rem 0 .6rem}h2{margin-top:2rem;border-bottom:1px solid var(--line);padding-bottom:.2rem}h3{margin-top:1.5rem}
+code{background:var(--code);padding:.1em .35em;border-radius:4px;font:0.9em ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+pre{background:var(--code);padding:12px 14px;border-radius:8px;overflow:auto;line-height:1.45}pre code{background:none;padding:0}
+table{border-collapse:collapse;display:block;overflow-x:auto;max-width:100%}th,td{border:1px solid var(--line);padding:6px 10px;text-align:left;vertical-align:top}th{background:var(--panel)}
+blockquote{margin:1rem 0;padding:.6rem 1rem;background:var(--warn);border-left:4px solid var(--warnline);border-radius:4px}blockquote p{margin:.3rem 0}
+.note{background:var(--panel);padding:.6rem 1rem;border-radius:6px;border:1px solid var(--line)}
+.tag{display:inline-block;font-size:.75rem;padding:0 .45rem;border:1px solid var(--line);border-radius:999px;color:var(--muted);margin-left:.3rem}
+@media (max-width:760px){
+  #menu{display:inline-block}
+  .wrap{display:block}
+  nav{display:none;width:auto;border-right:0;border-bottom:1px solid var(--line)}
+  nav.open{display:block}
+  main{padding:8px 16px 48px}
+}
+</style>
+<script>
+(function(){try{var t=localStorage.getItem('hh-theme');if(t)document.documentElement.setAttribute('data-theme',t)}catch(e){}})();
+</script>
+</head>
+<body>
+<header>
+<button id="menu" type="button" aria-label="Menu" onclick="document.querySelector('nav').classList.toggle('open')">Menu</button>
+<a class="brand" href="index.html">Home Harness</a>
+<button type="button" onclick="(function(){var r=document.documentElement,d=r.getAttribute('data-theme');if(!d)d=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';var n=d==='dark'?'light':'dark';r.setAttribute('data-theme',n);try{localStorage.setItem('hh-theme',n)}catch(e){}})()">Light / dark</button>
+</header>
+<div class="wrap">
+<nav>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Home</a></li>
+<li><a href="quickstart.html">Quickstart</a></li>
+<li><a href="concepts.html">Concepts</a></li>
+</ul>
+<h2>Reference</h2>
+<ul>
+<li><a href="tasks.html">Task types</a></li>
+<li><a href="api.html">HTTP API</a></li>
+<li><a href="clients.html">Client libraries</a></li>
+</ul>
+<h2>Run it</h2>
+<ul>
+<li><a href="operations.html">Operations</a></li>
+<li><a href="observability.html">Observability</a></li>
+<li><a href="backup-restore.html">Backup and restore</a></li>
+<li><a href="workflows.html">Workflows</a></li>
+<li><a href="schedules.html">Schedules</a></li>
+<li><a href="uninstall.html">Uninstall</a></li>
+</ul>
+<h2>Trust</h2>
+<ul>
+<li><a href="security.html" aria-current="page">Security overview</a></li>
+<li><a href="threat-model.html">Threat model</a></li>
+</ul>
+<h2>Help</h2>
+<ul>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+<li><a href="faq.html">FAQ</a></li>
+<li><a href="compare.html">Compared with others</a></li>
+</ul>
+</nav>
+<main>
+<h1 id="security-overview">Security overview</h1>
+<p>Home Harness is built for a home or small-office network where the devices are yours or belong to people you know. It is not built to run code from strangers. This page says what it protects, and how.</p>
+<p>For the full analysis see the <a href="threat-model.html">threat model</a> (written separately; this page is the short version).</p>
+<h2 id="the-rule-everything-follows">The rule everything follows</h2>
+<p><strong>The manager never trusts agents, AI models or relays.</strong> An agent can lie about what it has or what it did; the manager checks reports against what it asked for, never runs anything an agent sends, and treats every agent-supplied name or text as untrusted data. The same goes for the output of an AI model and for a relay in the middle.</p>
+<h2 id="how-devices-are-authenticated">How devices are authenticated</h2>
+<ul>
+<li>Agents and the manager talk over <strong>mutually authenticated TLS</strong>. The manager&#39;s certificate is created on first start (ECDSA P-256). Agents <strong>pin its SHA-256 fingerprint</strong>, so a device on your network cannot pose as your manager.</li>
+<li>A device joins either with the <strong>pairing token</strong> (a long random secret) or <strong>by approval</strong>: you compare a six-digit code on the device and on the dashboard. The code is computed on each side from the manager&#39;s certificate and the device&#39;s key, so someone in the middle makes the two codes differ.</li>
+<li>Each device has its own <strong>identity</strong> (a key pair). You can <strong>revoke</strong> it: the manager disconnects it and refuses it again even with a valid token.</li>
+<li>The join page is plain HTTP on purpose, so devices need not click through certificate warnings. It does <strong>not</strong> protect the downloads against someone who controls your network at install time. Add devices on a network you trust, and keep the join window closed otherwise (it closes by itself).</li>
+</ul>
+<h2 id="how-you-are-authenticated">How you are authenticated</h2>
+<ul>
+<li>Every operator API route needs the <strong>operator token</strong> as a Bearer header, except the dashboard&#39;s static page and a few bootstrap routes. The token is a file in the manager&#39;s private state folder.</li>
+<li>The API listens on <strong>loopback</strong> only, and answers only requests addressed to an IP or <code>localhost</code>, which defeats browser-based DNS-rebinding and cross-site request tricks from web pages you visit.</li>
+<li><strong>No cookies, ever.</strong> Cookies are shared across ports on the same host, so a cookie would leak to other apps listening on other local ports. The dashboard keeps a derived session value in <code>localStorage</code> and sends it as a header. It loads no external scripts and escapes everything agents or models send.</li>
+<li>The <strong>AI key</strong> opens only the OpenAI-compatible routes. A chat app holding it cannot submit tasks, change policy, or approve an AI plan.</li>
+</ul>
+<h2 id="what-a-task-can-do">What a task can do</h2>
+<p>By default only the <strong>typed catalog</strong> runs: each task is implemented in the agent, validated by both manager and agent, confined to its own working folder, and has a fixed parameter list. <strong>Raw commands and host file reads are off</strong> until you enable them in the policy; if you do, restrict them to specific devices with labels.</p>
+<p>Container tasks (<code>container.run</code>) are also off by default, and when on run only the images you list, preferably pinned by digest, without network unless you allow it.</p>
+<p>For devices you do not fully control, enable <strong>spot checks</strong>: the manager re-runs a share of deterministic tasks on a different device and compares the results, marking a device whose answers differ.</p>
+<h2 id="your-data">Your data</h2>
+<p>State lives in one folder on the manager: the database, the operator token, the certificate and its key, and stored files. Protect it like a password manager. Back it up with the manager&#39;s <code>-export-state</code>, and keep the export private: it holds the key and tokens. Removing a manager&#39;s state is permanent for the devices that trusted it.</p>
+<h2 id="what-it-does-not-protect-against">What it does not protect against</h2>
+<ul>
+<li>Someone with the operator token or the manager&#39;s state folder has full control.</li>
+<li>A malicious program you run through a raw command or an opted-in container runs with that agent&#39;s user rights.</li>
+<li>A device that is physically yours to lose can reveal its identity to whoever has it: revoke it.</li>
+<li>Denial of service by a device you admitted is limited (rate limits, caps) but not impossible.</li>
+</ul>
+<h2 id="reporting">Reporting</h2>
+<p>Please report security problems privately to the maintainers rather than in a public issue.</p>
+</main>
+</div>
+</body>
+</html>

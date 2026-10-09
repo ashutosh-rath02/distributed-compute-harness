@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Uninstall - Home Harness</title>
+<style>
+:root{--bg:#fbfbfa;--fg:#1d2024;--muted:#5b6470;--line:#dcdfe3;--panel:#f1f2f4;--accent:#1f5fbf;--code:#eceef1;--warn:#fff4d6;--warnline:#e5c24d}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#14161a;--fg:#e6e8eb;--muted:#9aa3ae;--line:#2c3138;--panel:#1b1e23;--accent:#7db3ff;--code:#22262c;--warn:#3a3217;--warnline:#8a7424}}
+:root[data-theme=dark]{--bg:#14161a;--fg:#e6e8eb;--muted:#9aa3ae;--line:#2c3138;--panel:#1b1e23;--accent:#7db3ff;--code:#22262c;--warn:#3a3217;--warnline:#8a7424}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--accent)}
+header{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:2}
+header .brand{font-weight:650;color:var(--fg);text-decoration:none}
+header button{margin-left:auto;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 10px;font:inherit;cursor:pointer}
+#menu{display:none}
+.wrap{display:flex;max-width:1100px;margin:0 auto}
+nav{width:230px;flex:none;padding:16px;border-right:1px solid var(--line);font-size:15px}
+nav h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:18px 0 4px}
+nav ul{list-style:none;margin:0;padding:0}
+nav a{display:block;padding:3px 0;color:var(--fg);text-decoration:none}
+nav a[aria-current=page]{color:var(--accent);font-weight:600}
+main{flex:1;min-width:0;padding:8px 24px 64px}
+h1{font-size:2rem;line-height:1.2;margin:1.2rem 0 .6rem}h2{margin-top:2rem;border-bottom:1px solid var(--line);padding-bottom:.2rem}h3{margin-top:1.5rem}
+code{background:var(--code);padding:.1em .35em;border-radius:4px;font:0.9em ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+pre{background:var(--code);padding:12px 14px;border-radius:8px;overflow:auto;line-height:1.45}pre code{background:none;padding:0}
+table{border-collapse:collapse;display:block;overflow-x:auto;max-width:100%}th,td{border:1px solid var(--line);padding:6px 10px;text-align:left;vertical-align:top}th{background:var(--panel)}
+blockquote{margin:1rem 0;padding:.6rem 1rem;background:var(--warn);border-left:4px solid var(--warnline);border-radius:4px}blockquote p{margin:.3rem 0}
+.note{background:var(--panel);padding:.6rem 1rem;border-radius:6px;border:1px solid var(--line)}
+.tag{display:inline-block;font-size:.75rem;padding:0 .45rem;border:1px solid var(--line);border-radius:999px;color:var(--muted);margin-left:.3rem}
+@media (max-width:760px){
+  #menu{display:inline-block}
+  .wrap{display:block}
+  nav{display:none;width:auto;border-right:0;border-bottom:1px solid var(--line)}
+  nav.open{display:block}
+  main{padding:8px 16px 48px}
+}
+</style>
+<script>
+(function(){try{var t=localStorage.getItem('hh-theme');if(t)document.documentElement.setAttribute('data-theme',t)}catch(e){}})();
+</script>
+</head>
+<body>
+<header>
+<button id="menu" type="button" aria-label="Menu" onclick="document.querySelector('nav').classList.toggle('open')">Menu</button>
+<a class="brand" href="index.html">Home Harness</a>
+<button type="button" onclick="(function(){var r=document.documentElement,d=r.getAttribute('data-theme');if(!d)d=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';var n=d==='dark'?'light':'dark';r.setAttribute('data-theme',n);try{localStorage.setItem('hh-theme',n)}catch(e){}})()">Light / dark</button>
+</header>
+<div class="wrap">
+<nav>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Home</a></li>
+<li><a href="quickstart.html">Quickstart</a></li>
+<li><a href="concepts.html">Concepts</a></li>
+</ul>
+<h2>Reference</h2>
+<ul>
+<li><a href="tasks.html">Task types</a></li>
+<li><a href="api.html">HTTP API</a></li>
+<li><a href="clients.html">Client libraries</a></li>
+</ul>
+<h2>Run it</h2>
+<ul>
+<li><a href="operations.html">Operations</a></li>
+<li><a href="observability.html">Observability</a></li>
+<li><a href="backup-restore.html">Backup and restore</a></li>
+<li><a href="workflows.html">Workflows</a></li>
+<li><a href="schedules.html">Schedules</a></li>
+<li><a href="uninstall.html" aria-current="page">Uninstall</a></li>
+</ul>
+<h2>Trust</h2>
+<ul>
+<li><a href="security.html">Security overview</a></li>
+<li><a href="threat-model.html">Threat model</a></li>
+</ul>
+<h2>Help</h2>
+<ul>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+<li><a href="faq.html">FAQ</a></li>
+<li><a href="compare.html">Compared with others</a></li>
+</ul>
+</nav>
+<main>
+<h1 id="uninstall">Uninstall</h1>
+<p>Every uninstaller <strong>keeps your data</strong> unless you ask for it to be deleted. The data you may care about:</p>
+<ul>
+<li>the <strong>manager&#39;s state</strong>: database, operator token, certificate and key, stored files. Deleting it is permanent: devices that trusted this manager will not trust a new one. To keep a copy first, stop the manager and run <code>manager -export-state state.zip -state-dir &lt;its state folder&gt;</code> (the file holds keys and tokens, so keep it private).</li>
+<li>the <strong>agent&#39;s identity</strong>: the device&#39;s name and keys with the manager. If you delete it, the device must be approved again.</li>
+</ul>
+<h2 id="windows">Windows</h2>
+<p>Run from a PowerShell window (no administrator needed):</p>
+<pre><code>powershell -ExecutionPolicy Bypass -File packaging\windows\uninstall.ps1</code></pre>
+<p>It asks before it does anything. It removes the scheduled tasks <code>HomeComputeHarnessAgent</code> and <code>HomeComputeHarnessManager</code> (and the older sign-in registry entry), stops their launcher loops and programs, and deletes the program folders (<code>%LOCALAPPDATA%\HomeHarness</code>, and the manager inside it). Options:</p>
+<table>
+<tr><th>Option</th><th>Meaning</th></tr>
+<tr><td><code>-Component agent</code> or <code>manager</code></td><td>remove only one (default: both)</td></tr>
+<tr><td><code>-RemoveState</code></td><td>also delete the manager&#39;s state and the agent identity (<code>%APPDATA%\home-harness\agent</code>)</td></tr>
+<tr><td><code>-WhatIf</code></td><td>show what it would do, change nothing</td></tr>
+<tr><td><code>-Yes</code></td><td>do not ask (for scripts)</td></tr>
+<tr><td><code>-AgentDir</code>, <code>-ManagerDir</code>, <code>-IdentityDir</code>, <code>-AgentTaskName</code>, <code>-ManagerTaskName</code></td><td>for installs in non-standard places</td></tr>
+</table>
+<p>It refuses to delete a folder that is plainly not an install folder (your profile, AppData, the drive root). Windows Firewall rules for <code>agent.exe</code> and <code>manager.exe</code>, if you created them, stay: remove them in Windows Security, Firewall, Allowed apps. If you installed with winget, run <code>winget uninstall HomeHarness.HomeHarness</code> as well.</p>
+<h2 id="linux">Linux</h2>
+<p><strong>Package install (apt or rpm) or <code>packaging/linux/install.sh</code>:</strong></p>
+<pre><code>sudo sh packaging/linux/uninstall.sh            # removes services and programs, keeps /etc/home-harness and /var/lib/home-harness
+sudo sh packaging/linux/uninstall.sh --purge    # also deletes configuration, data and the service users</code></pre>
+<p>With a package manager: <code>sudo apt remove home-harness</code> or <code>sudo dnf remove home-harness</code> (data stays; <code>apt purge</code> also removes the configuration files the package owns; delete <code>/var/lib/home-harness</code> yourself to remove the data).</p>
+<p><strong>Agent installed by the dashboard&#39;s one-line script</strong> (a per-user service, not the package):</p>
+<pre><code>systemctl --user disable --now home-harness-agent
+rm -f ~/.config/systemd/user/home-harness-agent.service
+rm -rf ~/.local/share/home-harness
+crontab -l | grep -v &#39;home-harness/run-agent.sh&#39; | crontab -     # only if it used the cron fallback</code></pre>
+<p>The agent identity is kept inside <code>~/.config/home-harness/agent</code> (delete it to start fresh).</p>
+<h2 id="macos">macOS</h2>
+<pre><code>bash packaging/macos/uninstall.sh            # removes programs and launch agents, keeps your data
+bash packaging/macos/uninstall.sh --purge    # also deletes ~/Library/Application Support/HomeHarness</code></pre>
+<p>Run it as yourself, not with sudo; it asks for your password only for the files in <code>/usr/local</code> and <code>/Library</code>. It also removes the per-user launch agent (<code>com.homeharness.agent</code>) the dashboard&#39;s join script installs. With Homebrew: <code>brew services stop home-harness &amp;&amp; brew uninstall home-harness</code>; your data stays in <code>~/Library/Application Support/HomeHarness</code>.</p>
+<h2 id="android-termux">Android (Termux)</h2>
+<pre><code>pkill -f home-harness
+rm -rf ~/home-harness ~/.termux/boot/start-harness-agent.sh</code></pre>
+<p>If you installed the Android app, uninstall it like any app (Settings, Apps).</p>
+<h2 id="docker">Docker</h2>
+<pre><code>docker compose -f packaging/docker/docker-compose.yml down        # stop and remove the containers, keep the data volume
+docker compose -f packaging/docker/docker-compose.yml down -v     # also delete the data volume (the manager&#39;s state)</code></pre>
+<h2 id="after-removing-a-device">After removing a device</h2>
+<p>The manager still lists a device that was uninstalled, as OFFLINE. Remove it from the fleet with <code>harnessctl revoke &lt;id&gt;</code> (it will be refused if it ever comes back), or leave it.</p>
+</main>
+</div>
+</body>
+</html>
