@@ -70,7 +70,11 @@ func main() {
 	withArtifacts := flag.Bool("with-artifacts", false, "with -export-state: include stored workload files (can be large)")
 	force := flag.Bool("force", false, "with -import-state: replace an existing state; with -standby-of: replace this manager's database and identity with the primary's")
 	standby := registerStandbyFlags()
+	healthcheck := flag.Bool("healthcheck", false, "ask the manager already running at -api-addr whether it is up (GET /server-proof, which needs no token), print ok, and exit 0 or 1: for container and service health checks")
 	flag.Parse()
+	if *healthcheck {
+		os.Exit(runHealthcheck(*apiAddr))
+	}
 
 	if *exportState != "" || *importState != "" {
 		if *stateDir == "" {
