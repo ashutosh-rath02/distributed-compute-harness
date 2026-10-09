@@ -404,7 +404,7 @@ func (s *Server) apiStartSplit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	s.audit(domain.AuditSecurity, "split.started", sess.Main, actorFrom(r.Context()), map[string]any{
+	s.audit(domain.AuditSecurity, "split.started", sess.Main, actorFrom(r.Context()), map[string]any{"requestId": requestIDFrom(r.Context()), 
 		"session": sess.ID, "name": sess.Name, "helpers": sess.Helpers,
 	})
 	writeJSON(w, http.StatusAccepted, s.splitView())

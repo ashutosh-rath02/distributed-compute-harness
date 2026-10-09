@@ -40,6 +40,9 @@ type NodeRecord struct {
 	// from a HEARTBEAT, distinct from the static Resources declared at
 	// registration (v1.md §13's runtime vs persistent state split).
 	LastMetrics domain.RuntimeState
+	// Self is the agent's own counters from its last heartbeat
+	// (domain.FeatureSelfMetrics); nil until one arrives.
+	Self *domain.AgentSelfMetrics
 }
 
 // slots is how many workloads the node runs at once.

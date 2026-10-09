@@ -117,6 +117,10 @@ func operatorPublic(r *http.Request) bool {
 		return true
 	case path == "/server-proof" && r.Method == http.MethodGet:
 		return true
+	// Liveness and readiness probes (observe.go): a fixed word each, no
+	// data, so an orchestrator or load balancer can ask without a token.
+	case (path == "/healthz" || path == "/readyz") && (r.Method == http.MethodGet || r.Method == http.MethodHead):
+		return true
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/enrollments/") &&
 		strings.HasSuffix(path, "/qr") && strings.Count(path, "/") == 3:
 		return true
@@ -162,6 +166,12 @@ func (s *Server) requireOperator(next http.Handler) http.Handler {
 		}
 		if subtle.ConstantTimeCompare(got, []byte(session)) == 1 {
 			next.ServeHTTP(w, r.WithContext(withActor(r.Context(), actorDashboardSession)))
+			return
+		}
+		// The metrics token opens only /metrics, /healthz and /readyz
+		// (observe.go), so a scraper never holds the operator token.
+		if mt := s.cfg.MetricsToken; mt != "" && observePath(r) && subtle.ConstantTimeCompare(got, []byte(mt)) == 1 {
+			next.ServeHTTP(w, r.WithContext(withActor(r.Context(), actorMetricsToken)))
 			return
 		}
 		// The AI key opens only the OpenAI-compatible API (openai.go).

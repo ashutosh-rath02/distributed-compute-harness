@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"home-harness/internal/artifacts"
@@ -61,6 +63,10 @@ type Config struct {
 	// AIKey is the OpenAI-compatible API's own credential (openai.go):
 	// accepted only on /v1/. Empty: only the operator credentials work.
 	AIKey string
+	// MetricsToken is a separate read-only credential accepted only on GET
+	// /metrics, /healthz and /readyz (observe.go), for a Prometheus
+	// scraper. Empty: only the operator credentials open /metrics.
+	MetricsToken string
 	// Artifacts stores workload input/output files (artifacts.go); nil
 	// disables workload files. ArtifactRetention is how long an unused
 	// artifact is kept (default 7 days).
@@ -210,6 +216,11 @@ type Server struct {
 	failover *failoverState
 	// remote: the remote dashboard through the relay (remote.go).
 	remote *remoteAccess
+	// met: /metrics instruments (observe.go); pingAt/pingOK cache the
+	// store write probe behind /readyz.
+	met    *serverMetrics
+	pingAt atomic.Int64
+	pingOK atomic.Bool
 }
 
 // pendingCommand tracks who a dispatched command was sent to, so its
@@ -259,8 +270,9 @@ func NewServer(transport domain.Transport, store PersistentStore, cfg Config) *S
 		failover:     &failoverState{},
 		remote:       newRemoteAccess(cfg.RemoteAccessFile),
 	}
+	s.met = newServerMetrics(s)
 	if cfg.KeepAwake {
-		s.awake = keepawake.New("Home Harness manager: your devices are working on tasks")
+		s.awake =keepawake.New("Home Harness manager: your devices are working on tasks")
 	}
 	if cfg.InitialPolicy != nil {
 		s.policy.set(*cfg.InitialPolicy)
@@ -484,7 +496,8 @@ func (s *Server) Submit(ctx context.Context, spec WorkloadSpec) (domain.Workload
 	s.persistWorkloadRecord(wrec)
 
 	s.assign(ctx, rec.Conn, w)
-	log.Printf("workload.assigned: %s to %s", w.ID, target)
+	s.met.waited(w.EffectiveCapability(), 0)
+	slog.Info("workload.assigned", "workload", w.ID, "node", target, "capability", capability)
 	s.publish(domain.EventWorkloadAssigned, target, map[string]any{"workloadId": string(w.ID), "command": command, "capability": string(capability)})
 
 	return w, nil
@@ -836,6 +849,7 @@ func (s *Server) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	s.met.listening()
 
 	go s.monitorHeartbeats(ctx)
 	go s.reconcileWorkloads(ctx)
@@ -867,7 +881,8 @@ func (s *Server) monitorHeartbeats(ctx context.Context) {
 				s.publish(domain.EventJoinDecided, r.NodeID, map[string]any{"decision": "expired"})
 			}
 			for _, id := range s.Registry.ExpireStale(s.cfg.HeartbeatTimeout) {
-				log.Printf("node.offline: %s", id)
+				slog.Warn("node.offline", "node", id, "reason", "heartbeat timeout")
+				s.met.nodeOffline("heartbeat_timeout")
 				s.publish(domain.EventNodeOffline, id, map[string]any{"reason": "heartbeat timeout"})
 				s.failPendingCommandsFor(id, "node went offline: heartbeat timeout")
 				s.failWorkloadsFor(ctx, id, "node went offline: heartbeat timeout")
@@ -890,7 +905,8 @@ func (s *Server) handleConn(ctx context.Context, conn domain.Conn) {
 	var nodeID domain.NodeID
 	defer func() {
 		if nodeID != "" && s.Registry.SetOfflineIfCurrent(nodeID, conn) {
-			log.Printf("node.offline: %s (connection closed)", nodeID)
+			slog.Warn("node.offline", "node", nodeID, "reason", "connection closed")
+			s.met.nodeOffline("connection_closed")
 			s.publish(domain.EventNodeOffline, nodeID, map[string]any{"reason": "connection closed"})
 			s.failPendingCommandsFor(nodeID, "node went offline: connection closed")
 			// The manager shutting down is not the node going away: its
@@ -1073,11 +1089,12 @@ func (s *Server) handleRegister(ctx context.Context, conn domain.Conn, env *prot
 		s.audit(domain.AuditAdmissions, "node.admitted", claimedID, actorNode, detail)
 	}
 
+	s.met.registered(isNew)
 	if isNew {
-		log.Printf("node.registered: %s (%s)", claimedID, node.Name)
+		slog.Info("node.registered", "node", claimedID, "name", clip(node.Name), "admitted_by", admissionKind(admittedBy))
 		s.publish(domain.EventNodeRegistered, claimedID, map[string]any{"name": node.Name})
 	} else {
-		log.Printf("node.reconnected: %s (%s)", claimedID, node.Name)
+		slog.Info("node.reconnected", "node", claimedID, "name", clip(node.Name))
 		s.publish(domain.EventNodeReconnected, claimedID, map[string]any{"name": node.Name})
 	}
 	s.publish(domain.EventNodeReady, claimedID, nil)
@@ -1116,7 +1133,7 @@ func (s *Server) answerJoinRequest(ctx context.Context, conn domain.Conn, dest, 
 func (s *Server) reject(ctx context.Context, conn domain.Conn, dest domain.NodeID, reason string) {
 	s.send(ctx, conn, protocol.MsgRegisterReject, domain.ManagerNodeID, dest,
 		protocol.RegisterRejectPayload{Reason: reason})
-	log.Printf("manager: rejected registration from %s: %s", conn.RemoteAddr(), reason)
+	slog.Warn("registration.rejected", "remote", conn.RemoteAddr(), "reason", reason)
 }
 
 func (s *Server) handleHeartbeat(nodeID domain.NodeID, env *protocol.Envelope) {
@@ -1131,6 +1148,8 @@ func (s *Server) handleHeartbeat(nodeID domain.NodeID, env *protocol.Envelope) {
 	}
 	s.Registry.RecordHeartbeat(nodeID, payload.RuntimeState)
 	s.Registry.setCached(nodeID, payload.Cache)
+	s.Registry.setSelf(nodeID, payload.Self)
+	s.met.heartbeat()
 	s.noteAvailability(nodeID, before)
 }
 
@@ -1254,21 +1273,24 @@ func (s *Server) handleWorkloadStatus(nodeID domain.NodeID, env *protocol.Envelo
 		// A slot freed: this node can take work again, and the queue may move.
 		s.Registry.holdOffBusy(nodeID, time.Time{})
 		s.forgetRequeues(payload.Status.ID)
+		s.met.workloadFinished(wrec.Workload, wrec.Status)
 		s.kickDispatch()
 	}
 
+	capability := wrec.Workload.EffectiveCapability()
 	switch payload.Status.State {
 	case domain.WorkloadRunning:
-		log.Printf("workload.started: %s on %s", payload.Status.ID, nodeID)
+		slog.Info("workload.started", "workload", payload.Status.ID, "node", nodeID, "capability", capability)
 		s.publish(domain.EventWorkloadStarted, nodeID, map[string]any{"workloadId": string(payload.Status.ID)})
 	case domain.WorkloadCompleted:
-		log.Printf("workload.completed: %s on %s", payload.Status.ID, nodeID)
+		slog.Info("workload.completed", "workload", payload.Status.ID, "node", nodeID, "capability", capability)
 		s.publish(domain.EventWorkloadCompleted, nodeID, map[string]any{"workloadId": string(payload.Status.ID), "exitCode": payload.Status.ExitCode})
 	case domain.WorkloadFailed:
-		log.Printf("workload.failed: %s on %s: %s", payload.Status.ID, nodeID, payload.Status.Error)
+		// The error text is the agent's: clipped, and kept out of the metrics.
+		slog.Warn("workload.failed", "workload", payload.Status.ID, "node", nodeID, "capability", capability, "reason", clip(payload.Status.Error))
 		s.publish(domain.EventWorkloadFailed, nodeID, map[string]any{"workloadId": string(payload.Status.ID), "error": payload.Status.Error})
 	case domain.WorkloadCanceled:
-		log.Printf("workload.canceled: %s on %s", payload.Status.ID, nodeID)
+		slog.Info("workload.canceled", "workload", payload.Status.ID, "node", nodeID, "capability", capability)
 		s.publish(domain.EventWorkloadCanceled, nodeID, map[string]any{"workloadId": string(payload.Status.ID)})
 	}
 }
