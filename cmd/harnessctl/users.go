@@ -85,7 +85,7 @@ func cmdUser(c *apiClient, args []string) error {
 			return err
 		}
 		fmt.Printf("User %s (%s) added.\n", tok.Name, tok.Role)
-		showUserToken(tok.Token)
+		showUserToken(c.base, tok.Token)
 	case "list":
 		var users []struct {
 			Name     string     `json:"name"`
@@ -130,7 +130,7 @@ func cmdUser(c *apiClient, args []string) error {
 			return err
 		}
 		fmt.Printf("New token for %s. The old one has stopped working and its browsers are signed out.\n", args[1])
-		showUserToken(tok.Token)
+		showUserToken(c.base, tok.Token)
 	case "rotate":
 		if len(args) < 2 || len(args) > 3 {
 			return usage
@@ -147,17 +147,18 @@ func cmdUser(c *apiClient, args []string) error {
 			return err
 		}
 		fmt.Printf("New token for %s. The old one keeps working for %d more minutes; browsers are signed out now.\n", args[1], tok.Grace)
-		showUserToken(tok.Token)
+		showUserToken(c.base, tok.Token)
 	default:
 		return usage
 	}
 	return nil
 }
 
-func showUserToken(token string) {
+func showUserToken(base, token string) {
 	fmt.Println()
 	fmt.Println("  " + token)
 	fmt.Println()
+	fmt.Println("Dashboard sign-in link: " + base + "/#login=" + token)
 	fmt.Println("This is shown once and the manager keeps only a hash of it: copy it now. Use it as")
 	fmt.Println("HARNESS_OPERATOR_TOKEN for harnessctl, or sign in to the dashboard with it.")
 }
