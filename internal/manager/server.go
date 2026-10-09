@@ -194,6 +194,8 @@ type Server struct {
 	jobs *jobTable
 	// workflows holds multi-step workflows (workflows.go).
 	workflows *workflowTable
+	// schedules holds recurring work (schedules.go).
+	schedules *scheduleTable
 	// spots holds spot checks and suspect marks (spotcheck.go).
 	spots *spotCheckTable
 	// plans holds AI plans (planner.go), in memory only.
@@ -253,6 +255,7 @@ func NewServer(transport domain.Transport, store PersistentStore, cfg Config) *S
 		splits:       newSplitTable(),
 		jobs:         newJobTable(),
 		workflows:    newWorkflowTable(),
+		schedules:    newScheduleTable(),
 		spots:        newSpotCheckTable(),
 		plans:        newPlanTable(),
 		policy:       &policyStore{p: domain.PermissivePolicy()},
