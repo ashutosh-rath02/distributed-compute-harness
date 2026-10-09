@@ -175,6 +175,7 @@ func (s *Server) NewHTTPHandler() http.Handler {
 	mux.HandleFunc("POST /workloads/{id}/cancel", s.apiCancelWorkload)
 	mux.HandleFunc("POST /login", s.apiLogin)
 	mux.HandleFunc("GET /server-proof", s.apiServerProof)
+	mux.HandleFunc("GET /version", s.apiGetVersion)
 	mux.HandleFunc("GET /join-requests", s.apiListJoinRequests)
 	mux.HandleFunc("GET /join-window", s.apiGetJoinWindow)
 	mux.HandleFunc("POST /join-window", s.apiOpenJoinWindow)

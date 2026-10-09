@@ -34,6 +34,8 @@ aapt2="$(tool aapt2)"; d8="$(tool d8)"; zipalign="$(tool zipalign)"; apksigner="
 # count): to build successive versions from one commit to test updates.
 version_code="${HARNESS_ANDROID_VERSION_CODE:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}"
 version_name="$(git describe --always --dirty 2>/dev/null || echo dev)"
+# Version, commit and date go into every binary (scripts/version.sh).
+source scripts/version.sh
 out="build/android"
 rm -rf "$out"
 mkdir -p "$out/assets/agents" "$out/lib" "$out/classes" "$out/gen" "$out/dex" dist
@@ -48,7 +50,7 @@ go run ./cmd/manager -check-agent-binaries "${checks[@]}" >/dev/null
 
 echo "== manager for each Android ABI (GOOS=linux: Android runs Linux binaries)"
 build_manager() { # goos goarch goarm abi
-  CGO_ENABLED=0 GOOS=$1 GOARCH=$2 GOARM=$3 go build -trimpath -ldflags "-s -w" -o "$out/lib/$4/libhomeharness_manager.so" ./cmd/manager
+  CGO_ENABLED=0 GOOS=$1 GOARCH=$2 GOARM=$3 go build -trimpath -ldflags "-s -w $VERSION_LDFLAGS" -o "$out/lib/$4/libhomeharness_manager.so" ./cmd/manager
 }
 build_manager linux arm64 "" arm64-v8a
 build_manager linux arm 7 armeabi-v7a

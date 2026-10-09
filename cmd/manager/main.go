@@ -30,6 +30,7 @@ import (
 	"home-harness/internal/transport/multi"
 	"home-harness/internal/transport/relay"
 	"home-harness/internal/transport/ws"
+	"home-harness/internal/version"
 )
 
 func main() {
@@ -70,7 +71,12 @@ func main() {
 	withArtifacts := flag.Bool("with-artifacts", false, "with -export-state: include stored workload files (can be large)")
 	force := flag.Bool("force", false, "with -import-state: replace an existing state; with -standby-of: replace this manager's database and identity with the primary's")
 	standby := registerStandbyFlags()
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(version.String("manager"))
+		return
+	}
 
 	if *exportState != "" || *importState != "" {
 		if *stateDir == "" {

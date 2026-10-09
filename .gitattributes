@@ -1,0 +1,28 @@
+# Everything is stored with LF, and checked out with LF on every OS: the
+# Windows dev machine's autocrlf used to give CRLF working copies, which
+# made `gofmt -l` list every file and could break shell scripts ("\r" in
+# `set -euo pipefail`). Embedded files (dashboard.html, remote.js) are
+# also byte-identical on every platform this way.
+* text=auto eol=lf
+
+# Scripts that must stay LF for the shells that run them (Git Bash, Termux,
+# macOS, Linux CI), whatever core.autocrlf says.
+*.sh text eol=lf
+*.go text eol=lf
+
+# cmd.exe mis-parses labels and multi-line blocks in LF batch files, so
+# install.cmd is CRLF. PowerShell reads either; CRLF is what Windows
+# editors write, and the installer is copied to Windows PCs as is.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary files: never touch their bytes.
+*.png binary
+*.jpg binary
+*.apk binary
+*.zip binary
+*.jks binary
+*.keystore binary
+*.so binary
+*.exe binary

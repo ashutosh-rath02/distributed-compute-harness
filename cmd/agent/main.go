@@ -27,6 +27,7 @@ import (
 	"home-harness/internal/sysinfo"
 	"home-harness/internal/transport/relay"
 	"home-harness/internal/transport/ws"
+	"home-harness/internal/version"
 )
 
 func main() {
@@ -56,7 +57,12 @@ func main() {
 	noSelfUpdate := flag.Bool("no-self-update", false, "don't offer self-update (this binary can't be replaced in place; it is updated some other way, e.g. with the Android app)")
 	appAPK := flag.String("app-apk", "", "the installed app this agent is part of (the Android app passes its own APK): its hash tells the manager which app version runs here")
 	appUpdateFile := flag.String("app-update-file", "", "where to download a newer app when the manager offers one, for the app to install (with -app-apk)")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(version.String("agent"))
+		return
+	}
 
 	// Without -manager-fingerprint, a device that paired before pins the
 	// certificate it kept then (see firstUse).

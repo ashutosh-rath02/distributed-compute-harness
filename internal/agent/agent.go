@@ -23,6 +23,7 @@ import (
 	"home-harness/internal/protocol"
 	"home-harness/internal/sysinfo"
 	"home-harness/internal/tasks"
+	"home-harness/internal/version"
 )
 
 // metricsSampleInterval is how long CollectMetrics blocks per heartbeat to
@@ -185,7 +186,9 @@ type Config struct {
 	Failover bool
 }
 
-const defaultAgentVersion = "0.1.0"
+// defaultAgentVersion is the build's injected version (internal/version);
+// updates compare binary hashes, never this string.
+var defaultAgentVersion = version.Version
 
 // Agent is a single node's runtime: identity plus the connection lifecycle
 // to the manager.

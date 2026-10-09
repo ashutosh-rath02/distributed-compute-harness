@@ -13,6 +13,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -22,6 +23,7 @@ import (
 	"time"
 
 	"home-harness/internal/relay"
+	"home-harness/internal/version"
 )
 
 func main() {
@@ -32,7 +34,12 @@ func main() {
 	publicTLSKey := flag.String("public-tls-key", "", "PEM private key for -public-addr")
 	aliasKey := flag.String("alias-key", "", "stable secret used to issue opaque per-device relay credentials (required with -public-addr; preserve across restarts)")
 	publishToken := flag.String("enrollment-publish-token", "", "secret managers must present to publish internet enrollment links (required with -public-addr)")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(version.String("relay"))
+		return
+	}
 	if *publicAddr != "" && (*publicTLSCert == "" || *publicTLSKey == "" || *aliasKey == "" || *publishToken == "") {
 		log.Fatal("relay: -public-tls-cert, -public-tls-key, -alias-key, and -enrollment-publish-token are required with -public-addr")
 	}
