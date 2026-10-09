@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -74,6 +75,32 @@ func TestJoinPageRefusesOddHosts(t *testing.T) {
 			if rec := joinGet(t, h, host, path, "Windows"); rec.Code != http.StatusBadRequest {
 				t.Errorf("Host %q %s: got %d, want 400", host, path, rec.Code)
 			}
+		}
+	}
+}
+
+// The installers are piped straight into an interpreter (irm | iex,
+// curl | bash): a BOM or a CR would reach it as a stray character, and a
+// PowerShell here-string breaks when iex gets the response line by line.
+func TestJoinInstallersServeCleanBytes(t *testing.T) {
+	h := newJoinPageServer(t, "").JoinPageHandler()
+	for _, path := range []string{"/install/windows.ps1", "/install/macos.sh", "/install/linux.sh"} {
+		rec := joinGet(t, h, "192.168.1.20:7419", path, "")
+		body := rec.Body.Bytes()
+		if rec.Code != http.StatusOK || len(body) == 0 {
+			t.Fatalf("%s: status %d, %d bytes", path, rec.Code, len(body))
+		}
+		if bytes.HasPrefix(body, []byte{0xEF, 0xBB, 0xBF}) {
+			t.Errorf("%s starts with a BOM", path)
+		}
+		if bytes.Contains(body, []byte("\r")) {
+			t.Errorf("%s has CR line endings", path)
+		}
+		if bytes.Contains(body, []byte("@'")) || bytes.Contains(body, []byte(`@"`)) {
+			t.Errorf("%s has a PowerShell here-string", path)
+		}
+		if !bytes.HasSuffix(body, []byte("\n")) {
+			t.Errorf("%s does not end with a newline", path)
 		}
 	}
 }

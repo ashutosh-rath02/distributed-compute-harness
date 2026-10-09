@@ -143,7 +143,11 @@ pkg install -y curl && mkdir -p ~/home-harness && cd ~/home-harness && curl %s-o
 // anything starts it (pairing creates the identity there, so the code it
 // shows is the running agent's); AfterStart runs last; Done is the closing
 // message. Everything must stay ASCII: the join page's installer reaches
-// Windows PowerShell 5.1 through irm | iex.
+// Windows PowerShell 5.1 through irm | iex. Every statement, including the
+// try/catch, must also fit on ONE line (no here-strings, no braces spanning
+// lines): iex runs each piped string on its own, and a response that
+// reaches it split into lines fails on the first multi-line construct
+// ("The string is missing the terminator: '@").
 type windowsSteps struct {
 	Fetch, Hash, AgentFlags string
 	BeforeStart, AfterStart string
@@ -176,41 +180,23 @@ Start-Sleep -Milliseconds 500
 Move-Item $download $agent -Force
 %s
 $launcher = Join-Path $root "start-agent.ps1"
-@'
-$agent = Join-Path $env:LOCALAPPDATA "HomeHarness\agent.exe"
-# Tells the agent this loop restarts it, so a self-update just exits and
-# lets the loop start the new binary instead of running a second copy.
-$env:HOME_HARNESS_SUPERVISED = "1"
-while ($true) {
-  & $agent %s
-  Start-Sleep -Seconds 5
-}
-'@ | Set-Content -Encoding UTF8 $launcher
+# The launcher loop (the HOME_HARNESS_SUPERVISED line tells the agent this
+# loop restarts it, so a self-update just exits and lets the loop start the
+# new binary instead of running a second copy). Built from single-quoted
+# strings rather than a here-string.
+@('$agent = Join-Path $env:LOCALAPPDATA "HomeHarness\agent.exe"', '$env:HOME_HARNESS_SUPERVISED = "1"', 'while ($true) {', '  & $agent %s', '  Start-Sleep -Seconds 5', '}') -join [Environment]::NewLine | Set-Content -Encoding UTF8 $launcher
 # Start at sign-in as a per-user scheduled task: hidden, restarted if
 # it ever stops, kept running on battery, and never elevated (no admin
 # needed; raw commands run as you, not SYSTEM). The older Run-key entry
 # is the fallback, and is removed when the task takes over so only one
-# launcher ever loops.
+# launcher ever loops. At sign-in, and every 2 minutes as a watchdog:
+# "restart on failure" only covers a launch that fails, so a launcher that
+# stops later would otherwise stay down until the next sign-in. While it
+# runs, the extra starts are ignored (IgnoreNew).
 $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
 $launchArgs = '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $launcher + '"'
 $task = $false
-try {
-  $user = "$env:USERDOMAIN\$env:USERNAME"
-  $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $launchArgs
-  # At sign-in, and every 2 minutes as a watchdog: "restart on failure"
-  # only covers a launch that fails, so a launcher that stops later
-  # would otherwise stay down until the next sign-in. While it runs, the
-  # extra starts are ignored (IgnoreNew).
-  $trigger = @((New-ScheduledTaskTrigger -AtLogOn -User $user), (New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2) -RepetitionInterval (New-TimeSpan -Minutes 2)))
-  $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
-  $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
-  Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "Home Compute Harness agent" -Force -ErrorAction Stop | Out-Null
-  Remove-ItemProperty -Path $runKey -Name $taskName -ErrorAction SilentlyContinue
-  $task = $true
-} catch {
-  Write-Warning ("Couldn't register a scheduled task (" + $_.Exception.Message + "); starting at sign-in from the Run key instead.")
-  New-ItemProperty -Path $runKey -Name $taskName -Value ("powershell.exe " + $launchArgs) -PropertyType String -Force | Out-Null
-}
+try { $user = "$env:USERDOMAIN\$env:USERNAME"; $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $launchArgs; $trigger = @((New-ScheduledTaskTrigger -AtLogOn -User $user), (New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2) -RepetitionInterval (New-TimeSpan -Minutes 2))); $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited; $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew; Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "Home Compute Harness agent" -Force -ErrorAction Stop | Out-Null; Remove-ItemProperty -Path $runKey -Name $taskName -ErrorAction SilentlyContinue; $task = $true } catch { Write-Warning ("Couldn't register a scheduled task (" + $_.Exception.Message + "); starting at sign-in from the Run key instead."); New-ItemProperty -Path $runKey -Name $taskName -Value ("powershell.exe " + $launchArgs) -PropertyType String -Force | Out-Null }
 if ($task) { Start-ScheduledTask -TaskName $taskName } else { Start-Process powershell.exe -ArgumentList $launchArgs -WindowStyle Hidden }
 %s
 Write-Host "%s"
