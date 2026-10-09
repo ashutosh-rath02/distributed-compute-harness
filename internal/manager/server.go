@@ -176,6 +176,8 @@ type Server struct {
 	// alias/labels and the availability rule are set separately).
 	metaMu   sync.Mutex
 	auditLog *auditRecorder
+	// rel: backups, drain and storage health (reliability.go).
+	rel reliabilityState
 
 	// placeMu serializes "check room, then reserve" (placement plus the
 	// state change that makes the reservation count), so two concurrent
@@ -840,6 +842,7 @@ func (s *Server) Run(ctx context.Context) error {
 	go s.monitorHeartbeats(ctx)
 	go s.reconcileWorkloads(ctx)
 	go s.watchPeer(ctx)
+	go s.watchStorage(ctx)
 
 	for {
 		select {

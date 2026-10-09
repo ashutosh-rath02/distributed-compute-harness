@@ -71,6 +71,13 @@ func (s *Store) Health() Health {
 	return s.h.state
 }
 
+// Degraded is Health in a shape the manager can use without importing
+// this package.
+func (s *Store) Degraded() (bool, string, time.Time) {
+	h := s.Health()
+	return h.Degraded, h.Reason, h.Since
+}
+
 // Probe makes one tiny write, the cheapest honest test of whether the
 // disk takes writes again. The manager calls it while degraded.
 func (s *Store) Probe() error {

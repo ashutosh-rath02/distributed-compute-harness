@@ -217,6 +217,8 @@ func (s *Server) NewHTTPHandler() http.Handler {
 	mux.HandleFunc("POST /standby", s.apiAddStandby)
 	mux.HandleFunc("DELETE /standby", s.apiRemoveStandby)
 	mux.HandleFunc("POST /standby/promote", s.apiPromoteActive)
+	mux.HandleFunc("POST /backup", s.apiBackup)
+	mux.HandleFunc("GET /reliability", s.apiReliability)
 	s.registerRemoteAccessRoutes(mux) // GET/PUT /remote-access, POST /remote-access/rotate (remote.go)
 	// Host check and CSRF protection first (apiguard.go), then operator
 	// authentication (operatorauth.go) — browser defenses and the
@@ -517,6 +519,9 @@ type workloadRequest struct {
 }
 
 func (s *Server) apiPostWorkload(w http.ResponseWriter, r *http.Request) {
+	if s.refuseNewWork(w) {
+		return
+	}
 	var req workloadRequest
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)

@@ -272,6 +272,35 @@ func TestScheduleKeepsNewestChecksAndPrunes(t *testing.T) {
 	}
 }
 
+// Swapping an entry's content for same-size content with a valid zip CRC
+// is caught only by the manifest's SHA-256.
+func TestVerifyCatchesSubstitutedContent(t *testing.T) {
+	_, src, _ := makeState(t, false)
+	p := writeBackup(t, src, "")
+	raw, _ := os.ReadFile(p)
+	zr, _ := zip.NewReader(bytes.NewReader(raw), int64(len(raw)))
+	var out bytes.Buffer
+	zw := zip.NewWriter(&out)
+	for _, f := range zr.File {
+		r, _ := f.Open()
+		data, _ := io.ReadAll(r)
+		r.Close()
+		if f.Name == "operator-token" {
+			data = []byte("OPTOKEN") // same length, different bytes
+		}
+		w, _ := zw.Create(f.Name)
+		w.Write(data)
+	}
+	zw.Close()
+	bad := filepath.Join(t.TempDir(), "sub.zip")
+	os.WriteFile(bad, out.Bytes(), 0o600)
+	o, _ := OpenFile(bad, "")
+	defer o.Close()
+	if _, err := Verify(o); err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("substituted content: %v", err)
+	}
+}
+
 func TestEncryptedScheduleUsesSealedExtension(t *testing.T) {
 	_, src, _ := makeState(t, false)
 	s := &Schedule{Dir: t.TempDir(), Keep: 1, Passphrase: "pw", Iterations: testIter, Make: func(w io.Writer) error { _, err := Create(w, src); return err }}

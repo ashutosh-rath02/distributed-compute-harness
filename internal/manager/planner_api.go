@@ -84,6 +84,9 @@ func (s *Server) apiGetPlan(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiApprovePlan(w http.ResponseWriter, r *http.Request) {
+	if s.refuseNewWork(w) {
+		return
+	}
 	p, err := s.ApprovePlan(r.Context(), r.PathValue("id"), actorFrom(r.Context()))
 	if err != nil {
 		writePlanError(w, err)

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"home-harness/internal/domain"
+	"home-harness/internal/store/persistent"
 )
 
 var (
@@ -51,6 +52,8 @@ type Store struct {
 	mu      sync.Mutex
 	used    int64 // committed artifacts
 	pending int64 // bytes written so far by uploads in progress
+
+	hs healthState // write health and GC counters (health.go)
 }
 
 // Open opens (creating if needed) the store at cfg.Dir, discarding
@@ -103,6 +106,18 @@ func (s *Store) Put(r io.Reader, expectSHA string) (Info, error) {
 
 // PutLimited is Put with a tighter per-file limit (never above MaxBytes).
 func (s *Store) PutLimited(r io.Reader, expectSHA string, limit int64) (Info, error) {
+	if err := s.fault(); err != nil {
+		s.observe(err)
+		return Info{}, fmt.Errorf("artifacts: %w", err)
+	}
+	info, err := s.putLimited(r, expectSHA, limit)
+	if err == nil || persistent.IsNoSpace(err) {
+		s.observe(err)
+	}
+	return info, err
+}
+
+func (s *Store) putLimited(r io.Reader, expectSHA string, limit int64) (Info, error) {
 	if expectSHA != "" && !domain.ValidSHA256(expectSHA) {
 		return Info{}, ErrInvalidID
 	}
@@ -282,6 +297,7 @@ func (s *Store) List() ([]Info, error) {
 // not claim. A file that can't be removed right now (on Windows, one being
 // downloaded) is left for the next run.
 func (s *Store) GC(cutoff time.Time, keep func(sha string) bool) (removed int, freed int64) {
+	defer func() { s.recordGC(removed, freed) }()
 	infos, err := s.List()
 	if err != nil {
 		return 0, 0

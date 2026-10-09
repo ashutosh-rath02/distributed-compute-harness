@@ -341,6 +341,9 @@ func (s *Server) kickDispatch() {
 // unconstrained ones. Disk writes and sends happen after the lock is
 // released, so a long pass never stalls submissions on fsyncs.
 func (s *Server) dispatchQueued(ctx context.Context) {
+	if s.Draining() {
+		return // shutting down: queued work waits for the next start
+	}
 	queued := s.Workloads.queued(time.Now())
 	if len(queued) == 0 {
 		return
