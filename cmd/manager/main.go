@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"home-harness/internal/artifacts"
+	"home-harness/internal/backup"
 	"home-harness/internal/discovery/udp"
 	"home-harness/internal/domain"
 	"home-harness/internal/manager"
@@ -33,6 +34,9 @@ import (
 )
 
 func main() {
+	if runSubcommand(os.Args[1:]) {
+		return // backup / restore / compact (reliability.go)
+	}
 	addr := flag.String("addr", ":7420", "address to listen on for agent connections (host:port)")
 	apiAddr := flag.String("api-addr", "127.0.0.1:7421", "address to serve the HTTP observability/control API on (loopback by default: POST /nodes/{id}/commands has no auth of its own, so widening this exposes unauthenticated command dispatch to the network)")
 	dbPath := flag.String("db", "harness-manager.db", "path to the persistent store file")
@@ -69,6 +73,13 @@ func main() {
 	stateDir := flag.String("state-dir", "", "the state directory for -export-state / -import-state")
 	withArtifacts := flag.Bool("with-artifacts", false, "with -export-state: include stored workload files (can be large)")
 	force := flag.Bool("force", false, "with -import-state: replace an existing state; with -standby-of: replace this manager's database and identity with the primary's")
+	backupDir := flag.String("backup-dir", "", "take automatic backups into this directory (written atomically, owner-only; the newest -backup-keep are kept). Off when empty")
+	backupEvery := flag.Duration("backup-every", 24*time.Hour, "with -backup-dir: how often")
+	backupKeep := flag.Int("backup-keep", 7, "with -backup-dir: how many backups to keep")
+	backupPassFile := flag.String("backup-passphrase-file", "", "with -backup-dir: encrypt scheduled backups with the passphrase in this file (they hold the TLS key and tokens)")
+	backupArtifacts := flag.Bool("backup-artifacts", false, "with -backup-dir: include stored workload files")
+	drainTimeout := flag.Duration("drain-timeout", 10*time.Second, "on SIGINT/SIGTERM: how long to let running work finish (new work is refused at once) before disconnecting devices and exiting")
+	compactOver := flag.String("compact-db-over", "", "compact the database at start when its file is larger than this (e.g. 256MiB); off when empty")
 	standby := registerStandbyFlags()
 	flag.Parse()
 
@@ -161,6 +172,13 @@ func main() {
 		*remoteAccessFile = filepath.Join(filepath.Dir(*operatorTokenFile), "remote-access")
 	}
 
+	if *compactOver != "" {
+		limit, err := parseSize(*compactOver)
+		if err != nil {
+			log.Fatalf("manager: -compact-db-over: %v", err)
+		}
+		compactIfLarge(*dbPath, limit)
+	}
 	store, err := persistent.Open(*dbPath)
 	if err != nil {
 		log.Fatalf("manager: %v", err)
@@ -281,9 +299,30 @@ func main() {
 		relayTransport.Handle("/remote/", srv.RemoteHandler())
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	ctx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+	// A first signal drains (refuse new work, let running work finish for a
+	// bounded time, say goodbye to devices) and then stops; a second one
+	// kills at once, because stop() hands signals back to the default.
+	go func() {
+		select {
+		case <-sigCtx.Done():
+			stop()
+			log.Printf("manager: shutting down: refusing new work, waiting up to %s for running work", *drainTimeout)
+			srv.Drain(*drainTimeout)
+			cancelRun()
+		case <-ctx.Done():
+		}
+	}()
 	ctx = stepped.wrap(ctx) // ends when a newer manager supersedes this one
+
+	reportLayout := backup.Layout{DB: *dbPath, TLSDir: *tlsDir, OperatorToken: *operatorTokenFile, AIKey: *aiKeyFile,
+		RemoteAccess: *remoteAccessFile, PairingToken: filepath.Join(filepath.Dir(*operatorTokenFile), "pairing-token"), ArtifactDir: *artifactDir}
+	if sc := wireBackup(srv, store, reportLayout, *pairingToken, *backupDir, *backupEvery, *backupKeep, *backupPassFile, *backupArtifacts); sc != nil {
+		go sc.Run(ctx)
+	}
 
 	if !*disableDiscovery {
 		port, err := portOf(*addr)

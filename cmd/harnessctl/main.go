@@ -149,6 +149,8 @@ func main() {
 		err = client.cmdJoinRequests()
 	case "join-window":
 		err = client.cmdJoinWindow(args[1:])
+	case "backup":
+		err = cmdBackup(client, args[1:])
 	case "standby":
 		err = client.cmdStandby(args[1:])
 	case "remote":
@@ -195,6 +197,10 @@ Commands:
   info <id>             send GET_SYSTEM_INFO, print the result
   refresh <id>          send REQUEST_RESOURCE_REFRESH, print the result
   events                tail the harness event stream
+  backup [-to F] [-include-artifacts] [-passphrase-file F]
+                        take a consistent backup of the manager (encrypted if a
+                        passphrase is given); "backup verify F" checks one,
+                        "backup status" shows disk health and the last scheduled backup
   login-url             print the dashboard sign-in link (it carries the
                         operator token: keep it private)
   rename <id> <alias|-> set the name the dashboard and "nodes" show for a
