@@ -1,0 +1,62 @@
+# Builds .deb and .rpm packages with nfpm (https://nfpm.goreleaser.com).
+#
+# From the repository root, after building the programs into bin/ (and the other
+# platforms' agents into bin/agents/ with scripts/build-agents.sh):
+#
+#   go build -trimpath -o bin/manager ./cmd/manager
+#   go build -trimpath -o bin/agent ./cmd/agent
+#   go build -trimpath -o bin/harnessctl ./cmd/harnessctl
+#   export VERSION=1.0.0 ARCH=amd64        # or arm64
+#   go run github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.41.1 package -f packaging/linux/nfpm.yaml -p deb -t dist/
+#   go run github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.41.1 package -f packaging/linux/nfpm.yaml -p rpm -t dist/
+#
+# (`go run pkg@version` fetches nfpm into the module cache; it does not change go.mod.)
+# NOT YET BUILT OR INSTALLED by the author: this needs a Linux machine to test.
+name: home-harness
+arch: "${ARCH}"
+platform: linux
+version: "${VERSION}"
+section: net
+priority: optional
+maintainer: Home Harness maintainers <noreply@example.invalid>
+description: |
+  Home Harness: use the spare computers in your home as one pool.
+  This package installs the manager (the coordinator), the agent (the
+  worker) and harnessctl. Both services are installed but start only
+  when you tell them to; see /usr/share/doc/home-harness.
+homepage: https://github.com/ashutosh-rath02/distributed-compute-harness
+license: See repository
+contents:
+  - src: bin/manager
+    dst: /usr/bin/home-harness-manager
+    file_info: { mode: 0755 }
+  - src: bin/agent
+    dst: /usr/bin/home-harness-agent
+    file_info: { mode: 0755 }
+  - src: bin/harnessctl
+    dst: /usr/bin/harnessctl
+    file_info: { mode: 0755 }
+  - src: packaging/linux/run-manager.sh
+    dst: /usr/libexec/home-harness/run-manager
+    file_info: { mode: 0755 }
+  - src: packaging/linux/home-harness-manager.service
+    dst: /usr/lib/systemd/system/home-harness-manager.service
+  - src: packaging/linux/home-harness-agent.service
+    dst: /usr/lib/systemd/system/home-harness-agent.service
+  - src: packaging/linux/manager.env
+    dst: /etc/home-harness/manager.env
+    type: config|noreplace
+  - src: packaging/linux/agent.env
+    dst: /etc/home-harness/agent.env
+    type: config|noreplace
+    file_info: { mode: 0600 }
+  # Agent builds for the other platforms, handed to new devices by the manager.
+  - src: bin/agents/
+    dst: /usr/share/home-harness/agents/
+  - dst: /var/lib/home-harness
+    type: dir
+    file_info: { mode: 0755 }
+scripts:
+  postinstall: packaging/linux/postinstall.sh
+  preremove: packaging/linux/preremove.sh
+  postremove: packaging/linux/postremove.sh

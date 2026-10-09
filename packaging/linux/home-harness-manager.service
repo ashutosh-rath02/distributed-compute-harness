@@ -1,0 +1,49 @@
+[Unit]
+Description=Home Harness manager
+Documentation=https://github.com/ashutosh-rath02/distributed-compute-harness
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=homeharness
+Group=homeharness
+# The wrapper reads the pairing token from /etc/home-harness/pairing-token and
+# adds one -agent-binary flag per file in /usr/share/home-harness/agents, then
+# starts the manager with whatever is in MANAGER_ARGS (manager.env).
+EnvironmentFile=-/etc/home-harness/manager.env
+ExecStart=/usr/libexec/home-harness/run-manager
+Restart=always
+RestartSec=5
+# A standby that is promoted exits and lets systemd start it again.
+Environment=HOME_HARNESS_SUPERVISED=1
+StateDirectory=home-harness/manager
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/home-harness/manager
+
+# Hardening. The manager needs the network and its own state directory, nothing else.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
