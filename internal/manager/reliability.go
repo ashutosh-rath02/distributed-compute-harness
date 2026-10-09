@@ -202,7 +202,9 @@ func (s *Server) apiBackup(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Disposition", `attachment; filename="home-harness-backup.zip"`)
 	w.Header().Set("Content-Length", fmt.Sprint(st.Size()))
-	io.Copy(w, tmp)
+	if _, err := tmp.Seek(0, io.SeekStart); err == nil {
+		io.Copy(w, tmp)
+	}
 }
 
 type reliabilityView struct {
@@ -212,7 +214,8 @@ type reliabilityView struct {
 		Problem  string `json:"problem,omitempty"`
 	} `json:"storage"`
 	Artifacts *struct {
-		Used, Total int64
+		Used  int64 `json:"used"`
+		Total int64 `json:"total"`
 		artifacts.Health
 	} `json:"artifacts,omitempty"`
 	Backup *backup.Last `json:"scheduledBackup,omitempty"`
@@ -230,7 +233,8 @@ func (s *Server) apiReliability(w http.ResponseWriter, r *http.Request) {
 	if st := s.cfg.Artifacts; st != nil {
 		used, total := st.Usage()
 		v.Artifacts = &struct {
-			Used, Total int64
+			Used  int64 `json:"used"`
+		Total int64 `json:"total"`
 			artifacts.Health
 		}{used, total, st.Health()}
 	}
