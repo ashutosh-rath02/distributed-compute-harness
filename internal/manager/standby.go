@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -107,7 +108,7 @@ func (s *Server) loadFailover() error {
 		}
 	}
 	if term > 0 {
-		log.Printf("manager: failover term %d", term)
+		slog.Info("failover.term", "term", term)
 	}
 	return nil
 }
@@ -192,7 +193,7 @@ func (s *Server) stepDown(newTerm uint64, why string) {
 		pair = *f.pair
 	}
 	f.mu.Unlock()
-	log.Printf("manager: STEPPING DOWN: %s (term %d; this manager's is %d). It no longer serves devices", why, newTerm, own)
+	slog.Warn("failover.stepped_down", "reason", why, "term", newTerm, "own_term", own)
 	// This manager's own log is replaced once it copies the active one's;
 	// the active one records the step-down too (HeaderSteppedDown).
 	s.audit(domain.AuditAdmissions, "standby.stepped-down", "", actorFailover, map[string]any{"term": own, "newTerm": newTerm, "peer": pair.PeerAddr, "reason": why})
