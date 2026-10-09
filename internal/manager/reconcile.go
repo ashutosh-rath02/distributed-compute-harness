@@ -3,6 +3,7 @@ package manager
 import (
 	"context"
 	"log"
+	"log/slog"
 	"time"
 
 	"home-harness/internal/domain"
@@ -64,6 +65,7 @@ func (s *Server) reconcileWorkloads(ctx context.Context) {
 		case <-expire.C:
 			s.expireWorkloads()
 		case <-ticker.C:
+			s.met.tick()
 			s.keepAwakeTick(time.Now())
 			// The queue first: a slot that just freed goes to waiting work
 			// in priority order, before a restart or a job's next attempt
@@ -152,7 +154,8 @@ func (s *Server) restartWorkload(ctx context.Context, rec WorkloadRecord) {
 	s.persistWorkloadRecord(newRec)
 
 	s.assign(ctx, targetRec.Conn, newRec.Workload)
-	log.Printf("workload.restarted: %s on %s (attempt %d)", newRec.Workload.ID, resolvedTarget, newRec.Restart.Count)
+	s.met.retry("restart")
+	slog.Info("workload.restarted", "workload", newRec.Workload.ID, "node", resolvedTarget, "capability", newRec.Workload.EffectiveCapability(), "attempt", newRec.Restart.Count)
 	s.publish(domain.EventWorkloadAssigned, resolvedTarget, map[string]any{
 		"workloadId":   string(newRec.Workload.ID),
 		"command":      newRec.Workload.Command,

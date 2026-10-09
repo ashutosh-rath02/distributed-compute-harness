@@ -241,6 +241,8 @@ type Agent struct {
 
 	// failover: what this agent knows about a standby manager (failover.go).
 	failover failoverMemory
+	// self: counters reported in heartbeats (selfmetrics.go).
+	self selfCounters
 }
 
 // New loads (or generates, on first run) the agent's identity and returns
@@ -431,6 +433,7 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 	}
 	defer conn.Close()
 	log.Printf("agent %s: registered with manager at %s", a.identity.NodeID, addr)
+	a.self.noteConnected()
 	if a.cfg.OnRegistered != nil {
 		a.cfg.OnRegistered()
 	}
@@ -622,6 +625,7 @@ func (a *Agent) heartbeatLoop(ctx context.Context, conn domain.Conn, errCh chan<
 					Use:                  &use,
 				},
 				Cache: a.cacheReport(false),
+				Self:  a.self.report(a.startedAt),
 			}
 			if err := a.send(ctx, conn, protocol.MsgHeartbeat, domain.ManagerNodeID, payload); err != nil {
 				errCh <- fmt.Errorf("send HEARTBEAT: %w", err)
@@ -766,7 +770,7 @@ func (a *Agent) capabilityLoop(ctx context.Context, conn domain.Conn) {
 
 // agentFeatures are the behaviors this build tells the manager it has.
 func (a *Agent) agentFeatures() []string {
-	features := []string{domain.FeatureArtifacts, domain.FeatureTimeout, domain.FeatureAvailability}
+	features := []string{domain.FeatureArtifacts, domain.FeatureTimeout, domain.FeatureAvailability, domain.FeatureSelfMetrics}
 	if !a.cfg.SelfUpdateDisabled {
 		features = append([]string{domain.FeatureSelfUpdatePath}, features...)
 	}

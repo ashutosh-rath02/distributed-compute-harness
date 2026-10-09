@@ -297,10 +297,15 @@ type cachingTransfer struct {
 	cache    *inputCache
 	node     domain.NodeID
 	workload domain.WorkloadID
+	self     *selfCounters // nil: not counted
 }
 
 func (t *cachingTransfer) Fetch(ctx context.Context, ref domain.ArtifactRef, dest string) error {
-	if t.cache.copyOut(ctx, ref, dest) {
+	hit := t.cache.copyOut(ctx, ref, dest)
+	if t.self != nil {
+		t.self.noteInput(hit)
+	}
+	if hit {
 		log.Printf("agent %s: workload %s: input %s copied from this device's cache (%d bytes, not downloaded)", t.node, t.workload, ref.Name, ref.Size)
 		return nil
 	}

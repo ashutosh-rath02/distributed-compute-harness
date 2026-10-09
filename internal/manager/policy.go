@@ -167,7 +167,7 @@ func (s *Server) apiPutPolicy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	s.audit(domain.AuditSecurity, "policy.changed", "", actorFrom(r.Context()), map[string]any{"old": old, "new": p})
+	s.audit(domain.AuditSecurity, "policy.changed", "", actorFrom(r.Context()), map[string]any{"requestId": requestIDFrom(r.Context()), "old": old, "new": p})
 	log.Printf("policy.changed by %s", actorFrom(r.Context()))
 	writeJSON(w, http.StatusOK, s.policy.get())
 }

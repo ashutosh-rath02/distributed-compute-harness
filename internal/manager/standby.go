@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -107,7 +108,7 @@ func (s *Server) loadFailover() error {
 		}
 	}
 	if term > 0 {
-		log.Printf("manager: failover term %d", term)
+		slog.Info("failover.term", "term", term)
 	}
 	return nil
 }
@@ -192,7 +193,7 @@ func (s *Server) stepDown(newTerm uint64, why string) {
 		pair = *f.pair
 	}
 	f.mu.Unlock()
-	log.Printf("manager: STEPPING DOWN: %s (term %d; this manager's is %d). It no longer serves devices", why, newTerm, own)
+	slog.Warn("failover.stepped_down", "reason", why, "term", newTerm, "own_term", own)
 	// This manager's own log is replaced once it copies the active one's;
 	// the active one records the step-down too (HeaderSteppedDown).
 	s.audit(domain.AuditAdmissions, "standby.stepped-down", "", actorFailover, map[string]any{"term": own, "newTerm": newTerm, "peer": pair.PeerAddr, "reason": why})
@@ -577,7 +578,7 @@ func (s *Server) apiAddStandby(w http.ResponseWriter, r *http.Request) {
 	if primary == "" {
 		primary = "<this manager's LAN address>:7420"
 	}
-	s.audit(domain.AuditSecurity, "standby.enrollment-created", "", actorFrom(r.Context()), map[string]any{"token": tokenPrefix(token), "expiresAt": until.UTC()})
+	s.audit(domain.AuditSecurity, "standby.enrollment-created", "", actorFrom(r.Context()), map[string]any{"requestId": requestIDFrom(r.Context()), "token": tokenPrefix(token), "expiresAt": until.UTC()})
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"token": token, "fingerprint": s.cfg.Fingerprint, "primary": primary, "expiresAt": until.UTC(),
 		"command": fmt.Sprintf("manager -standby-of %s -standby-fingerprint %s -standby-token %s -advertise-addr <the standby's LAN address>:7420", primary, s.cfg.Fingerprint, token),
@@ -604,7 +605,7 @@ func (s *Server) apiRemoveStandby(w http.ResponseWriter, r *http.Request) {
 	}
 	f.pair, f.enrollUntil, f.lastSync, f.lastETag = nil, time.Time{}, time.Time{}, ""
 	f.mu.Unlock()
-	s.audit(domain.AuditSecurity, "standby.removed", "", actorFrom(r.Context()), map[string]any{"name": was.PeerName, "addr": was.PeerAddr})
+	s.audit(domain.AuditSecurity, "standby.removed", "", actorFrom(r.Context()), map[string]any{"requestId": requestIDFrom(r.Context()), "name": was.PeerName, "addr": was.PeerAddr})
 	s.publish(domain.EventStandby, "", map[string]any{"event": "removed"})
 	s.broadcastManagers()
 	writeJSON(w, http.StatusOK, s.standbyStatus())
@@ -654,6 +655,7 @@ func StandbyRoleHandler(role StandbyRole, operatorToken string) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"promoted": true, "term": role.Status().Term})
 	})
+	registerStandbyProbes(mux)
 	auth := &Server{cfg: Config{OperatorToken: operatorToken}}
 	return guardOperatorAPI(auth.requireOperator(mux))
 }

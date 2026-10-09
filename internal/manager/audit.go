@@ -41,6 +41,7 @@ const (
 const (
 	actorOperatorToken    = "operator-token"
 	actorDashboardSession = "dashboard-session"
+	actorMetricsToken     = "metrics-token" // the scraper's read-only token (observe.go)
 	actorAIKey            = "ai-key"   // the OpenAI-compatible API's own key (openai.go)
 	actorUnauthenticated  = "operator" // operator auth disabled (tests, embedding)
 	actorNode             = "node"
@@ -88,6 +89,7 @@ func (s *Server) audit(logName domain.AuditLog, kind string, nodeID domain.NodeI
 		log.Printf("manager: BUG: peer-driven audit entry %q routed to the security log; recording it in admissions", kind)
 		logName = domain.AuditAdmissions
 	}
+	s.met.audited(logName, kind)
 	e := domain.AuditEntry{Log: logName, Time: time.Now().UTC(), Kind: kind, NodeID: nodeID, Actor: actor, Detail: detail}
 	keep := auditSecurityKeep
 	switch logName {
@@ -124,6 +126,7 @@ func (s *Server) audit(logName domain.AuditLog, kind string, nodeID domain.NodeI
 // was refused.
 func (s *Server) auditRejection(kind string, nodeID domain.NodeID, remote, reason string, extra map[string]any) {
 	now := time.Now().UTC()
+	s.met.rejected(kind) // every refusal counts, even those the log rate-limits
 	r := s.auditLog
 	r.mu.Lock()
 	summary := r.rollMinuteLocked(now)

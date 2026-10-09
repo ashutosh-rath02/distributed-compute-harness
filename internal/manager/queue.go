@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -370,6 +371,7 @@ func (s *Server) dispatchQueued(ctx context.Context) {
 		if !ok {
 			continue // canceled meanwhile
 		}
+		s.met.waited(assigned.Workload.EffectiveCapability(), time.Since(rec.Status.QueuedAt))
 		u := usage[id]
 		u.add(assigned.Workload)
 		usage[id] = u
@@ -380,7 +382,8 @@ func (s *Server) dispatchQueued(ctx context.Context) {
 	for _, d := range out {
 		s.persistWorkloadRecord(d.rec)
 		s.assign(ctx, d.conn, d.rec.Workload)
-		log.Printf("workload.assigned: %s to %s (from the queue)", d.rec.Workload.ID, d.rec.Workload.Target)
+		slog.Info("workload.assigned", "workload", d.rec.Workload.ID, "node", d.rec.Workload.Target,
+			"capability", d.rec.Workload.EffectiveCapability(), "from_queue", true)
 		s.publish(domain.EventWorkloadAssigned, d.rec.Workload.Target, map[string]any{
 			"workloadId": string(d.rec.Workload.ID), "command": d.rec.Workload.Command, "capability": string(d.rec.Workload.EffectiveCapability()), "fromQueue": true,
 		})
@@ -407,7 +410,8 @@ func (s *Server) handleBusyRefusal(node domain.NodeID, status domain.WorkloadSta
 		s.publish(domain.EventWorkloadCanceled, node, map[string]any{"workloadId": string(status.ID)})
 		return
 	}
-	log.Printf("workload.queued: %s (node %s had no free slot; retrying)", status.ID, node)
+	s.met.retry("busy_refusal")
+	slog.Info("workload.queued", "workload", status.ID, "node", node, "reason", "node had no free slot; retrying")
 	s.publish(domain.EventWorkloadQueued, node, map[string]any{"workloadId": string(status.ID), "reason": "node busy"})
 }
 

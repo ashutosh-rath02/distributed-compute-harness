@@ -292,7 +292,7 @@ func (s *Server) apiOpenAIChat(w http.ResponseWriter, r *http.Request) {
 	}
 	// High-volume and app-driven: recorded in the noise log, never with the
 	// conversation itself.
-	s.audit(domain.AuditNoise, "ai.chat", "", actorFrom(r.Context()), map[string]any{"workloadId": string(wl.ID), "model": model, "stream": req.Stream})
+	s.audit(domain.AuditNoise, "ai.chat", "", actorFrom(r.Context()), map[string]any{"requestId": requestIDFrom(r.Context()), "workloadId": string(wl.ID), "model": model, "stream": req.Stream})
 
 	c := &chatRun{s: s, id: wl.ID, events: events, model: model, created: time.Now().Unix()}
 	w.Header().Set("X-Home-Harness-Workload", string(wl.ID))
