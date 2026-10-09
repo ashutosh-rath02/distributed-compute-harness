@@ -1,0 +1,93 @@
+# Prometheus alert rules for home-harness. Load with:
+#   rule_files: ["alerts.yml"]
+# Check with: promtool check rules docs/alerts.yml
+groups:
+  - name: home-harness
+    rules:
+      - alert: HarnessManagerDown
+        expr: up{job="home-harness"} == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "The harness manager cannot be scraped"
+          description: "Prometheus has not reached {{ $labels.instance }} for 2 minutes."
+
+      - alert: HarnessNotReady
+        expr: harness_ready == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "The manager is up but not ready"
+          description: "GET /readyz is failing on {{ $labels.instance }}: it is stepped down, not listening, or its database is not writable."
+
+      - alert: HarnessNoReadyNodes
+        expr: harness_nodes{state="READY"} == 0
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: "No device is connected and ready"
+          description: "Work cannot run anywhere. Check the devices and the network."
+
+      - alert: HarnessQueueWaitHigh
+        expr: harness_queue_oldest_wait_seconds > 600
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "Work has waited more than 10 minutes in the queue"
+          description: "The oldest queued workload has waited {{ $value | humanizeDuration }}. Devices may be busy, held back (battery, in use, paused) or offline."
+
+      - alert: HarnessFailureRateHigh
+        expr: |
+          sum(rate(harness_workloads_finished_total{outcome="failed"}[15m]))
+            / clamp_min(sum(rate(harness_workloads_finished_total[15m])), 1e-9) > 0.3
+          and sum(rate(harness_workloads_finished_total[15m])) > 0.01
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "More than 30% of workloads are failing"
+          description: "Look at `harnessctl status` for the recent failures."
+
+      - alert: HarnessHeartbeatGap
+        expr: harness_node_heartbeat_age_seconds > 30
+        for: 2m
+        labels: {severity: warning}
+        annotations:
+          summary: "A device has gone quiet"
+          description: "Node {{ $labels.node }} was last heard from {{ $value | humanizeDuration }} ago (agents beat every 5 s; the manager marks it offline at 15 s)."
+
+      - alert: HarnessStoreNearFull
+        expr: harness_artifact_store_used_bytes / harness_artifact_store_limit_bytes > 0.9
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "The file store is over 90% full"
+          description: "Uploads will start failing. Delete files (harnessctl artifacts) or raise -artifact-store-size."
+
+      - alert: HarnessFailoverTermChanged
+        expr: changes(harness_failover_term[15m]) > 0
+        labels: {severity: warning}
+        annotations:
+          summary: "A standby took over (failover term changed)"
+          description: "The active manager changed. Check that the old one stepped down and that devices followed."
+
+      - alert: HarnessSteppedDown
+        expr: harness_failover_stepped_down == 1
+        for: 1m
+        labels: {severity: warning}
+        annotations:
+          summary: "This manager was superseded by a newer one"
+          description: "It serves no devices now."
+
+      - alert: HarnessStandbyBehind
+        expr: harness_standby_lag_seconds > 300
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "The standby has not copied the manager's state for 5 minutes"
+
+      - alert: HarnessSpotCheckMismatch
+        expr: increase(harness_spot_checks_total{result=~"mismatch|unresolved"}[1h]) > 0
+        labels: {severity: critical}
+        annotations:
+          summary: "Two devices disagreed on the same task"
+          description: "A spot check found different results (security log: node.result-mismatch). See `harnessctl audit` and clear the suspect mark once resolved."
