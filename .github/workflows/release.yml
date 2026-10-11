@@ -23,7 +23,7 @@ jobs:
     permissions:
       contents: write # create the draft release
     steps:
-      - uses: actions/checkout@v4 # major tag: first-party, bumped by Dependabot
+      - uses: actions/checkout@v7 # major tag: first-party, bumped by Dependabot
         with:
           fetch-depth: 0 # tags and history, for the notes and the version
       - uses: actions/setup-go@v5 # major tag: first-party, bumped by Dependabot
