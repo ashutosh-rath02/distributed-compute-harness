@@ -73,6 +73,14 @@ func newScheduleTable() *scheduleTable {
 	return &scheduleTable{byID: map[domain.ScheduleID]*domain.Schedule{}, now: time.Now}
 }
 
+// SetScheduleClock replaces the scheduler's clock (tests drive slots
+// without waiting minutes). Call it before Run.
+func (s *Server) SetScheduleClock(now func() time.Time) {
+	if s.schedules != nil {
+		s.schedules.now = now
+	}
+}
+
 // ErrUnknownSchedule is a schedule ID the manager doesn't know.
 var ErrUnknownSchedule = errors.New("manager: unknown schedule")
 
