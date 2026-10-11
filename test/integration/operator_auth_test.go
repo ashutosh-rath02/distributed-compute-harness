@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"encoding/json"
 	"bufio"
 	"context"
 	"io"
@@ -112,7 +113,11 @@ func TestOperatorAPIRequiresTheOperatorToken(t *testing.T) {
 	login := operatorCall(t, http.MethodPost, api.URL+"/login", "", `{"token":"`+operatorToken+`"}`)
 	loginBody, _ := io.ReadAll(login.Body)
 	login.Body.Close()
-	session := strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(string(loginBody)), `{"session":"`), `"}`)
+	var loginResp struct {
+		Session string `json:"session"`
+	}
+	json.Unmarshal(loginBody, &loginResp)
+	session := loginResp.Session
 	if login.StatusCode != http.StatusOK || session == "" || session == operatorToken || login.Header.Get("Set-Cookie") != "" {
 		t.Fatalf("login: %d %s (Set-Cookie=%q)", login.StatusCode, loginBody, login.Header.Get("Set-Cookie"))
 	}

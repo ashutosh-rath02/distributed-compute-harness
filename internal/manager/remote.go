@@ -648,7 +648,7 @@ var remoteRoutes = map[string]remoteClass{
 	"GET /revocations":                 remoteView,
 	"GET /agent-binaries":              remoteView,
 	"GET /agent-binary/hash":           remoteView,
-	"GET /join-requests":               remoteView,
+	"GET /join-requests":               remoteSensitive, // pairing codes
 	"GET /join-window":                 remoteView,
 	"GET /audit":                       remoteView,
 	"GET /workloads":                   remoteView,
@@ -757,6 +757,12 @@ func (s *Server) remoteGate(next http.Handler) http.Handler {
 		}
 		on, mode := s.remote.on()
 		allowed, why := remoteDecision(pattern, mode, call.body)
+		// Defence in depth: a mode is a role (view-only = viewer, standard =
+		// operator, full = admin) and may never do more than that role's
+		// entry in routeRoles (roles.go).
+		if allowed && !roleAllows(remoteRole(mode), pattern) {
+			allowed, why = false, "That isn't available remotely at this level: use the manager's own dashboard, at home."
+		}
 		if !on {
 			allowed, why = false, "Remote access was just turned off."
 		}
@@ -1070,4 +1076,15 @@ func (s *Server) registerRemoteAccessRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /remote-access", s.apiGetRemoteAccess)
 	mux.HandleFunc("PUT /remote-access", s.apiPutRemoteAccess)
 	mux.HandleFunc("POST /remote-access/rotate", s.apiRotateRemoteKey)
+}
+
+// remoteRole is the role a remote mode is held to.
+func remoteRole(mode RemoteMode) domain.Role {
+	switch mode {
+	case RemoteFull:
+		return domain.RoleAdmin
+	case RemoteStandard:
+		return domain.RoleOperator
+	}
+	return domain.RoleViewer
 }

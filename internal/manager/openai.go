@@ -107,7 +107,7 @@ func (s *Server) apiGetAIInfo(w http.ResponseWriter, r *http.Request) {
 		models = append(models, m)
 	}
 	sort.Strings(models)
-	writeJSON(w, http.StatusOK, map[string]any{"baseUrl": "http://" + host + "/v1", "apiKey": s.cfg.AIKey, "models": models})
+	writeJSON(w, http.StatusOK, map[string]any{"baseUrl": "http://" + host + "/v1", "apiKey": s.aiKey(), "models": models})
 }
 
 // openAIChatRequest is the part of OpenAI's chat request this API reads;

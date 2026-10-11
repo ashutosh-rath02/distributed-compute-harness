@@ -6,6 +6,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"sync/atomic"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,6 +19,8 @@ import (
 )
 
 const testOperatorToken = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+var opCalls atomic.Uint64
 
 func TestDashboardSessionIsDerivedNotTheToken(t *testing.T) {
 	session := dashboardSession(testOperatorToken)
@@ -61,6 +65,8 @@ func operatorRequest(t *testing.T, h http.Handler, method, path, bearer, body st
 	defer cancel()
 	req := httptest.NewRequest(method, path, strings.NewReader(body)).WithContext(ctx)
 	req.Host = "127.0.0.1:7421" // the guard rejects non-local Host names
+	// A different source each call: the failed-attempt limiter (secrets.go) counts per source.
+	req.RemoteAddr = fmt.Sprintf("127.0.%d.%d:5000", (opCalls.Add(1)>>8)&255, opCalls.Load()&255)
 	if bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
@@ -177,7 +183,7 @@ func TestLoginExchangesTokenForSessionWithoutCookie(t *testing.T) {
 		Session string `json:"session"`
 	}
 	json.Unmarshal(rec.Body.Bytes(), &resp)
-	if rec.Code != http.StatusOK || resp.Session != dashboardSession(testOperatorToken) {
+	if rec.Code != http.StatusOK || !strings.HasPrefix(resp.Session, "s1.") {
 		t.Fatalf("login: got %d %q", rec.Code, rec.Body.String())
 	}
 	// A cookie would also reach every other localhost port (RFC 6265

@@ -316,7 +316,7 @@ var relaunch = func(exePath string, args []string, logPath string) {
 		os.Exit(0)
 	}
 	cmd := exec.Command(exePath, args...)
-	if logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
+	if logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
 		cmd.Stdout = logFile
 		cmd.Stderr = logFile
 	} else {

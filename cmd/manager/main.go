@@ -265,7 +265,10 @@ func main() {
 		OperatorToken:       operatorToken,
 		AIKey:               aiKey,
 		MetricsToken:        metricsToken,
-		KeepAwake:          *keepAwake,
+		OperatorTokenFile:   *operatorTokenFile,
+		AIKeyFile:           *aiKeyFile,
+		PairingTokenFile:    filepath.Join(filepath.Dir(*dbPath), "pairing-token"), // where the launchers keep it (rotation rewrites it)
+		KeepAwake:           *keepAwake,
 		Artifacts:           artifactStore,
 		ArtifactRetention:   *artifactRetention,
 		InitialPolicy:       initialPolicy(*allowRaw),

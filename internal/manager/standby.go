@@ -433,7 +433,7 @@ func (s *Server) standbySync(w http.ResponseWriter, r *http.Request, fs failover
 		return
 	}
 	etag := s.standbyETag(txid, shas)
-	st := failover.State{Term: s.Term(), PairingToken: s.cfg.PairingToken, AIKey: s.cfg.AIKey, Artifacts: shas, CreatedAt: time.Now().UTC()}
+	st := failover.State{Term: s.Term(), PairingToken: s.pairingToken(), AIKey: s.aiKey(), Artifacts: shas, CreatedAt: time.Now().UTC()}
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("ETag", etag)
 	if err := failover.WriteBundle(w, st, tmp, certPEM, keyPEM); err != nil {
@@ -458,7 +458,7 @@ func (s *Server) noteStandbySync(etag string) {
 // a digest of everything sent beside it.
 func (s *Server) standbyETag(version uint64, shas []string) string {
 	h := sha256.New()
-	fmt.Fprintf(h, "%d\n%s\n%s\n%s\n", s.Term(), s.cfg.PairingToken, s.cfg.AIKey, s.cfg.Fingerprint)
+	fmt.Fprintf(h, "%d\n%s\n%s\n%s\n", s.Term(), s.pairingToken(), s.aiKey(), s.cfg.Fingerprint)
 	for _, sha := range shas {
 		io.WriteString(h, sha)
 	}

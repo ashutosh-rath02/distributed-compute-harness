@@ -163,6 +163,10 @@ func main() {
 		err = client.cmdJoinWindow(args[1:])
 	case "standby":
 		err = client.cmdStandby(args[1:])
+	case "user":
+		err = cmdUser(client, args[1:])
+	case "rotate":
+		err = cmdRotate(client, args[1:])
 	case "remote":
 		err = cmdRemote(client, args[1:])
 	case "approve":
@@ -208,6 +212,9 @@ Commands:
   info <id>             send GET_SYSTEM_INFO, print the result
   refresh <id>          send REQUEST_RESOURCE_REFRESH, print the result
   events                tail the harness event stream
+  user add|list|remove|token|rotate ...   named users with a role (viewer, operator,
+                        admin) and their own tokens; see "harnessctl user"
+  rotate operator-token|ai-key|pairing-token   replace a secret without a restart
   login-url             print the dashboard sign-in link (it carries the
                         operator token: keep it private)
   rename <id> <alias|-> set the name the dashboard and "nodes" show for a

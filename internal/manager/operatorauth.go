@@ -1,6 +1,9 @@
 package manager
 
 import (
+	"context"
+	"net"
+	"time"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -141,18 +144,17 @@ func bearerToken(r *http.Request) string {
 }
 
 // requireOperator enforces operator authentication on every route except
-// operatorPublic ones. A Server with no OperatorToken (tests, embedding)
-// is unauthenticated; cmd/manager always configures one.
+// operatorPublic ones, then the caller's role against routeRoles (roles.go).
+// A Server with no OperatorToken (tests, embedding) is unauthenticated;
+// cmd/manager always configures one.
 func (s *Server) requireOperator(next http.Handler) http.Handler {
+	mux, _ := next.(*http.ServeMux)
 	// Remote calls (remote.go) were verified by the remote handler and are
 	// held to the remote mode by remoteGate; local requests pass through it.
 	next = s.remoteGate(next)
-	token := s.cfg.OperatorToken
-	if token == "" {
+	if s.cfg.OperatorToken == "" {
 		return next
 	}
-	session := dashboardSession(token)
-	aiKey := s.cfg.AIKey
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if remoteCallFrom(r.Context()) != nil {
 			next.ServeHTTP(w, r)
@@ -162,44 +164,125 @@ func (s *Server) requireOperator(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		got := []byte(bearerToken(r))
-		// Record which credential form acted, for the audit log.
-		if subtle.ConstantTimeCompare(got, []byte(token)) == 1 {
-			next.ServeHTTP(w, r.WithContext(withActor(r.Context(), actorOperatorToken)))
-			return
+		pattern := ""
+		if mux != nil {
+			_, pattern = mux.Handler(r)
 		}
-		if subtle.ConstantTimeCompare(got, []byte(session)) == 1 {
-			next.ServeHTTP(w, r.WithContext(withActor(r.Context(), actorDashboardSession)))
-			return
+		if pattern != "POST /artifacts" && r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, maxAPIBody)
 		}
-		// The metrics token opens only /metrics, /healthz and /readyz
-		// (observe.go), so a scraper never holds the operator token.
-		if mt := s.cfg.MetricsToken; mt != "" && observePath(r) && subtle.ConstantTimeCompare(got, []byte(mt)) == 1 {
-			next.ServeHTTP(w, r.WithContext(withActor(r.Context(), actorMetricsToken)))
-			return
-		}
-		// The AI key opens only the OpenAI-compatible API (openai.go).
-		if isOpenAIPath(r.URL.Path) {
-			if aiKey != "" && subtle.ConstantTimeCompare(got, []byte(aiKey)) == 1 {
-				next.ServeHTTP(w, r.WithContext(withActor(r.Context(), actorAIKey)))
+		got := bearerToken(r)
+		p, ok := s.authenticate(got, time.Now())
+		if !ok {
+			// The metrics token opens only /metrics, /healthz and /readyz
+			// (observe.go), so a scraper never holds the operator token.
+			if mt := s.cfg.MetricsToken; mt != "" && got != "" && observePath(r) && subtle.ConstantTimeCompare([]byte(got), []byte(mt)) == 1 {
+				next.ServeHTTP(w, r.WithContext(withActor(r.Context(), actorMetricsToken)))
 				return
 			}
-			w.Header().Set("WWW-Authenticate", `Bearer realm="home-harness AI API"`)
-			writeOpenAIError(w, http.StatusUnauthorized, "invalid_request_error", "invalid_api_key",
-				"use the manager's AI key as the API key (dashboard: \"Use with AI apps\", or harnessctl ai)")
+			// The AI key opens only the OpenAI-compatible API (openai.go).
+			if isOpenAIPath(r.URL.Path) {
+				if aiKey := s.aiKey(); aiKey != "" && subtle.ConstantTimeCompare([]byte(got), []byte(aiKey)) == 1 {
+					next.ServeHTTP(w, r.WithContext(withActor(r.Context(), actorAIKey)))
+					return
+				}
+			}
+			if got != "" && s.authFail.tooMany(authSource(r), time.Now()) {
+				w.Header().Set("Retry-After", "60")
+				writeJSON(w, http.StatusTooManyRequests, map[string]string{
+					"error": "too many failed sign-in attempts from this source: wait a minute, then use the right token. A correct token still works.",
+				})
+				return
+			}
+			if isOpenAIPath(r.URL.Path) {
+				w.Header().Set("WWW-Authenticate", `Bearer realm="home-harness AI API"`)
+				writeOpenAIError(w, http.StatusUnauthorized, "invalid_request_error", "invalid_api_key",
+					"use the manager's AI key as the API key (dashboard: \"Use with AI apps\", or harnessctl ai)")
+				return
+			}
+			w.Header().Set("WWW-Authenticate", `Bearer realm="home-harness operator API"`)
+			writeJSON(w, http.StatusUnauthorized, map[string]string{
+				"error": "operator authentication required: sign in to the dashboard with the manager's login link, or send the operator token as a Bearer header",
+			})
 			return
 		}
-		w.Header().Set("WWW-Authenticate", `Bearer realm="home-harness operator API"`)
-		writeJSON(w, http.StatusUnauthorized, map[string]string{
-			"error": "operator authentication required: sign in to the dashboard with the manager's login link, or send the operator token as a Bearer header",
-		})
+		need := requiredRole(pattern, r)
+		if p.role.Rank() < need.Rank() {
+			s.auditRejection("operator.forbidden", "", p.actor, "role "+string(p.role)+" needs "+string(need)+" for "+clip(pattern), nil)
+			writeJSON(w, http.StatusForbidden, map[string]string{
+				"error": "your role (" + string(p.role) + ") cannot do this: it needs " + string(need) + ". Ask an admin, or use a token with that role.",
+			})
+			return
+		}
+		ctx := withActor(r.Context(), p.actor)
+		ctx = context.WithValue(ctx, principalKey{}, p)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
-// apiLogin exchanges the operator token for the dashboard session. The
-// session goes in the response body for the dashboard to keep in
-// localStorage — deliberately never in a Set-Cookie (see the top of this
-// file for why a cookie would leak to other localhost ports).
+// principal is who an authenticated request is.
+type principal struct {
+	user  string // "" for the legacy operator token
+	role  domain.Role
+	actor string // what the audit log records
+}
+
+type principalKey struct{}
+
+func principalFrom(ctx context.Context) (principal, bool) {
+	p, ok := ctx.Value(principalKey{}).(principal)
+	return p, ok
+}
+
+// legacyEpoch marks a session for the operator token (no user record).
+const legacyEpoch = "operator"
+
+// authenticate resolves a bearer value to a principal: the operator token
+// or its old (non-expiring) session are admin; a signed session or a user
+// token belongs to that user, with the role the user has now.
+func (s *Server) authenticate(got string, now time.Time) (principal, bool) {
+	if got == "" {
+		return principal{}, false
+	}
+	token := s.operatorToken()
+	if subtle.ConstantTimeCompare([]byte(got), []byte(token)) == 1 {
+		return principal{role: domain.RoleAdmin, actor: actorOperatorToken}, true
+	}
+	if subtle.ConstantTimeCompare([]byte(got), []byte(dashboardSession(token))) == 1 {
+		return principal{role: domain.RoleAdmin, actor: actorDashboardSession}, true
+	}
+	if name, epoch, ok := parseSession(token, got, now); ok {
+		if name == "" {
+			if epoch == legacyEpoch {
+				return principal{role: domain.RoleAdmin, actor: actorDashboardSession}, true
+			}
+			return principal{}, false
+		}
+		if u, ok := s.currentUser(name, now); ok && subtle.ConstantTimeCompare([]byte(u.Epoch), []byte(epoch)) == 1 {
+			return principal{user: u.Name, role: u.Role, actor: u.Name}, true
+		}
+		return principal{}, false
+	}
+	if u, ok := s.userByToken(got, now); ok {
+		return principal{user: u.Name, role: u.Role, actor: u.Name}, true
+	}
+	return principal{}, false
+}
+
+// authSource is what failed attempts are counted against.
+func authSource(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+// apiLogin exchanges the operator token (or a user's token) for a dashboard
+// session. The session goes in the response body for the dashboard to keep
+// in localStorage — deliberately never in a Set-Cookie (see the top of this
+// file for why a cookie would leak to other localhost ports). Sessions
+// expire after userSessionTTL; the dashboard then asks to sign in again.
 func (s *Server) apiLogin(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Token string `json:"token"`
@@ -208,18 +291,47 @@ func (s *Server) apiLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	token := s.cfg.OperatorToken
+	token := s.operatorToken()
 	if token == "" {
 		writeJSON(w, http.StatusOK, map[string]string{"session": ""}) // auth disabled
 		return
 	}
-	if subtle.ConstantTimeCompare([]byte(req.Token), []byte(token)) != 1 {
-		s.auditRejection("operator.login-failed", "", r.RemoteAddr, "invalid login token", nil)
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "that login link is not valid for this manager"})
+	now := time.Now()
+	exp := now.Add(userSessionTTL)
+	if req.Token != "" && subtle.ConstantTimeCompare([]byte(req.Token), []byte(token)) == 1 {
+		s.audit(domain.AuditSecurity, "operator.login", "", actorDashboardSession, map[string]any{"remote": r.RemoteAddr})
+		writeJSON(w, http.StatusOK, map[string]any{"session": signSession(token, "", legacyEpoch, exp), "role": domain.RoleAdmin, "expires": exp.UTC()})
 		return
 	}
-	s.audit(domain.AuditSecurity, "operator.login", "", actorDashboardSession, map[string]any{"remote": r.RemoteAddr})
-	writeJSON(w, http.StatusOK, map[string]string{"session": dashboardSession(token)})
+	if u, ok := s.userByToken(req.Token, now); ok {
+		s.audit(domain.AuditSecurity, "operator.login", "", u.Name, map[string]any{"remote": r.RemoteAddr})
+		writeJSON(w, http.StatusOK, map[string]any{"session": signSession(token, u.Name, u.Epoch, exp), "user": u.Name, "role": u.Role, "expires": exp.UTC()})
+		return
+	}
+	if s.authFail.tooMany(authSource(r), now) {
+		w.Header().Set("Retry-After", "60")
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many failed sign-in attempts from this source: wait a minute and try again"})
+		return
+	}
+	s.auditRejection("operator.login-failed", "", r.RemoteAddr, "invalid login token", nil)
+	writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "that login link is not valid for this manager"})
+}
+
+// apiWhoAmI tells a client who it is signed in as and what that may do.
+func (s *Server) apiWhoAmI(w http.ResponseWriter, r *http.Request) {
+	if p, ok := principalFrom(r.Context()); ok {
+		name := p.user
+		if name == "" {
+			name = p.actor
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"user": name, "role": string(p.role)})
+		return
+	}
+	role := domain.RoleAdmin // authentication disabled (tests, embedding)
+	if remoteCallFrom(r.Context()) != nil {
+		role = domain.RoleViewer
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"user": actorFrom(r.Context()), "role": string(role)})
 }
 
 const serverProofContext = "harness-server-proof-v1:"
@@ -246,11 +358,11 @@ func (s *Server) apiServerProof(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "nonce must be 32-128 lowercase hex characters", http.StatusBadRequest)
 		return
 	}
-	if s.cfg.OperatorToken == "" {
+	if s.operatorToken() == "" {
 		http.Error(w, "this manager has no operator token", http.StatusNotFound)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"proof": serverProof(s.cfg.OperatorToken, nonce)})
+	writeJSON(w, http.StatusOK, map[string]string{"proof": serverProof(s.operatorToken(), nonce)})
 }
 
 // LoginURL is the dashboard link that signs a browser in: the token rides
