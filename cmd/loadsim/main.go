@@ -234,13 +234,13 @@ type fleet struct {
 	agents []*simAgent
 
 	regTime, pingRTT, queueWait, submitLat samples
-	registered, regFailed                    atomic.Int64
-	assigned, completed                      atomic.Int64
-	submitted, submitErrs                    atomic.Int64
-	sseEvents                                atomic.Int64
-	reconnectDone                            atomic.Int64
-	errMu                                    sync.Mutex
-	errSeen                                  map[string]int
+	registered, regFailed                  atomic.Int64
+	assigned, completed                    atomic.Int64
+	submitted, submitErrs                  atomic.Int64
+	sseEvents                              atomic.Int64
+	reconnectDone                          atomic.Int64
+	errMu                                  sync.Mutex
+	errSeen                                map[string]int
 }
 
 // noteErr counts connection failures by their first 90 characters, so the
@@ -488,12 +488,12 @@ func (f *fleet) sseReader(ctx context.Context) {
 }
 
 type resourceTrack struct {
-	mu                  sync.Mutex
-	cpuSum, cpuMax      float64
-	n                   int
-	rssMax              uint64
-	rssStart, rssEnd    uint64
-	threadsMax          int32
+	mu               sync.Mutex
+	cpuSum, cpuMax   float64
+	n                int
+	rssMax           uint64
+	rssStart, rssEnd uint64
+	threadsMax       int32
 }
 
 func trackProcess(ctx context.Context, pid int, rt *resourceTrack) {

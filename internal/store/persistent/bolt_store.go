@@ -64,7 +64,7 @@ func open(path string, p plan) (*Store, error) {
 		raw.Close()
 		return nil, err
 	}
-	raw.MaxBatchDelay = 3 * time.Millisecond // how long a write waits for company (health.go)
+	raw.MaxBatchDelay = 1 * time.Millisecond // how long a write waits for company (health.go)
 	h := &health{}
 	db := healthDB{DB: raw, h: h}
 	err = db.Update(func(tx *bbolt.Tx) error {

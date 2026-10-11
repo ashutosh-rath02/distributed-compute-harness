@@ -34,15 +34,16 @@ type storageProber interface {
 type reliabilityState struct {
 	mu       sync.Mutex
 	backupFn BackupFunc
+	tempDir  string // scratch space for a backup in flight (the database's folder)
 	sched    *backup.Schedule
 	draining atomic.Bool
 	drainAt  time.Time
 }
 
 // SetBackup enables POST /backup and says how to make one.
-func (s *Server) SetBackup(fn BackupFunc) {
+func (s *Server) SetBackup(fn BackupFunc, tempDir string) {
 	s.rel.mu.Lock()
-	s.rel.backupFn = fn
+	s.rel.backupFn, s.rel.tempDir = fn, tempDir
 	s.rel.mu.Unlock()
 }
 
@@ -177,13 +178,13 @@ func (s *Server) closeAllConns(limit time.Duration) {
 // passphrase never needs to reach the manager.
 func (s *Server) apiBackup(w http.ResponseWriter, r *http.Request) {
 	s.rel.mu.Lock()
-	fn := s.rel.backupFn
+	fn, tempDir := s.rel.backupFn, s.rel.tempDir
 	s.rel.mu.Unlock()
 	if fn == nil {
 		http.Error(w, "this manager can't make backups (no persistent store)", http.StatusServiceUnavailable)
 		return
 	}
-	tmp, err := os.CreateTemp("", "hh-backup-*")
+	tmp, err := os.CreateTemp(tempDir, "hh-backup-*")
 	if err != nil {
 		http.Error(w, "backup: "+err.Error(), http.StatusInsufficientStorage)
 		return
@@ -237,7 +238,7 @@ func (s *Server) apiReliability(w http.ResponseWriter, r *http.Request) {
 		used, total := st.Usage()
 		v.Artifacts = &struct {
 			Used  int64 `json:"used"`
-		Total int64 `json:"total"`
+			Total int64 `json:"total"`
 			artifacts.Health
 		}{used, total, st.Health()}
 	}

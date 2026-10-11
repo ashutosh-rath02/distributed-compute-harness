@@ -86,7 +86,7 @@ func TestRoundTripPlainAndEncrypted(t *testing.T) {
 		}
 		for name, want := range map[string]string{
 			target.OperatorToken: "optoken", target.PairingToken: "pair-by-value",
-			filepath.Join(target.TLSDir, "manager-key.pem"): "KEY",
+			filepath.Join(target.TLSDir, "manager-key.pem"):                             "KEY",
 			filepath.Join(target.ArtifactDir, "sha256", "ab", strings.Repeat("ab", 32)): "file body",
 		} {
 			if got, _ := os.ReadFile(name); string(got) != want {

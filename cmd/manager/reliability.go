@@ -228,7 +228,8 @@ func wireBackup(srv *manager.Server, store *persistent.Store, l backup.Layout, p
 		_, err := backup.Create(w, backup.Source{Layout: l, SnapshotDB: store.Snapshot, PairingToken: pairingToken, IncludeArtifacts: withArtifacts})
 		return err
 	}
-	srv.SetBackup(mk)
+	backup.TempDir = filepath.Dir(l.DB)
+	srv.SetBackup(mk, filepath.Dir(l.DB))
 	if dir == "" {
 		return nil
 	}

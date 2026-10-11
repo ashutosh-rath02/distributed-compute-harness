@@ -29,6 +29,19 @@ import (
 	"home-harness/internal/store/persistent"
 )
 
+// TempDir is where backups stage their scratch files; empty means the
+// system temp folder. The manager points it at the database's own folder:
+// always writable (the Android app's temp location may not be), and on the
+// same volume as the state.
+var TempDir string
+
+func cmpTemp(d string) string {
+	if d != "" {
+		return d
+	}
+	return TempDir
+}
+
 // FormatVersion is the backup file layout. A restore refuses a newer one.
 const FormatVersion = 1
 
@@ -107,7 +120,7 @@ type Source struct {
 // Create writes the backup zip to w and returns its manifest. The database
 // snapshot is proven to open before anything is written to w.
 func Create(w io.Writer, src Source) (*Manifest, error) {
-	tmp, err := os.CreateTemp(src.TempDir, "hh-snapshot-*")
+	tmp, err := os.CreateTemp(cmpTemp(src.TempDir), "hh-snapshot-*")
 	if err != nil {
 		return nil, fmt.Errorf("backup: snapshot file: %w", err)
 	}
@@ -289,7 +302,7 @@ func OpenFile(p, passphrase string) (*Open, error) {
 	if err != nil {
 		return nil, err
 	}
-	tmp, err := os.CreateTemp("", "hh-restore-*")
+	tmp, err := os.CreateTemp(TempDir, "hh-restore-*")
 	if err != nil {
 		return nil, err
 	}
@@ -384,7 +397,7 @@ func Verify(o *Open) (*Report, error) {
 		var dst io.Writer = h
 		var dbFile *os.File
 		if f.Name == entryDB {
-			if dbFile, err = os.CreateTemp("", "hh-verify-*"); err != nil {
+			if dbFile, err = os.CreateTemp(TempDir, "hh-verify-*"); err != nil {
 				r.Close()
 				return nil, err
 			}

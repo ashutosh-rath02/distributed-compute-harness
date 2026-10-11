@@ -5,10 +5,10 @@
 package agent
 
 import (
-	"math/rand/v2"
 	"context"
 	"fmt"
 	"log"
+	"math/rand/v2"
 	"net/http"
 	"os"
 	"reflect"

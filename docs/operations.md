@@ -39,13 +39,11 @@ Not measured: more than 500 devices (this machine's memory is shared), the
 relay path, real agents (heavier than the simulator: each samples the system),
 and a phone-hosted manager.
 
-What the load runs found and fixed: placing an unconstrained task scanned every
-workload once per ready device (42 % of CPU at 500 devices; queue wait p50 154
-to 8 ms, p90 1,293 to 251 ms after the fix); listing devices did the same; and
-every database write waited for its own fsync, so concurrent writers
-serialized (now group-committed: writes that arrive together share one fsync,
-each still durable before it returns; 5.6 ms alone, 0.42 ms each with 16
-writers). Still open: registrations are written under one lock, so a
+What the load runs found and fixed (before/after compared on the same quiet machine, 500 devices, 50 submissions/s, no profiling): placing an unconstrained task scanned every
+workload once per ready device (42 % of CPU in a profile; manager CPU avg 66 % to 42 %, queue wait p50 12 to 5.6 ms, p90 21 to 8 ms after the fix); listing devices did the same; and
+every database write waited for its own fsync, so concurrent writers serialized (now
+group-committed with a 1 ms wait: a lone write costs 3.1 ms instead of 2.6 ms, but 16 concurrent writers cost 0.22 ms each instead of 7.0 ms each; each write is still durable before it returns).
+Still open: registrations are written under one lock, so a
 simultaneous herd of 500 takes seconds (one-time); the manager has no profiling
 endpoint.
 
