@@ -565,7 +565,7 @@ func TestChaosFullDiskRefusesNewWorkKeepsServingAndRecovers(t *testing.T) {
 	}
 	getJSON(t, api.URL+"/reliability", &rel)
 	if !rel.Storage.Degraded {
-		t.Error("/reliability does not report the degraded storage")
+		t.Errorf("/reliability does not report the degraded storage (store health %+v, artifacts %+v)", m.st.Health(), store.Health())
 	}
 	waitFor(t, 15*time.Second, func() bool { return chaosState(m.srv, running.ID) == domain.WorkloadCompleted })
 	if got := len(m.srv.Workloads.List()); got != before {

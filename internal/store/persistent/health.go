@@ -26,6 +26,10 @@ type health struct {
 	mu    sync.Mutex
 	state Health
 	fault error // test hook: returned instead of writing
+	// epoch counts degradations. A write only clears the flag if it began
+	// in the current epoch: one that was already in flight when the disk
+	// filled may still succeed, and says nothing about writes now.
+	epoch uint64
 }
 
 // healthDB is the bbolt database with every write (Update) watched.
@@ -37,10 +41,10 @@ type healthDB struct {
 
 func (d healthDB) Update(fn func(*bbolt.Tx) error) error {
 	d.h.mu.Lock()
-	fault := d.h.fault
+	fault, began := d.h.fault, d.h.epoch
 	d.h.mu.Unlock()
 	if fault != nil {
-		d.h.observe(fault)
+		d.h.observe(fault, began)
 		return fault
 	}
 	// Batch, not Update: writers that arrive together share one commit and
@@ -49,18 +53,21 @@ func (d healthDB) Update(fn func(*bbolt.Tx) error) error {
 	// (see docs/operations.md); fns here are plain puts, safe to re-run if
 	// bbolt retries a batch without a failing neighbour.
 	err := d.DB.Batch(fn)
-	d.h.observe(err)
+	d.h.observe(err, began)
 	return err
 }
 
-func (h *health) observe(err error) {
+func (h *health) observe(err error, began uint64) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	switch {
 	case err == nil:
-		h.state = Health{}
+		if began == h.epoch {
+			h.state = Health{}
+		}
 	case IsNoSpace(err):
 		if !h.state.Degraded {
+			h.epoch++
 			h.state = Health{Degraded: true, Reason: ReasonFor(err), Since: time.Now().UTC()}
 		}
 	}
