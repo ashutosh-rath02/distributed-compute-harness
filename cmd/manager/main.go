@@ -89,6 +89,8 @@ func main() {
 	logLevel := flag.String("log-level", "info", "log level: debug, info, warn or error")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+	// harness_build_info reports the same identity as -version and /version.
+	manager.Version, manager.Commit = version.Version, version.Get().Commit
 	if *showVersion {
 		fmt.Println(version.String("manager"))
 		return
