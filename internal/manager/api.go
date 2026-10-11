@@ -209,6 +209,7 @@ func (s *Server) NewHTTPHandler() http.Handler {
 	mux.HandleFunc("GET /workflows", s.apiListWorkflows)
 	mux.HandleFunc("GET /workflows/{id}", s.apiGetWorkflow)
 	mux.HandleFunc("POST /workflows/{id}/cancel", s.apiCancelWorkflow)
+	s.registerScheduleRoutes(mux) // /schedules (schedules_api.go)
 	mux.HandleFunc("POST /plans", s.apiPostPlan)
 	mux.HandleFunc("GET /plans", s.apiListPlans)
 	mux.HandleFunc("GET /plans/{id}", s.apiGetPlan)

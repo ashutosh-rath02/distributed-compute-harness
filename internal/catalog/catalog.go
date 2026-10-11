@@ -140,6 +140,11 @@ type Type struct {
 	// OutputsFrom names a parameter holding more output names
 	// (comma-separated), for a type whose outputs the submitter chooses.
 	OutputsFrom string `json:"outputsFrom,omitempty"`
+	// FanOutputs names an int parameter N: an output template holding
+	// {{n}} is made N times, with n = 0001..N (text.split's chunks). The
+	// names are known from the parameters alone, so a workflow can be
+	// checked up front. N is bounded by Param.Max and domain.MaxWorkloadOutputs.
+	FanOutputs string `json:"fanOutputs,omitempty"`
 	// Deterministic: the same inputs and parameters give byte-identical
 	// outputs on every device (integer-only work, no clock, no
 	// randomness), so a result can be spot-checked by running it again
@@ -213,6 +218,31 @@ var builtins = []Type{
 		Description:   "Count lines, words and bytes in every input (like wc) and write counts.json.",
 		Inputs:        Inputs{Min: 1, Max: domain.MaxWorkloadInputs, Description: "text files"},
 		Outputs:       []string{"counts.json"},
+		Reduce:        true,
+		Deterministic: true,
+	},
+	{
+		Name: "text.split", Version: "1", Title: "Split a text file into chunks",
+		Description: "Cut one text file into N chunks (chunk-0001.txt ...), only ever at line ends, so every line lands whole in one chunk. By lines (equal line counts) or by bytes (about equal sizes). Always writes exactly N files; a file with fewer lines than chunks leaves the last ones empty. At most 16 chunks. The first step of a map-reduce: harnessctl mapreduce.",
+		Params: []Param{
+			{Name: "chunks", Type: Int, Title: "Chunks", Default: "4", Min: num(1), Max: num(float64(domain.MaxWorkloadOutputs))},
+			{Name: "by", Type: Enum, Title: "Split by", Default: "lines", Enum: []string{"lines", "bytes"}},
+		},
+		Inputs:        Inputs{Min: 1, Max: 1, Description: "one text file"},
+		Outputs:       []string{"chunk-{{n}}.txt"},
+		FanOutputs:    "chunks",
+		Deterministic: true,
+	},
+	{
+		Name: "json.merge", Version: "1", Title: "Merge JSON results",
+		Description: "Combine JSON files (each chunk's result) into one: concat joins arrays, sum adds numbers key by key (objects recursively, arrays joined), collect makes one object keyed by file name. Files are taken in name order. A field picks a sub-object of each file first (e.g. total from text.count's counts.json). The last step of a map-reduce.",
+		Params: []Param{
+			{Name: "mode", Type: Enum, Title: "How to merge", Default: "sum", Enum: []string{"concat", "sum", "collect"}},
+			{Name: "field", Type: String, Title: "Take this field of each file (e.g. total)", Pattern: `[A-Za-z0-9_-]{1,40}(\.[A-Za-z0-9_-]{1,40}){0,3}`},
+			{Name: "name", Type: String, Title: "Result name", Default: "merged.json", Pattern: `[A-Za-z0-9._-]{1,60}\.json`},
+		},
+		Inputs:        Inputs{Min: 1, Max: domain.MaxWorkloadInputs, Extensions: []string{"json"}, Description: "the JSON files to merge"},
+		Outputs:       []string{"{{name}}"},
 		Reduce:        true,
 		Deterministic: true,
 	},
@@ -696,6 +726,16 @@ func (t Type) Compile(params map[string]string, inputs []domain.ArtifactRef) (ma
 	}
 	outputs := make([]string, 0, len(t.Outputs))
 	for _, tmpl := range t.Outputs {
+		if t.FanOutputs != "" && strings.Contains(tmpl, "{{n}}") {
+			n, _ := strconv.Atoi(out[t.FanOutputs])
+			if n < 1 || n > domain.MaxWorkloadOutputs {
+				return nil, nil, fmt.Errorf("%w: %s: %s must be 1-%d", ErrInvalid, t.Name, t.FanOutputs, domain.MaxWorkloadOutputs)
+			}
+			for k := 1; k <= n; k++ {
+				outputs = append(outputs, strings.ReplaceAll(tmpl, "{{n}}", fmt.Sprintf("%04d", k)))
+			}
+			continue
+		}
 		name := tmpl
 		if strings.Contains(name, "{{in.stem}}") {
 			if t.Inputs.Max != 1 || len(inputs) != 1 {

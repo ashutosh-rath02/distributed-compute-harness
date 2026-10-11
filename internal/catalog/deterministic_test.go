@@ -29,7 +29,7 @@ func TestDeterministicTypesArePinned(t *testing.T) {
 			t.Errorf("%s: deterministic types must be plain batch tasks", ty.Name)
 		}
 	}
-	want := []domain.CapabilityName{"file.hash", "image.resize", "image.stack", "text.count"}
+	want := []domain.CapabilityName{"file.hash", "image.resize", "image.stack", "json.merge", "text.count", "text.split"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("deterministic types = %v, want %v", got, want)
 	}

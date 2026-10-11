@@ -90,6 +90,8 @@ func builtinHandlers() map[domain.CapabilityName]Handler {
 		"archive.zip":     archiveZip{},
 		"file.hash":       fileHash{},
 		"text.count":      textCount{},
+		"text.split":      textSplit{},
+		"json.merge":      jsonMerge{},
 		"render.fractal":  renderFractal{},
 		"image.stack":     imageStack{},
 		"image.upscale":   imageUpscale{},

@@ -123,6 +123,8 @@ type WorkflowSpec struct {
 	Inputs      []domain.ArtifactRef
 	Stages      []domain.WorkflowStage
 	MaxAttempts int
+	// Schedule and Slot tag a workflow a schedule started (schedules.go).
+	Schedule, Slot string
 }
 
 // ErrUnknownWorkflow is a workflow ID the manager doesn't know.
@@ -141,6 +143,7 @@ func (s *Server) SubmitWorkflow(ctx context.Context, spec WorkflowSpec) (domain.
 	wf := domain.Workflow{
 		ID: domain.WorkflowID(id), Name: spec.Name, Inputs: spec.Inputs, Stages: spec.Stages,
 		MaxAttempts: spec.MaxAttempts, State: domain.JobRunning, CreatedAt: time.Now().UTC(),
+		Schedule: spec.Schedule, Slot: spec.Slot,
 	}
 	if wf.Name == "" {
 		wf.Name = workflowTitle(wf.Stages)
@@ -231,6 +234,15 @@ func checkStage(st *domain.WorkflowStage) error {
 	default:
 		return fmt.Errorf("%w: unknown mode %q (once, perFile or parts)", ErrInvalidWorkload, st.Mode)
 	}
+	if _, _, err := parseOnFailure(st.OnFailure); err != nil {
+		return err
+	}
+	if st.TimeoutSeconds < 0 || st.TimeoutSeconds > maxStageTimeoutSeconds {
+		return fmt.Errorf("%w: timeoutSeconds must be 1-%d (or left out)", ErrInvalidWorkload, maxStageTimeoutSeconds)
+	}
+	if st.MaxAttempts < 0 || st.MaxAttempts > domain.MaxJobAttempts {
+		return fmt.Errorf("%w: maxAttempts must be 1-%d (or left out)", ErrInvalidWorkload, domain.MaxJobAttempts)
+	}
 	if st.Combine != nil {
 		ct, err := checkStep(*st.Combine)
 		if err != nil {
@@ -264,38 +276,77 @@ func (s *Server) checkWorkflow(spec *WorkflowSpec) ([]JobSpec, error) {
 		return nil, fmt.Errorf("%w: maxAttempts must be 1-%d", ErrInvalidWorkload, domain.MaxJobAttempts)
 	}
 	draft := domain.Workflow{Stages: spec.Stages, MaxAttempts: spec.MaxAttempts}
-	files := spec.Inputs
 	checked := make([]JobSpec, 0, len(spec.Stages))
+	// outs[j] are the distinct sets of file names stage j can hand on:
+	// which files it is given decides the names of what it makes, and a
+	// stage after skippable ones can be given different files by how the
+	// run goes (see inputCandidates).
+	outs := make([][][]domain.ArtifactRef, len(spec.Stages))
 	for i := range spec.Stages {
 		label := stageLabel(i, spec.Stages[i])
 		if err := checkStage(&spec.Stages[i]); err != nil {
 			return nil, fmt.Errorf("%s: %w", label, err)
 		}
 		st := spec.Stages[i]
-		switch {
-		case i > 0 && len(files) == 0:
-			return nil, fmt.Errorf("%s: %w: nothing to work on: step %d makes no files", label, ErrInvalidWorkload, i)
-		case st.Mode == domain.StagePerFile && len(files) == 0:
-			return nil, fmt.Errorf("%s: %w: it runs once per file, but the workflow has no files", label, ErrInvalidWorkload)
+		if st.When != "" {
+			if _, err := ParseCondition(st.When, i); err != nil {
+				return nil, fmt.Errorf("%s: when: %w: %v", label, ErrInvalidWorkload, strings.TrimPrefix(err.Error(), ErrCondition.Error()+": "))
+			}
 		}
-		job := stageJob(draft, i, files)
-		job.ahead = i > 0
-		if err := s.checkJob(&job); err != nil {
-			return nil, fmt.Errorf("%s: %w", label, err)
+		cands := inputCandidates(spec.Stages, outs, spec.Inputs, i)
+		if len(cands) > maxInputCandidates {
+			return nil, fmt.Errorf("%s: %w: too many ways the steps before it can be skipped or fail to check it; make fewer of them optional", label, ErrInvalidWorkload)
 		}
-		checked = append(checked, job)
-		// What this stage will hand on, by name.
-		var reduce []domain.ArtifactRef
-		if job.Reduce != nil {
-			reduce = placeholders(job.Reduce.Outputs)
+		seen := map[string]bool{}
+		for ci, c := range cands {
+			files := c.files
+			via := ""
+			if c.from >= 0 && c.from != i-1 {
+				via = fmt.Sprintf(" (if %s is skipped or fails)", stageLabel(i-1, spec.Stages[i-1]))
+			} else if c.from < 0 && i > 0 {
+				via = " (if every step before it is skipped or fails)"
+			}
+			switch {
+			case i > 0 && len(files) == 0 && c.from >= 0:
+				return nil, fmt.Errorf("%s: %w: nothing to work on: step %d makes no files%s", label, ErrInvalidWorkload, c.from+1, via)
+			case i > 0 && len(files) == 0:
+				return nil, fmt.Errorf("%s: %w: nothing to work on: the workflow has no files%s", label, ErrInvalidWorkload, via)
+			case st.Mode == domain.StagePerFile && len(files) == 0:
+				return nil, fmt.Errorf("%s: %w: it runs once per file, but the workflow has no files", label, ErrInvalidWorkload)
+			}
+			job := stageJob(draft, i, files)
+			job.ahead = c.from >= 0
+			if err := s.checkJob(&job); err != nil {
+				return nil, fmt.Errorf("%s: %w%s", label, err, via)
+			}
+			if ci == 0 {
+				checked = append(checked, job)
+			}
+			// What this stage will hand on, by name.
+			var reduce []domain.ArtifactRef
+			if job.Reduce != nil {
+				reduce = placeholders(job.Reduce.Outputs)
+			}
+			tasks := make([][]domain.ArtifactRef, len(job.Tasks))
+			for k, t := range job.Tasks {
+				tasks[k] = placeholders(t.Outputs)
+			}
+			out := handOn(job.Reduce != nil, reduce, tasks)
+			if key := refNames(out); !seen[key] {
+				seen[key] = true
+				outs[i] = append(outs[i], out)
+			}
 		}
-		tasks := make([][]domain.ArtifactRef, len(job.Tasks))
-		for k, t := range job.Tasks {
-			tasks[k] = placeholders(t.Outputs)
-		}
-		files = handOn(job.Reduce != nil, reduce, tasks)
 	}
 	return checked, nil
+}
+
+func refNames(files []domain.ArtifactRef) string {
+	names := make([]string, len(files))
+	for i, f := range files {
+		names[i] = f.Name
+	}
+	return strings.Join(names, "\x00")
 }
 
 func placeholders(names []string) []domain.ArtifactRef {
@@ -358,8 +409,11 @@ func stageJob(wf domain.Workflow, i int, files []domain.ArtifactRef) JobSpec {
 		Name:        fmt.Sprintf("%s (workflow step %d of %d)", name, i+1, len(wf.Stages)),
 		MaxAttempts: wf.MaxAttempts, Workflow: wf.ID, Stage: i,
 	}
+	if st.MaxAttempts > 0 {
+		spec.MaxAttempts = st.MaxAttempts
+	}
 	task := func(name string, params map[string]string, inputs []domain.ArtifactRef) domain.TaskSpec {
-		return domain.TaskSpec{Name: name, Capability: st.Type, Params: params, Inputs: inputs}
+		return domain.TaskSpec{Name: name, Capability: st.Type, Params: params, Inputs: inputs, TimeoutSeconds: st.TimeoutSeconds}
 	}
 	switch st.Mode {
 	case domain.StagePerFile:
@@ -376,7 +430,7 @@ func stageJob(wf domain.Workflow, i int, files []domain.ArtifactRef) JobSpec {
 		spec.Tasks = []domain.TaskSpec{task(title, copyParams(st.Params), append([]domain.ArtifactRef(nil), files...))}
 	}
 	if st.Combine != nil {
-		spec.Reduce = &domain.TaskSpec{Name: stepTitle(*st.Combine), Capability: st.Combine.Type, Params: copyParams(st.Combine.Params)}
+		spec.Reduce = &domain.TaskSpec{Name: stepTitle(*st.Combine), Capability: st.Combine.Type, Params: copyParams(st.Combine.Params), TimeoutSeconds: st.TimeoutSeconds}
 	}
 	return spec
 }
@@ -406,93 +460,6 @@ func currentStage(wf domain.Workflow, jobs map[int]domain.Job) int {
 		}
 	}
 	return cur
-}
-
-// advanceWorkflows moves every running workflow forward: starts its
-// first stage, starts the next stage once the current one completed,
-// and records the outcome. A stage job still running for a workflow that
-// has ended (canceled, possibly across a crash) is canceled: nothing
-// waits for its results. It runs right after advanceJobs, so a stage
-// whose job finished this pass hands on to the next in the same pass.
-func (s *Server) advanceWorkflows(ctx context.Context) {
-	wfs := s.workflows.list()
-	if len(wfs) == 0 {
-		return
-	}
-	jobs := s.jobs.list()
-	for _, j := range jobs {
-		if j.Workflow == "" || j.State != domain.JobRunning || s.workflows.running(j.Workflow) {
-			continue
-		}
-		if _, known := s.workflows.get(j.Workflow); known {
-			if err := s.CancelJob(ctx, j.ID); err != nil {
-				log.Printf("manager: cancel job %s of ended workflow %s: %v", j.ID, j.Workflow, err)
-			}
-		}
-	}
-	stages := stageJobs(jobs)
-	var attempts map[domain.JobID]map[string][]WorkloadRecord
-	for _, wf := range wfs {
-		if wf.State != domain.JobRunning {
-			continue
-		}
-		cur := currentStage(wf, stages[wf.ID])
-		if cur < 0 {
-			s.startStage(ctx, wf, 0, wf.Inputs)
-			continue
-		}
-		job := stages[wf.ID][cur]
-		switch job.State {
-		case domain.JobRunning:
-		case domain.JobCompleted:
-			if cur == len(wf.Stages)-1 {
-				s.finishWorkflow(wf, domain.JobCompleted, "")
-				continue
-			}
-			if attempts == nil {
-				attempts = s.Workloads.byJob()
-			}
-			s.startStage(ctx, wf, cur+1, stageResults(job, attempts[job.ID]))
-		case domain.JobCanceled:
-			s.finishWorkflow(wf, domain.JobFailed, stageLabel(cur, wf.Stages[cur])+": its job was canceled")
-		default:
-			s.finishWorkflow(wf, domain.JobFailed, stageLabel(cur, wf.Stages[cur])+": "+job.Error)
-		}
-	}
-}
-
-// startStage submits stage i's job over files. A submission that can
-// never succeed (the files don't fit the step, a type disabled since)
-// fails the workflow with the reason; one with no device ready right now
-// is retried next pass.
-func (s *Server) startStage(ctx context.Context, wf domain.Workflow, i int, files []domain.ArtifactRef) {
-	if !s.workflows.running(wf.ID) {
-		return
-	}
-	label := stageLabel(i, wf.Stages[i])
-	if i > 0 && len(files) == 0 {
-		s.finishWorkflow(wf, domain.JobFailed, label+": the step before it made no files")
-		return
-	}
-	job, err := s.SubmitJob(ctx, stageJob(wf, i, files))
-	if errors.Is(err, ErrInvalidWorkload) || errors.Is(err, ErrPolicy) {
-		s.finishWorkflow(wf, domain.JobFailed, label+": "+err.Error())
-		return
-	}
-	if err != nil {
-		s.workflows.setWaiting(wf.ID, err.Error())
-		return
-	}
-	s.workflows.setWaiting(wf.ID, "")
-	if !s.workflows.running(wf.ID) {
-		// Canceled while its job was being submitted.
-		if err := s.CancelJob(ctx, job.ID); err != nil {
-			log.Printf("manager: cancel job %s of canceled workflow %s: %v", job.ID, wf.ID, err)
-		}
-		return
-	}
-	log.Printf("workflow.stage: %s step %d of %d (job %s)", wf.ID, i+1, len(wf.Stages), job.ID)
-	s.publish(domain.EventWorkflowStage, "", map[string]any{"workflowId": string(wf.ID), "stage": i + 1, "jobId": string(job.ID)})
 }
 
 func (s *Server) finishWorkflow(wf domain.Workflow, state domain.JobState, reason string) {

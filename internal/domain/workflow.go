@@ -31,6 +31,23 @@ type WorkflowStage struct {
 	Mode    string        `json:"mode,omitempty"`
 	Parts   int           `json:"parts,omitempty"`
 	Combine *WorkflowStep `json:"combine,omitempty"`
+	// When runs the stage only if the condition holds (condition.go in the
+	// manager); empty = always. OnFailure is "stop" (the default),
+	// "continue" or "retry:N". TimeoutSeconds limits each run of each task;
+	// MaxAttempts overrides the workflow's attempts per task for the stage.
+	When           string `json:"when,omitempty"`
+	OnFailure      string `json:"onFailure,omitempty"`
+	TimeoutSeconds int    `json:"timeoutSeconds,omitempty"`
+	MaxAttempts    int    `json:"maxAttempts,omitempty"`
+}
+
+// StageMark records a stage that failed without ever having a job (its
+// job could not be submitted, or it had nothing to work on) and whose
+// failure the workflow tolerates (onFailure continue). Every other stage
+// state is derived from the stages' jobs.
+type StageMark struct {
+	Stage  int    `json:"stage"` // from 0
+	Reason string `json:"reason"`
 }
 
 // Workflow is an ordered list of stages, each consuming the results of
@@ -48,6 +65,12 @@ type Workflow struct {
 	Error       string          `json:"error,omitempty"`
 	CreatedAt   time.Time       `json:"createdAt"`
 	FinishedAt  time.Time       `json:"finishedAt,omitempty"`
+	// Marks: see StageMark.
+	Marks []StageMark `json:"marks,omitempty"`
+	// Schedule and Slot say which schedule run started it (schedules.go);
+	// empty for one submitted by hand.
+	Schedule string `json:"schedule,omitempty"`
+	Slot     string `json:"slot,omitempty"`
 }
 
 // A workflow was submitted, moved to its next stage, or finished (data:

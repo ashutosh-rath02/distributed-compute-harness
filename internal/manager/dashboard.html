@@ -287,6 +287,9 @@
   <h2>Workflows</h2>
   <div id="workflows"></div>
 
+  <h2>Schedules</h2>
+  <div id="schedules"></div>
+
   <h2>Jobs</h2>
   <div id="jobs"></div>
 
@@ -1169,6 +1172,7 @@
             + (c ? " " + escapeHtml(c.completed + "/" + c.total + " done" + (c.failed ? ", " + c.failed + " failed" : "") + (c.active ? ", " + c.active + " running" : "")) : "")
             + (st.waiting ? '<span class="subname">Waiting: ' + escapeHtml(st.waiting) + "</span>" : "")
             + (st.error ? '<span class="subname">' + escapeHtml(st.error) + "</span>" : "")
+            + (st.reason && st.reason !== st.error ? '<span class="subname">' + escapeHtml(st.reason) + "</span>" : "")
             + "</li>";
         }).join("");
         return '<div class="card"><div>' + escapeHtml(w.name || w.id) + ' <span class="' + stateClass(w.state) + '">' + escapeHtml(w.state || "") + "</span> "
@@ -1194,6 +1198,61 @@
       alert("Cancel failed: " + e);
     }
     refreshWorkflows();
+  });
+
+  // Schedules: recurring work (GET /schedules). Everything shown is
+  // escaped; actions are POST/DELETE with the session header like all calls.
+  let schedulesTimer = null;
+  function scheduleSchedules() {
+    if (schedulesTimer) return;
+    schedulesTimer = setTimeout(() => { schedulesTimer = null; refreshSchedules(); }, 1000);
+  }
+  function fmtWhen(iso) {
+    if (!iso) return "-";
+    const d = new Date(iso);
+    return isNaN(d.getTime()) ? "-" : d.toLocaleString();
+  }
+  async function refreshSchedules() {
+    const el = document.getElementById("schedules");
+    try {
+      const list = await (await api("/schedules")).json();
+      if (!(list || []).length) {
+        el.innerHTML = '<p class="empty">No schedules yet: add one with harnessctl schedule add.</p>';
+        return;
+      }
+      el.innerHTML = list.map((sc) => {
+        const last = sc.lastRun;
+        const id = escapeHtml(sc.id);
+        const buttons = (sc.state === "ACTIVE" ? '<button class="small sched-act" data-act="pause" data-id="' + id + '">Pause</button> ' : "")
+          + (sc.state === "PAUSED" ? '<button class="small sched-act" data-act="resume" data-id="' + id + '">Resume</button> ' : "")
+          + '<button class="small sched-act" data-act="run" data-id="' + id + '">Run now</button> '
+          + '<button class="danger small sched-act" data-act="delete" data-id="' + id + '">Delete</button>';
+        return '<div class="card"><div>' + escapeHtml(sc.name || sc.id) + ' <span class="' + stateClass(sc.state) + '">' + escapeHtml(sc.state || "") + "</span> "
+          + "<code>" + escapeHtml(sc.schedule || "") + "</code> " + escapeHtml(sc.timezone || "") + "</div>"
+          + '<p class="hint">' + escapeHtml(sc.summary || "") + " &middot; " + escapeHtml(String(sc.runs || 0)) + " runs"
+          + (sc.maxRuns ? " of " + escapeHtml(String(sc.maxRuns)) : "")
+          + " &middot; next " + escapeHtml(fmtWhen(sc.nextRun))
+          + (last ? " &middot; last: " + escapeHtml(last.outcome || "") + (last.state ? " (" + escapeHtml(last.state) + ")" : "") + (last.reason ? " - " + escapeHtml(last.reason) : "") : "")
+          + "</p><div>" + buttons + "</div></div>";
+      }).join("");
+    } catch (e) {
+      el.innerHTML = '<p class="error">Failed to load schedules.</p>';
+    }
+  }
+
+  document.addEventListener("click", async (event) => {
+    const button = event.target.closest && event.target.closest("button.sched-act");
+    if (!button) return;
+    const act = button.dataset.act;
+    if (act === "delete" && !confirm("Delete this schedule? Runs already started carry on.")) return;
+    try {
+      const path = "/schedules/" + encodeURIComponent(button.dataset.id);
+      const resp = act === "delete" ? await api(path, {method: "DELETE"}) : await api(path + "/" + act, {method: "POST"});
+      if (!resp.ok && resp.status !== 409) throw new Error((await resp.text()).trim() || resp.statusText);
+    } catch (e) {
+      alert("Schedule action failed: " + e);
+    }
+    refreshSchedules();
   });
 
   // ---- Typed tasks (GET /catalog) and policy (GET/PUT /policy)
@@ -1613,7 +1672,7 @@
     scheduleRefresh(type !== "workload.progress");
     if (type === "workload.progress") return;
     if (type.startsWith("job.") || type.startsWith("workload.")) scheduleJobs();
-    if (type.startsWith("workflow.") || type.startsWith("job.") || type.startsWith("workload.")) scheduleWorkflows();
+    if (type.startsWith("workflow.") || type.startsWith("job.") || type.startsWith("workload.")) { scheduleWorkflows(); scheduleSchedules(); }
     if (type.startsWith("node.")) refreshCatalog();
     if (type.startsWith("node.") && document.getElementById("aiSection").open) refreshAI();
     if (type.startsWith("node.") && document.getElementById("modelsSection").open) refreshAIDevices();
@@ -1672,6 +1731,8 @@
     refreshWorkloads();
     refreshJobs();
     refreshWorkflows();
+    refreshSchedules();
+    setInterval(refreshSchedules, 30000);
     refreshPlans();
     refreshCatalog();
     refreshRevoked();

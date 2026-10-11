@@ -68,9 +68,10 @@ func (s *Server) apiPostWorkflow(w http.ResponseWriter, r *http.Request) {
 func (s *Server) apiListWorkflows(w http.ResponseWriter, r *http.Request) {
 	wfs := s.workflows.list()
 	out := make([]workflowView, 0, len(wfs))
-	stages, attempts := stageJobs(s.jobs.list()), s.Workloads.byJob() // one scan for the whole list
+	jobs := s.jobs.list()
+	stages, counts, attempts := stageJobs(jobs), stageJobCounts(jobs), s.Workloads.byJob() // one scan for the whole list
 	for _, wf := range wfs {
-		out = append(out, s.workflowView(wf, stages[wf.ID], attempts))
+		out = append(out, s.workflowView(wf, stages[wf.ID], counts[wf.ID], attempts))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -120,6 +121,13 @@ type workflowStageView struct {
 	Counts  *jobCounts        `json:"counts,omitempty"`
 	Error   string            `json:"error,omitempty"`
 	Waiting string            `json:"waiting,omitempty"`
+	// Reason says why a stage is SKIPPED (its condition, or the workflow
+	// ended first) or FAILED without a job.
+	Reason         string `json:"reason,omitempty"`
+	When           string `json:"when,omitempty"`
+	OnFailure      string `json:"onFailure,omitempty"`
+	TimeoutSeconds int    `json:"timeoutSeconds,omitempty"`
+	MaxAttempts    int    `json:"maxAttempts,omitempty"`
 	// Outputs are what a completed stage handed on: the next stage's
 	// files, or the workflow's results for the last.
 	Outputs []domain.ArtifactRef `json:"outputs,omitempty"`
@@ -134,6 +142,7 @@ type workflowView struct {
 	CreatedAt   time.Time            `json:"createdAt"`
 	FinishedAt  time.Time            `json:"finishedAt,omitempty"`
 	Inputs      []domain.ArtifactRef `json:"inputs,omitempty"`
+	Schedule    string               `json:"schedule,omitempty"`
 	// Stage is how far it got: the stage now running or last run (from
 	// 1), 0 before the first stage's job.
 	Stage  int                 `json:"stage"`
@@ -143,43 +152,44 @@ type workflowView struct {
 }
 
 func (s *Server) toWorkflowView(wf domain.Workflow) workflowView {
-	return s.workflowView(wf, stageJobs(s.jobs.list())[wf.ID], s.Workloads.byJob())
+	jobs := s.jobs.list()
+	return s.workflowView(wf, stageJobs(jobs)[wf.ID], stageJobCounts(jobs)[wf.ID], s.Workloads.byJob())
 }
 
 func stepView(step domain.WorkflowStep) workflowStepView {
 	return workflowStepView{Type: step.Type, Title: stepTitle(step), Params: step.Params}
 }
 
-func (s *Server) workflowView(wf domain.Workflow, jobs map[int]domain.Job, attempts map[domain.JobID]map[string][]WorkloadRecord) workflowView {
+func (s *Server) workflowView(wf domain.Workflow, jobs map[int]domain.Job, counts map[int]int, attempts map[domain.JobID]map[string][]WorkloadRecord) workflowView {
 	v := workflowView{ID: wf.ID, Name: wf.Name, State: wf.State, Error: wf.Error, MaxAttempts: wf.MaxAttempts,
-		CreatedAt: wf.CreatedAt, FinishedAt: wf.FinishedAt, Inputs: wf.Inputs}
-	cur := currentStage(wf, jobs)
-	v.Stage = cur + 1
+		CreatedAt: wf.CreatedAt, FinishedAt: wf.FinishedAt, Inputs: wf.Inputs, Schedule: wf.Schedule}
+	v.Stage = currentStage(wf, jobs) + 1
+	infos, _ := walkWorkflow(wf, jobs, counts, func(j domain.Job) []domain.ArtifactRef { return stageResults(j, attempts[j.ID]) })
 	for i, st := range wf.Stages {
-		sv := workflowStageView{Stage: i + 1, Name: st.Name, workflowStepView: stepView(st.WorkflowStep), Mode: st.Mode, Parts: st.Parts}
+		in := infos[i]
+		sv := workflowStageView{Stage: i + 1, Name: st.Name, workflowStepView: stepView(st.WorkflowStep), Mode: st.Mode, Parts: st.Parts,
+			When: st.When, OnFailure: st.OnFailure, TimeoutSeconds: st.TimeoutSeconds, MaxAttempts: st.MaxAttempts,
+			State: in.state, Reason: in.reason, Outputs: in.outputs}
 		if st.Combine != nil {
 			c := stepView(*st.Combine)
 			sv.Combine = &c
 		}
-		job, started := jobs[i]
-		switch {
-		case started:
-			jv := s.jobView(job, attempts[job.ID], false)
-			sv.State, sv.Job, sv.Counts, sv.Error = string(job.State), job.ID, &jv.Counts, job.Error
-			if job.State == domain.JobCompleted {
-				sv.Outputs = stageResults(job, attempts[job.ID])
-			}
-		case wf.State != domain.JobRunning:
-			sv.State = stageSkipped
-		case i == 0 || (i == cur+1 && jobs[cur].State == domain.JobCompleted):
-			sv.State, sv.Waiting = stageWaiting, s.workflows.waitingReason(wf.ID)
-		default:
-			sv.State = stagePending
+		if in.hasJob {
+			jv := s.jobView(in.job, attempts[in.job.ID], false)
+			sv.Job, sv.Counts, sv.Error = in.job.ID, &jv.Counts, in.job.Error
+		} else if in.state == condFailed {
+			sv.Error = in.reason
+		}
+		if in.state == stageWaiting {
+			sv.Waiting = s.workflows.waitingReason(wf.ID)
+		}
+		if in.retrying != "" {
+			sv.Waiting = "failed; starting again (" + in.retrying + ")"
 		}
 		v.Stages = append(v.Stages, sv)
 	}
-	if wf.State == domain.JobCompleted && len(v.Stages) > 0 {
-		v.Outputs = v.Stages[len(v.Stages)-1].Outputs
+	if wf.State == domain.JobCompleted {
+		v.Outputs = provider(infos, nil)
 	}
 	return v
 }

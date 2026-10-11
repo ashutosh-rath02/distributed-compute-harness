@@ -74,6 +74,7 @@ func (s *Server) reconcileWorkloads(ctx context.Context) {
 			s.reconcileOnce(ctx)
 			s.advanceJobs(ctx)
 			s.advanceWorkflows(ctx)
+			s.advanceSchedules(ctx)
 			s.advanceSpotChecks(ctx)
 			s.dispatchQueued(ctx) // also catches requeue backoffs expiring
 			s.sweepGrants()
