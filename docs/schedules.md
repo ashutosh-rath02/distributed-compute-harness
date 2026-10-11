@@ -42,7 +42,7 @@ A run is submitted with `SubmitJob`/`SubmitWorkflow`: policy, typed parameters, 
 
 ## Files
 
-The artifacts a schedule's job or workflow names are protected from garbage collection and from `DELETE /artifacts/{sha}` for as long as the schedule exists (paused included; not once ENDED or deleted).
+The artifacts a schedule's job or workflow names are protected from garbage collection and from `DELETE /artifacts/{sha}` for as long as the schedule exists, in any state (paused and ended ones can still be run with `run-now`); deleting the schedule releases them.
 
 ## Audit
 

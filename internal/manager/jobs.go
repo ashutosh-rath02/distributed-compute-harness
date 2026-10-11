@@ -316,6 +316,9 @@ func (s *Server) checkJob(spec *JobSpec) error {
 		// Params too: placement matches a model parameter against the
 		// devices' models (without them every model task read as model "").
 		w := domain.Workload{Target: t.Target, Pinned: t.Target != "", Capability: t.Capability, Params: t.Params, Requirements: t.Requirements, Inputs: append(t.Inputs, parts...), Outputs: t.Outputs, TimeoutSeconds: s.policyFor(t.Capability).MaxRuntimeSeconds}
+		if t.TimeoutSeconds > 0 && (w.TimeoutSeconds == 0 || t.TimeoutSeconds < w.TimeoutSeconds) {
+			w.TimeoutSeconds = t.TimeoutSeconds // a stage's limit needs timeout.v1 agents, as Submit will
+		}
 		if _, _, err := s.resolve(placementFor(w), usage); err != nil && !errors.Is(err, errNoRoom) {
 			return fmt.Errorf("%s: %w", label, err)
 		}

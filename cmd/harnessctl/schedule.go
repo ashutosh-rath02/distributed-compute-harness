@@ -194,7 +194,7 @@ func (c *apiClient) cmdScheduleShow(id string) error {
 	if err := c.get("/schedules/"+id, &sc); err != nil {
 		return err
 	}
-	fmt.Printf("Schedule  %s %s\nState     %s\nWhen      %s (%s)\nRuns      %s %s\nPolicies  missed: %s, overlap: %s\n", sc.ID, sc.Name, sc.State, sc.Schedule, sc.Timezone, sc.Summary, "x"+fmt.Sprint(sc.Runs), sc.Missed, sc.Overlap)
+	fmt.Printf("Schedule  %s %s\nState     %s\nWhen      %s (%s)\nRuns      %d (%s)\nPolicies  missed: %s, overlap: %s\n", sc.ID, sc.Name, sc.State, sc.Schedule, sc.Timezone, sc.Runs, sc.Summary, sc.Missed, sc.Overlap)
 	if sc.MaxRuns > 0 {
 		fmt.Printf("Max runs  %d\n", sc.MaxRuns)
 	}

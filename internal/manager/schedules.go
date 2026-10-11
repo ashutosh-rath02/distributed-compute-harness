@@ -493,9 +493,15 @@ func (s *Server) advanceSchedule(ctx context.Context, id domain.ScheduleID) {
 	if !sc.QueuedSlot.IsZero() && !s.scheduleRunning(sc.ID) {
 		slot := sc.QueuedSlot
 		sc.QueuedSlot = time.Time{}
-		run := s.fireSchedule(ctx, sc, slotKey(slot), now, false)
-		sc.Runs++
-		record(run)
+		if jobID, wfID, started := s.scheduledRunOf(sc.ID, slotKey(slot)); started {
+			// Already started before a crash lost the record of it: link it.
+			sc.Runs++
+			record(domain.ScheduleRun{Slot: slotKey(slot), At: now, Outcome: domain.RunStarted, Reason: "found already started after a restart", Job: jobID, Workflow: wfID})
+		} else {
+			run := s.fireSchedule(ctx, sc, slotKey(slot), now, false)
+			sc.Runs++
+			record(run)
+		}
 		if limitReached() {
 			end("max runs reached")
 			return
@@ -589,9 +595,7 @@ func (s *Server) scheduleLiveArtifacts(live map[string]bool) {
 		return
 	}
 	for _, sc := range t.list() {
-		if sc.State == domain.ScheduleEnded {
-			continue
-		}
+		// Every state: an ended or paused schedule can still be run-now'd.
 		if sc.Workflow != nil {
 			for _, in := range sc.Workflow.Inputs {
 				live[in.SHA256] = true

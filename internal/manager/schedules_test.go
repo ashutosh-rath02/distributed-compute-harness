@@ -238,6 +238,33 @@ func TestScheduleDoesNotRepeatARunLostToACrash(t *testing.T) {
 	}
 }
 
+// Same for the slot waiting under overlap "queue": it was submitted, the
+// crash lost the record of that, and it must not run a second time.
+func TestScheduleQueuedSlotIsNotRepeatedAfterACrash(t *testing.T) {
+	s, clk := scheduleTestServer(t)
+	sc := newSchedule(t, s, ScheduleRequest{Overlap: domain.OverlapQueue})
+	for _, at := range []time.Time{time.Date(2026, 5, 1, 10, 1, 1, 0, time.UTC), time.Date(2026, 5, 1, 10, 2, 1, 0, time.UTC)} {
+		clk.set(at)
+		s.advanceSchedules(t.Context())
+	}
+	queued := current(s, sc.ID)
+	if queued.QueuedSlot.IsZero() {
+		t.Fatal("setup: nothing queued")
+	}
+	// The queued slot's run got submitted, but the record still says queued.
+	spec := jobSpecFromTemplate(queued, slotKey(queued.QueuedSlot))
+	if _, err := s.SubmitJob(t.Context(), spec); err != nil {
+		t.Fatal(err)
+	}
+	stopJobs(s, sc.ID)
+	s.advanceSchedules(t.Context())
+	s.advanceSchedules(t.Context())
+	got := current(s, sc.ID)
+	if len(jobsOf(s, sc.ID)) != 2 || !got.QueuedSlot.IsZero() {
+		t.Fatalf("%d jobs, queued %v: the queued slot ran twice", len(jobsOf(s, sc.ID)), got.QueuedSlot)
+	}
+}
+
 func TestScheduleRunFailsClearlyWhenPolicyChanged(t *testing.T) {
 	s, clk := scheduleTestServer(t)
 	sc := newSchedule(t, s, ScheduleRequest{})

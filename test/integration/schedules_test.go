@@ -16,6 +16,38 @@ import (
 	"home-harness/internal/transport/ws"
 )
 
+// Every schedule route needs the operator token, and a bad request makes
+// nothing.
+func TestWorkflowScheduleRoutesNeedTheOperatorToken(t *testing.T) {
+	const addr = "127.0.0.1:19753"
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	transport := ws.New()
+	srv := manager.NewServer(transport, nil, manager.Config{
+		Addr: addr, PairingToken: pairingToken, HeartbeatTimeout: 2 * time.Second, OperatorToken: "op-token-for-schedules-test",
+		Artifacts: openArtifactStore(t, 1<<20),
+	})
+	go srv.Run(ctx)
+	waitListening(t, addr)
+	api := httptest.NewServer(srv.NewHTTPHandler())
+	defer api.Close()
+	for _, c := range []struct{ method, path string }{
+		{http.MethodGet, "/schedules"}, {http.MethodGet, "/schedules/x"}, {http.MethodPost, "/schedules"},
+		{http.MethodPost, "/schedules/x/pause"}, {http.MethodPost, "/schedules/x/resume"}, {http.MethodPost, "/schedules/x/run"},
+		{http.MethodDelete, "/schedules/x"},
+	} {
+		if code, _ := callAPI(t, "", c.method, api.URL+c.path, nil); code != http.StatusUnauthorized {
+			t.Errorf("%s %s without a token: %d", c.method, c.path, code)
+		}
+	}
+	if code, _ := callAPI(t, "op-token-for-schedules-test", http.MethodPost, api.URL+"/schedules/nope/pause", nil); code != http.StatusNotFound {
+		t.Errorf("unknown schedule with the token: %d", code)
+	}
+	if code, _ := callAPI(t, "op-token-for-schedules-test", http.MethodPost, api.URL+"/schedules", map[string]any{"schedule": "61 * * * *"}); code != http.StatusBadRequest {
+		t.Errorf("bad schedule with the token: %d", code)
+	}
+}
+
 // A condition skips a stage on the real fleet, and the stage after it
 // works on the last stage that completed.
 func TestWorkflowConditionalStageSkipsOnRealAgents(t *testing.T) {
@@ -105,12 +137,31 @@ func TestWorkflowScheduledRunsSurviveManagerRestarts(t *testing.T) {
 		t.Fatalf("hold: %d %v", c, out)
 	}
 	clock.Store(base.Add(45 * time.Second).UnixNano()) // slot 12:01:00
-	waitFor(t, 10*time.Second, func() bool {
-		var wfs []struct{ ID string }
+	// Wait until step 1 has a job with its tasks queued behind the held slot.
+	waitFor(t, 15*time.Second, func() bool {
+		var wfs []workflowJSON
 		getJSON(t, api1+"/workflows", &wfs)
-		return len(wfs) == 1
+		return len(wfs) == 1 && wfs[0].Stages[0].Counts != nil && wfs[0].Stages[0].Counts.Total == 2 && wfs[0].Stages[0].Counts.Active == 2
 	})
-	stop1() // mid-stage, with the schedule record already advanced
+	stop1() // mid-stage
+	// The worst crash: the workflow was recorded, the schedule's own record
+	// was not. Rewind it to before the slot.
+	func() {
+		db, err := persistent.Open(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		list, err := db.ListSchedules()
+		if err != nil || len(list) != 1 || list[0].Runs != 1 {
+			t.Fatalf("stored schedules %+v (%v)", list, err)
+		}
+		rec := list[0]
+		rec.LastSlot, rec.Runs, rec.History = rec.CreatedAt, 0, nil
+		if err := db.UpsertSchedule(rec); err != nil {
+			t.Fatal(err)
+		}
+	}()
 	_, api2, stop2 := start()
 	// The same slot again after the restart must not run twice.
 	time.Sleep(1500 * time.Millisecond)
@@ -155,6 +206,9 @@ func TestWorkflowScheduledRunsSurviveManagerRestarts(t *testing.T) {
 		} `json:"history"`
 	}
 	getJSON(t, api3+"/schedules/"+sc.ID, &got)
+	if got.Hist[0].Outcome != "started" || got.Hist[1].Outcome != "started" {
+		t.Fatalf("history %+v", got.Hist)
+	}
 	if got.State != domain.ScheduleEnded || got.Runs != 2 || len(got.Hist) != 2 || got.Hist[0].Slot == got.Hist[1].Slot {
 		t.Fatalf("schedule: %+v", got)
 	}
