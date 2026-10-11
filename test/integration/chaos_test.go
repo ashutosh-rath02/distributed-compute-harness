@@ -3,6 +3,7 @@ package integration
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -649,6 +650,59 @@ func TestChaosDrainRefusesNewWorkLetsRunningFinishAndDisconnects(t *testing.T) {
 		rec, ok := m.srv.Registry.Get(a.NodeID())
 		return ok && rec.State != domain.NodeReady
 	})
+}
+
+// ---- 7. a drain that times out must not count as the devices' failure
+
+func TestChaosDrainTimeoutLeavesRunningWorkUnknownNotFailed(t *testing.T) {
+	const addr = "127.0.0.1:19728"
+	db := filepath.Join(t.TempDir(), "m.db")
+	m := startPersistentManager(t, addr, db, nil)
+	api := httptest.NewServer(m.srv.NewHTTPHandler())
+	t.Cleanup(api.Close)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a := chaosAgent(t, ctx, addr, "chaos-drain-timeout", 2, 100*time.Millisecond)
+	waitFor(t, 5*time.Second, func() bool {
+		rec, ok := m.srv.Registry.Get(a.NodeID())
+		return ok && rec.State == domain.NodeReady
+	})
+	sc, sargs := sleepArgs("30")
+	b, _ := json.Marshal(map[string]any{"maxAttempts": 3, "tasks": []map[string]any{{"command": sc, "args": sargs}}})
+	r, err := http.Post(api.URL+"/jobs", "application/json", bytes.NewReader(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Body.Close()
+	waitFor(t, 10*time.Second, func() bool {
+		for _, w := range m.srv.Workloads.List() {
+			if w.Status.State == domain.WorkloadRunning {
+				return true
+			}
+		}
+		return false
+	})
+
+	m.srv.Drain(time.Second) // work is still running when the wait ends
+	time.Sleep(time.Second)  // the connection-closed handling has run by now
+	n := 0
+	for _, w := range m.srv.Workloads.List() {
+		n++
+		if w.Status.State == domain.WorkloadFailed {
+			t.Errorf("workload %s was recorded FAILED by the drain: that would cost the job an attempt", w.Workload.ID)
+		}
+	}
+	if n != 1 {
+		t.Errorf("%d workloads exist after the drain, want 1 (no retry attempt may have been created)", n)
+	}
+
+	m.stop()
+	m2 := startPersistentManager(t, addr, db, nil)
+	for _, w := range m2.srv.Workloads.List() {
+		if w.Status.State != domain.WorkloadUnknown {
+			t.Errorf("after restart workload %s is %s, want UNKNOWN", w.Workload.ID, w.Status.State)
+		}
+	}
 }
 
 var _ = errors.New

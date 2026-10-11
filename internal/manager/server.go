@@ -911,7 +911,7 @@ func (s *Server) handleConn(ctx context.Context, conn domain.Conn) {
 			// in-flight work stays PENDING/RUNNING on disk and is seeded
 			// UNKNOWN next start, rather than recorded as a failure the
 			// work never had (which would cost a job task an attempt).
-			if ctx.Err() == nil {
+			if ctx.Err() == nil && !s.Draining() { // a drain disconnects devices on purpose: not their failure
 				s.failWorkloadsFor(ctx, nodeID, "node went offline: connection closed")
 			}
 		}
