@@ -105,7 +105,7 @@ func (e *Executor) runTask(runCtx context.Context, cancel context.CancelFunc, wl
 				fail(fmt.Errorf("input %s: %w", in.Name, err))
 				return
 			}
-			if err := xfer.Fetch(runCtx, in, dest); err != nil {
+			if err := retryTransfer(runCtx, func() error { return xfer.Fetch(runCtx, in, dest) }); err != nil {
 				fail(fmt.Errorf("fetch input %s: %w", in.Name, err))
 				return
 			}
@@ -183,7 +183,8 @@ func (e *Executor) runTask(runCtx context.Context, cancel context.CancelFunc, wl
 			finish(status)
 			return
 		}
-		ref, err := xfer.Upload(runCtx, name, path)
+		var ref domain.ArtifactRef
+		err = retryTransfer(runCtx, func() (uerr error) { ref, uerr = xfer.Upload(runCtx, name, path); return uerr })
 		if err != nil {
 			status.State, status.Error, status.Outputs = domain.WorkloadFailed, fmt.Sprintf("upload output %s: %v", name, err), nil
 			finish(status)

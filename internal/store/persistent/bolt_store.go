@@ -43,15 +43,30 @@ type Record struct {
 
 // Store is a BoltDB-backed persistent store, opened from a single file.
 type Store struct {
-	db *bbolt.DB
+	db healthDB // writes are watched for a full disk (health.go)
+	h  *health
 }
 
-// Open opens (creating if absent) the persistent store at path.
-func Open(path string) (*Store, error) {
-	db, err := bbolt.Open(path, 0o600, &bbolt.Options{Timeout: 5 * time.Second})
+// Open opens (creating if absent) the persistent store at path. A database
+// from an older manager is upgraded in place after a safety copy; one from
+// a newer manager is refused untouched (schema.go).
+func Open(path string) (*Store, error) { return open(path, defaultPlan()) }
+
+func open(path string, p plan) (*Store, error) {
+	if err := p.validate(); err != nil {
+		return nil, err
+	}
+	raw, err := bbolt.Open(path, 0o600, &bbolt.Options{Timeout: 5 * time.Second})
 	if err != nil {
 		return nil, fmt.Errorf("persistent: open %q: %w", path, err)
 	}
+	if err := prepare(raw, path, p); err != nil {
+		raw.Close()
+		return nil, err
+	}
+	raw.MaxBatchDelay = 1 * time.Millisecond // how long a write waits for company (health.go)
+	h := &health{}
+	db := healthDB{DB: raw, h: h}
 	err = db.Update(func(tx *bbolt.Tx) error {
 		for _, name := range [][]byte{nodesBucket, workloadsBucket, revokedBucket, nodeMetaBucket, jobsBucket, workflowsBucket, settingsBucket, auditBuckets[domain.AuditSecurity], auditBuckets[domain.AuditAdmissions], auditBuckets[domain.AuditNoise]} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
@@ -62,13 +77,19 @@ func Open(path string) (*Store, error) {
 		if _, err := tx.CreateBucketIfNotExists(auditBuckets[domain.AuditRemote]); err != nil {
 			return err
 		}
+		// A new database is born at the current version; one that predates
+		// version records is version 1 (and equals current until the first
+		// migration exists). Migrated ones were stamped step by step.
+		if _, stamped := readVersion(tx); !stamped {
+			return stampVersion(tx, p.current)
+		}
 		return nil
 	})
 	if err != nil {
 		db.Close()
 		return nil, fmt.Errorf("persistent: init buckets: %w", err)
 	}
-	return &Store{db: db}, nil
+	return &Store{db: db, h: h}, nil
 }
 
 // Close releases the underlying database file.

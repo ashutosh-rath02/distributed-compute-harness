@@ -27,6 +27,8 @@ import (
 var routeRoles = map[string]domain.Role{
 	// viewer
 	"GET /whoami":                  domain.RoleViewer,
+	"GET /reliability":             domain.RoleViewer, // drain, disk and backup health
+	"POST /backup":                 domain.RoleAdmin,  // holds the TLS key and every token
 	"GET /metrics":                 domain.RoleViewer, // the metrics token has its own bypass (operatorauth.go)
 	"GET /status":                  domain.RoleViewer,
 	"GET /nodes":                   domain.RoleViewer,

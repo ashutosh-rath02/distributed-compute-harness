@@ -41,6 +41,9 @@ func writeWorkflowError(w http.ResponseWriter, err error) {
 // apiPostWorkflow is POST /workflows {name, inputs: [{name, sha256}],
 // stages: [{type, params, mode, parts, combine: {type, params}}], maxAttempts}.
 func (s *Server) apiPostWorkflow(w http.ResponseWriter, r *http.Request) {
+	if s.refuseNewWork(w) {
+		return
+	}
 	var req workflowRequest
 	dec := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
 	// A misspelled field in a hand-written workflow would otherwise be

@@ -165,6 +165,8 @@ func main() {
 		err = client.cmdJoinRequests()
 	case "join-window":
 		err = client.cmdJoinWindow(args[1:])
+	case "backup":
+		err = cmdBackup(client, args[1:])
 	case "standby":
 		err = client.cmdStandby(args[1:])
 	case "user":
@@ -228,6 +230,10 @@ Commands:
   user add|list|remove|token|rotate ...   named users with a role (viewer, operator,
                         admin) and their own tokens; see "harnessctl user"
   rotate operator-token|ai-key|pairing-token   replace a secret without a restart
+  backup [-to F] [-include-artifacts] [-passphrase-file F]
+                        take a consistent backup of the manager (encrypted if a
+                        passphrase is given); "backup verify F" checks one,
+                        "backup status" shows disk health and the last scheduled backup
   login-url             print the dashboard sign-in link (it carries the
                         operator token: keep it private)
   rename <id> <alias|-> set the name the dashboard and "nodes" show for a

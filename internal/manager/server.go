@@ -185,6 +185,8 @@ type Server struct {
 	// alias/labels and the availability rule are set separately).
 	metaMu   sync.Mutex
 	auditLog *auditRecorder
+	// rel: backups, drain and storage health (reliability.go).
+	rel reliabilityState
 
 	// placeMu serializes "check room, then reserve" (placement plus the
 	// state change that makes the reservation count), so two concurrent
@@ -580,11 +582,22 @@ func offers(rec *NodeRecord, p placement) (bool, string) {
 // against (a dispatch pass's snapshot, kept current as it assigns);
 // otherwise each node's is derived fresh.
 func (s *Server) resolve(p placement, usage map[domain.NodeID]nodeUsage) (*NodeRecord, domain.NodeID, error) {
+	// Untargeted placement looks at every ready node: derive all the
+	// reservations in one scan of the workloads (once, on first use) rather
+	// than one scan per node, which was O(nodes x workloads) per submission
+	// and the manager's top CPU cost at 500 devices.
+	var snap map[domain.NodeID]nodeUsage
 	usageOf := func(id domain.NodeID) nodeUsage {
 		if usage != nil {
 			return usage[id]
 		}
-		return s.Workloads.usageOn(id)
+		if p.target != "" {
+			return s.Workloads.usageOn(id)
+		}
+		if snap == nil {
+			snap = s.Workloads.usageByNode()
+		}
+		return snap[id]
 	}
 	if p.target != "" {
 		rec, ok := s.Registry.Get(p.target)
@@ -870,6 +883,7 @@ func (s *Server) Run(ctx context.Context) error {
 	go s.monitorHeartbeats(ctx)
 	go s.reconcileWorkloads(ctx)
 	go s.watchPeer(ctx)
+	go s.watchStorage(ctx)
 
 	for {
 		select {
@@ -929,7 +943,7 @@ func (s *Server) handleConn(ctx context.Context, conn domain.Conn) {
 			// in-flight work stays PENDING/RUNNING on disk and is seeded
 			// UNKNOWN next start, rather than recorded as a failure the
 			// work never had (which would cost a job task an attempt).
-			if ctx.Err() == nil {
+			if ctx.Err() == nil && !s.Draining() { // a drain disconnects devices on purpose: not their failure
 				s.failWorkloadsFor(ctx, nodeID, "node went offline: connection closed")
 			}
 		}

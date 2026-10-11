@@ -69,7 +69,7 @@ func TestRouteRolesCoverEveryRoute(t *testing.T) {
 // The expected role of every route, written out independently of
 // routeRoles: changing a role there must fail here.
 var expectedRoles = map[string]domain.Role{
-	"GET /whoami": "viewer", "GET /metrics": "viewer", "GET /status": "viewer", "GET /nodes": "viewer", "GET /nodes/{id}": "viewer", "GET /nodes/{id}/resources": "viewer",
+	"GET /whoami": "viewer", "GET /reliability": "viewer", "POST /backup": "admin", "GET /metrics": "viewer", "GET /status": "viewer", "GET /nodes": "viewer", "GET /nodes/{id}": "viewer", "GET /nodes/{id}/resources": "viewer",
 	"GET /nodes/{id}/capabilities": "viewer", "GET /resources/total": "viewer", "GET /events": "viewer", "GET /revocations": "viewer",
 	"GET /agent-binaries": "viewer", "GET /agent-binary/hash": "viewer", "GET /join-window": "viewer", "GET /audit": "viewer",
 	"GET /workloads": "viewer", "GET /workloads/{id}": "viewer", "GET /artifacts": "viewer", "GET /artifacts/{sha}": "viewer",

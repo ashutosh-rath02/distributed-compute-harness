@@ -45,6 +45,9 @@ type jobRequest struct {
 }
 
 func (s *Server) apiPostJob(w http.ResponseWriter, r *http.Request) {
+	if s.refuseNewWork(w) {
+		return
+	}
 	var req jobRequest
 	// Larger than a single workload's cap: a 1000-task job with args.
 	if err := json.NewDecoder(io.LimitReader(r.Body, 8<<20)).Decode(&req); err != nil {

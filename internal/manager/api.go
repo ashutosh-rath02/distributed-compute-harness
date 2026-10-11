@@ -52,6 +52,12 @@ type nodeView struct {
 }
 
 func (s *Server) toNodeView(rec *NodeRecord, relations map[domain.NodeID]hostRelation) nodeView {
+	return s.toNodeViewRunning(rec, relations, s.Workloads.usageOn(rec.Node.Identity.NodeID).running)
+}
+
+// toNodeViewRunning is toNodeView with the node's in-flight count supplied,
+// so listing N nodes scans the workloads once instead of N times.
+func (s *Server) toNodeViewRunning(rec *NodeRecord, relations map[domain.NodeID]hostRelation, running int) nodeView {
 	meta := s.meta.get(rec.Node.Identity.NodeID)
 	rel := relations[rec.Node.Identity.NodeID]
 	return nodeView{
@@ -66,7 +72,7 @@ func (s *Server) toNodeView(rec *NodeRecord, relations map[domain.NodeID]hostRel
 		Metrics:      rec.LastMetrics,
 		UpdateStatus: s.UpdateStatusFor(rec),
 		Slots:        rec.slots(),
-		Running:      s.Workloads.usageOn(rec.Node.Identity.NodeID).running,
+		Running:      running,
 
 		Alias:                 meta.Alias,
 		Labels:                meta.Labels,
@@ -222,6 +228,8 @@ func (s *Server) NewHTTPHandler() http.Handler {
 	mux.HandleFunc("POST /standby", s.apiAddStandby)
 	mux.HandleFunc("DELETE /standby", s.apiRemoveStandby)
 	mux.HandleFunc("POST /standby/promote", s.apiPromoteActive)
+	mux.HandleFunc("POST /backup", s.apiBackup)
+	mux.HandleFunc("GET /reliability", s.apiReliability)
 	s.registerRemoteAccessRoutes(mux) // GET/PUT /remote-access, POST /remote-access/rotate (remote.go)
 	s.registerUserRoutes(mux)        // GET /whoami, /users..., POST /rotate/{what} (secrets.go)
 	// Host check and CSRF protection first (apiguard.go), then operator
@@ -234,9 +242,10 @@ func (s *Server) NewHTTPHandler() http.Handler {
 func (s *Server) apiListNodes(w http.ResponseWriter, r *http.Request) {
 	recs := s.Registry.List()
 	relations := hostRelations(recs)
+	usage := s.Workloads.usageByNode()
 	views := make([]nodeView, 0, len(recs))
 	for _, rec := range recs {
-		views = append(views, s.toNodeView(rec, relations))
+		views = append(views, s.toNodeViewRunning(rec, relations, usage[rec.Node.Identity.NodeID].running))
 	}
 	writeJSON(w, http.StatusOK, views)
 }
@@ -524,6 +533,9 @@ type workloadRequest struct {
 }
 
 func (s *Server) apiPostWorkload(w http.ResponseWriter, r *http.Request) {
+	if s.refuseNewWork(w) {
+		return
+	}
 	var req workloadRequest
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)

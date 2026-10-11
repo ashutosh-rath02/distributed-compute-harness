@@ -485,6 +485,8 @@ func writeArtifactError(w http.ResponseWriter, err error) {
 		http.Error(w, artifacts.ErrTooLarge.Error(), http.StatusRequestEntityTooLarge)
 	case errors.Is(err, artifacts.ErrStoreFull):
 		http.Error(w, err.Error(), http.StatusInsufficientStorage)
+	case artifacts.IsNoSpace(err):
+		http.Error(w, "the manager's disk can't take the file ("+artifacts.ReasonFor(err)+"); free some space and try again", http.StatusInsufficientStorage)
 	case errors.Is(err, artifacts.ErrHashMismatch), errors.Is(err, artifacts.ErrInvalidID):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, artifacts.ErrNotFound):
@@ -505,6 +507,9 @@ func (s *Server) requireArtifactStore(w http.ResponseWriter) bool {
 // POST /artifacts: the raw request body is the file. An optional
 // X-Artifact-SHA256 header is verified against it.
 func (s *Server) apiPostArtifact(w http.ResponseWriter, r *http.Request) {
+	if s.refuseNewWork(w) {
+		return
+	}
 	if !s.requireArtifactStore(w) {
 		return
 	}

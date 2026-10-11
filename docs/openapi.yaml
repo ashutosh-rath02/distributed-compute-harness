@@ -1329,6 +1329,50 @@ paths:
           description: The run that was started.
         "404":
           $ref: "#/components/responses/NotFound"
+  /backup:
+    post:
+      operationId: takeBackup
+      tags: [Operations]
+      summary: Download a consistent backup of the manager's state
+      description: |
+        Admin only. A zip of the database (a consistent snapshot, taken
+        without blocking the manager), the TLS identity and the tokens, with
+        a SHA-256 manifest; add ?artifacts=1 to include stored files.
+        The backup holds secrets: keep it private. harnessctl encrypts it
+        with a passphrase on your side, so the passphrase never reaches the
+        manager. Audited. Answers 507 when the disk is full.
+      parameters:
+        - name: artifacts
+          in: query
+          required: false
+          description: Set to 1 to include the stored files.
+          schema:
+            type: string
+            enum: ["1"]
+      responses:
+        "200":
+          description: The backup.
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        "503":
+          description: This manager has no persistent store to back up.
+        "507":
+          description: Not enough disk space to make the backup.
+  /reliability:
+    get:
+      operationId: getReliability
+      tags: [Operations]
+      summary: Shutdown, disk and backup health
+      responses:
+        "200":
+          description: Whether the manager is draining, whether the disk takes writes, artifact store use, and the last scheduled backup.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Reliability"
   /policy:
     get:
       operationId: getPolicy
@@ -3011,6 +3055,27 @@ components:
           type: array
           items:
             type: object
+    Reliability:
+      type: object
+      properties:
+        draining:
+          type: boolean
+        storage:
+          type: object
+          properties:
+            degraded:
+              type: boolean
+            problem:
+              type: string
+        artifacts:
+          type: object
+          properties:
+            used:
+              type: integer
+            total:
+              type: integer
+        scheduledBackup:
+          type: object
     WhoAmI:
       type: object
       properties:

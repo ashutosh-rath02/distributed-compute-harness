@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math/rand/v2"
 	"net/http"
 	"os"
 	"reflect"
@@ -409,9 +410,21 @@ func (a *Agent) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(backoff):
+		case <-time.After(jitterFn(backoff)):
 		}
 	}
+}
+
+// jitterFn spreads a reconnect delay over 50%-150% of itself. Without it,
+// every device that lost the same manager at the same moment (a restart,
+// a network blip) retries in lockstep, and a fleet-sized wave of TLS
+// handshakes and registrations hits the manager together. A variable so
+// tests can pin it.
+var jitterFn = func(d time.Duration) time.Duration {
+	if d <= 0 {
+		return d
+	}
+	return d/2 + time.Duration(rand.Int64N(int64(d)))
 }
 
 // nextBackoff doubles current, capped at maxBackoff. A pure function so
