@@ -404,6 +404,15 @@ func (s *Server) fireSchedule(ctx context.Context, sc domain.Schedule, slot stri
 	return run
 }
 
+func (s *Server) anyReadyNode() bool {
+	for _, rec := range s.Registry.List() {
+		if rec.State == domain.NodeReady {
+			return true
+		}
+	}
+	return false
+}
+
 // scheduledRunOf finds the job or workflow already started for a slot.
 func (s *Server) scheduledRunOf(id domain.ScheduleID, slot string) (domain.JobID, domain.WorkflowID, bool) {
 	for _, j := range s.jobs.list() {
@@ -509,6 +518,16 @@ func (s *Server) advanceSchedule(ctx context.Context, id domain.ScheduleID) {
 		if limitReached() {
 			end("max runs reached")
 			return
+		}
+		// With no device ready at all (the manager has just restarted and the
+		// agents are still reconnecting) a slot that is still on time, or a
+		// run-once catch-up, waits for the next pass instead of being used
+		// up as a failed run. Past its grace, a skip-policy slot is dropped
+		// as missed like any other.
+		if !s.anyReadyNode() && (now.Sub(last) <= scheduleGrace || sc.Missed == domain.MissedRunOnce) {
+			if _, _, started := s.scheduledRunOf(sc.ID, key); !started {
+				return
+			}
 		}
 		switch jobID, wfID, started := s.scheduledRunOf(sc.ID, key); {
 		case started:

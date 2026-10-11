@@ -154,6 +154,26 @@ func TestScheduleOverlapPolicies(t *testing.T) {
 	}
 }
 
+// With no device ready (agents still reconnecting after a restart) an
+// on-time slot waits for the next pass instead of being used up.
+func TestScheduleWaitsForADevice(t *testing.T) {
+	s, clk := scheduleTestServer(t)
+	sc := newSchedule(t, s, ScheduleRequest{Overlap: domain.OverlapAllow})
+	s.Registry.SetState("n1", domain.NodeReconnecting)
+	clk.set(time.Date(2026, 5, 1, 10, 1, 5, 0, time.UTC))
+	s.advanceSchedules(t.Context())
+	s.advanceSchedules(t.Context())
+	if got := current(s, sc.ID); len(got.History) != 0 || got.Runs != 0 || len(jobsOf(s, sc.ID)) != 0 {
+		t.Fatalf("used the slot up with no device: %+v", got)
+	}
+	s.Registry.SetState("n1", domain.NodeReady)
+	clk.set(time.Date(2026, 5, 1, 10, 1, 20, 0, time.UTC))
+	s.advanceSchedules(t.Context())
+	if got := current(s, sc.ID); len(jobsOf(s, sc.ID)) != 1 || got.Runs != 1 {
+		t.Fatalf("did not run once a device was ready: %+v", got)
+	}
+}
+
 func TestScheduleMaxRunsAndEndTime(t *testing.T) {
 	s, clk := scheduleTestServer(t)
 	two := newSchedule(t, s, ScheduleRequest{MaxRuns: 2, Overlap: domain.OverlapAllow})
