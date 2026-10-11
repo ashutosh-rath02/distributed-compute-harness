@@ -528,3 +528,27 @@ Full test suite: `go test ./... -count=2` from the repo root (add `-v` for verbo
 2. Run `git log --oneline -30` to see the recent commit sequence and confirm this document still matches reality (it was written immediately after the most recent commit, but code moves faster than docs).
 3. Run the full test suite once to confirm a clean baseline before making any change.
 4. Before starting new work, confirm with the user which of §10's options (or something else entirely) is actually wanted next — do not assume Option A just because it's listed first here.
+
+## 15. Production-readiness round (merged 2026-10, commit 2ec6865 and after)
+
+Six parallel tracks were built and merged into main. Read the matching doc before touching each area.
+
+- **CI and versioning.** `internal/version` (ldflags `Version`, `Commit`, `Date`), `-version` on every binary, `/version`. Workflows in `.github/workflows/` (`ci`, `nightly`, `security`, `release`) have **never run on GitHub**. Release builds need Go 1.27.2 or newer. The release manifest is signed with Ed25519; the key is `~/.home-harness/release-signing.key`. **Back it up next to the Android keystore.** Losing it means devices cannot trust a new release.
+- **Observability.** `/metrics` (Prometheus), `/healthz`, `/readyz`, `/status`, slog logging (`-log-format`, `-log-level`), metrics token for scrapers. `harnessctl status` shows the fleet in one screen. See `docs/observability.md`. `harness_build_info` now carries the real version (797fa12).
+- **Reliability.** Encrypted backup and restore (`harnessctl backup`, `docs/backup-restore.md`), schema versions with migrations, drain on SIGTERM (running work is not failed), disk-full degraded mode (HTTP 507), `cmd/loadsim`, chaos and clock-jump tests. Disk-full was only injected, never a real full disk.
+- **Security.** Roles viewer/operator/admin through the single `routeRoles` table (`internal/manager/roles.go`); a test fails if a route has no role. Per-user tokens (hash only), token rotation with a grace window, `docs/THREAT_MODEL.md`, `SECURITY.md`, a fuzz finding that was fixed. TLS certificate rotation is **design only** (`docs/tls-rotation-design.md`).
+- **Complex tasks.** Conditional workflow stages (`when`, `onFailure`; `docs/workflows.md`), cron schedules with exactly-once slots (`docs/schedules.md`, `internal/cronspec`), `text.split`, `json.merge`, `harnessctl mapreduce`.
+- **Packaging and docs.** systemd and launchd units, deb and rpm through nfpm (built), Windows uninstall script, Dockerfiles (**never run**), OpenAPI 3.1 in `docs/openapi.yaml` (a test fails if a route is missing from it), Python and JS clients, generated site (`go run ./docs/build`), SBOM.
+
+### Merge traps seen
+Six agents edited the same files. After a merge run `go build ./...`, `go vet ./...`, the full tests and `node --check` on the dashboard scripts (`TestPageScriptsParse`). New `register*Routes` functions need entries in the role table, in `docs/openapi.yaml`, and in the AST scan list in `roles_test.go`.
+
+### Live checks on the real fleet (laptop manager, 2026-10-11)
+Passed: `harnessctl status`; viewer role reads (200) but cannot submit or list users (403); a removed user's token stops working; backup taken and verified; conditional workflow skips a stage and finishes; map-reduce word count over 4 chunks gives exactly 20,000 lines; a 2-run schedule runs exactly twice then ENDS; raw commands still refused. Earlier rounds covered tasks, job spreading, spot-checks, locality, failover and a real split model.
+
+### Still open
+- Mac, Vinay and Vishal were offline during this round, so the new build was only proven on the laptop. When they reconnect, send `harnessctl update` to each and check that none shows "outdated". The phone and the second PC have been offline for days.
+- Never run for real: the remote dashboard in a browser, whisper.cpp, Docker, macOS pkg, systemd, the CI workflows.
+- Tests that need memory (`image.resize` needs 512 MiB free, `audio.transcribe` 1 GiB) fail on a busy machine and pass alone. Laptop sleep also breaks long runs.
+- The macOS and Linux installers and join scripts still create the flashing-window watchdog form. Windows was fixed.
+- The standby manager on the Mac runs from `~/hh-standby` under nohup and will not survive a reboot.
