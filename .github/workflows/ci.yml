@@ -32,7 +32,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4 # major tag: see the policy at the top
+      - uses: actions/checkout@v7 # major tag: see the policy at the top
       - uses: actions/setup-go@v5 # major tag: see the policy at the top
         with:
           go-version-file: go.mod
@@ -54,7 +54,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4 # major tag: see the policy at the top
+      - uses: actions/checkout@v7 # major tag: see the policy at the top
       - uses: actions/setup-go@v5 # major tag: see the policy at the top
         with:
           go-version-file: go.mod
@@ -76,7 +76,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4 # major tag: see the policy at the top
+      - uses: actions/checkout@v7 # major tag: see the policy at the top
       - uses: actions/setup-go@v5 # major tag: see the policy at the top
         with:
           go-version-file: go.mod
