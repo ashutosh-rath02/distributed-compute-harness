@@ -31,6 +31,7 @@ import (
 	"home-harness/internal/transport/multi"
 	"home-harness/internal/transport/relay"
 	"home-harness/internal/transport/ws"
+	"home-harness/internal/version"
 )
 
 func main() {
@@ -74,7 +75,12 @@ func main() {
 	metricsTokenFile := flag.String("metrics-token-file", "", "file holding a read-only token for a Prometheus scraper, created (owner-only) if missing. It opens only GET /metrics, /healthz and /readyz, never the rest of the API; without it /metrics needs the operator token. Must differ from the operator token and AI key")
 	logFormat := flag.String("log-format", "text", "log format: text (the familiar lines, plus key=value fields) or json (one object per line)")
 	logLevel := flag.String("log-level", "info", "log level: debug, info, warn or error")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(version.String("manager"))
+		return
+	}
 	if err := logging.Setup(*logFormat, *logLevel, os.Stderr); err != nil {
 		log.Fatalf("manager: %v", err)
 	}

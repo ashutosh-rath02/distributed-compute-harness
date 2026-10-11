@@ -1,0 +1,72 @@
+name: Release
+
+# Push a tag like v1.2.3 to build a draft GitHub Release.
+#
+# REQUIRED SECRET: HARNESS_RELEASE_KEY, the PEM text of the Ed25519 release
+# signing key (the file ~/.home-harness/release-signing.key that
+# scripts/releasesign creates). Create it once on a trusted machine, back it
+# up, then add it under Settings > Secrets and variables > Actions. Every PC
+# that installed a signed bundle pins this key's public half, so using a
+# different key makes those PCs refuse the release. The job fails if the
+# secret is empty rather than minting a new key.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write # create the draft release
+    steps:
+      - uses: actions/checkout@v4 # major tag: first-party, bumped by Dependabot
+        with:
+          fetch-depth: 0 # tags and history, for the notes and the version
+      - uses: actions/setup-go@v5 # major tag: first-party, bumped by Dependabot
+        with:
+          go-version-file: go.mod
+      - name: Check the tag is a version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "tag $TAG is not vMAJOR.MINOR.PATCH[-prerelease]" >&2; exit 1
+          fi
+      - name: Run the test suites first
+        run: |
+          go vet ./...
+          bash scripts/fmt-check.sh
+          go test -p 1 ./internal/... ./cmd/... ./scripts/...
+          go test -p 1 ./test/integration
+      - name: Install the release signing key
+        env:
+          KEY: ${{ secrets.HARNESS_RELEASE_KEY }}
+        run: |
+          if [[ -z "$KEY" ]]; then echo "secret HARNESS_RELEASE_KEY is not set" >&2; exit 1; fi
+          mkdir -p "$RUNNER_TEMP/keys"
+          umask 077
+          printf '%s\n' "$KEY" > "$RUNNER_TEMP/keys/release-signing.key"
+          echo "HARNESS_RELEASE_KEY=$RUNNER_TEMP/keys/release-signing.key" >> "$GITHUB_ENV"
+      - name: Build, package and sign
+        env:
+          HARNESS_REQUIRE_KEY: "1"
+          TAG: ${{ github.ref_name }}
+        run: |
+          export HARNESS_VERSION="${TAG#v}"
+          bash scripts/package-release.sh
+      - name: Remove the key
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/keys"
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          pre=()
+          [[ "$TAG" == *-* ]] && pre=(--prerelease)
+          gh release create "$TAG" dist/release/* \
+            --draft --generate-notes --verify-tag --title "$TAG" "${pre[@]}"

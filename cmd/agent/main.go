@@ -28,6 +28,7 @@ import (
 	"home-harness/internal/sysinfo"
 	"home-harness/internal/transport/relay"
 	"home-harness/internal/transport/ws"
+	"home-harness/internal/version"
 )
 
 func main() {
@@ -59,7 +60,12 @@ func main() {
 	appUpdateFile := flag.String("app-update-file", "", "where to download a newer app when the manager offers one, for the app to install (with -app-apk)")
 	logFormat := flag.String("log-format", "text", "log format: text or json (one object per line)")
 	logLevel := flag.String("log-level", "info", "log level: debug, info, warn or error")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(version.String("agent"))
+		return
+	}
 	if err := logging.Setup(*logFormat, *logLevel, os.Stderr); err != nil {
 		log.Fatalf("agent: %v", err)
 	}

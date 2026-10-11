@@ -20,6 +20,8 @@
 # SmartScreen's warnings.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# Version, commit and date go into every binary (scripts/version.sh).
+source scripts/version.sh
 out=dist/windows-manager
 rm -rf "$out"
 mkdir -p "$out/agents"
@@ -29,8 +31,8 @@ cp bin/agents/agent-* "$out/agents/"
 # The release key's public half is built into manager.exe, so a manager
 # from this bundle checks agent sets against it by itself.
 release_pub="$(go run ./scripts/releasesign pubkey)"
-CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-X main.releaseKey=$release_pub" -o "$out/manager.exe" ./cmd/manager
-CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -o "$out/harnessctl.exe" ./cmd/harnessctl
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-X main.releaseKey=$release_pub $VERSION_LDFLAGS" -o "$out/manager.exe" ./cmd/manager
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$VERSION_LDFLAGS" -o "$out/harnessctl.exe" ./cmd/harnessctl
 cp scripts/windows-manager/install.ps1 scripts/windows-manager/install.cmd "$out/"
 if [[ -f dist/home-harness-manager.apk ]]; then
   cp dist/home-harness-manager.apk "$out/home-harness.apk"

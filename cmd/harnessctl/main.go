@@ -19,6 +19,7 @@ import (
 
 	"home-harness/internal/domain"
 	"home-harness/internal/joinscript"
+	"home-harness/internal/version"
 )
 
 func main() {
@@ -26,8 +27,13 @@ func main() {
 	tokenFile := flag.String("token-file", "harness-operator-token", "the manager's operator token file (its -operator-token-file); the "+operatorTokenEnv+" environment variable overrides it")
 	remoteURL := flag.String("remote", "", "use the manager from anywhere, through its relay: the remote address \"harnessctl remote\" shows (needs -remote-key-file or "+remoteKeyEnv+")")
 	remoteKeyFile := flag.String("remote-key-file", "", "file holding the remote key, for -remote")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Usage = usage
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(version.String("harnessctl"))
+		return
+	}
 
 	args := flag.Args()
 	if len(args) == 0 {
