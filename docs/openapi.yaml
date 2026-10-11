@@ -91,11 +91,14 @@ paths:
     post:
       operationId: login
       tags: [Operations]
-      summary: Exchange the operator token for a dashboard session value
+      summary: Exchange a token (the operator token or a user's) for a dashboard session value
       description: |
-        The session is an HMAC of the token; send it as a Bearer value like
-        the token itself. It is returned in the body and never as a cookie.
-        When the manager has no token configured the session is empty.
+        The session is signed by the manager and expires (12 hours); send it
+        as a Bearer value like the token itself. It carries the user and role
+        and stops working when that user's token changes or the user is
+        removed. It is returned in the body and never as a cookie. When the
+        manager has no token configured the session is empty. Repeated wrong
+        tokens from one source get 429 with Retry-After.
       security: []
       requestBody:
         required: true
@@ -118,6 +121,15 @@ paths:
                 properties:
                   session:
                     type: string
+                  role:
+                    type: string
+                    enum: [viewer, operator, admin]
+                  user:
+                    type: string
+                    description: Empty for the operator token.
+                  expires:
+                    type: string
+                    format: date-time
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -1050,6 +1062,157 @@ paths:
                     description: Effective policy for the raw capabilities (system.execute, filesystem.read), by name.
                     additionalProperties:
                       $ref: "#/components/schemas/TypePolicy"
+  /whoami:
+    get:
+      operationId: whoAmI
+      tags: [Access]
+      summary: Who the caller is and the role it has
+      description: Role is viewer, operator or admin. The user is empty for the legacy operator token and its sessions (admin).
+      responses:
+        "200":
+          description: The caller.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WhoAmI"
+  /users:
+    get:
+      operationId: listUsers
+      tags: [Access]
+      summary: List named users
+      description: Admin only. Never includes tokens or token hashes.
+      responses:
+        "200":
+          description: The users, by name.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/User"
+    post:
+      operationId: addUser
+      tags: [Access]
+      summary: Add a named user and show their token once
+      description: Admin only. The token is returned only in this answer; the manager keeps just its hash. Audited.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddUser"
+      responses:
+        "201":
+          description: The user and their new token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserToken"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: A user with that name exists.
+  /users/{name}:
+    delete:
+      operationId: removeUser
+      tags: [Access]
+      summary: Remove a user
+      description: Admin only. The user's token and every dashboard session of theirs stop working at once. Audited.
+      parameters:
+        - $ref: "#/components/parameters/UserName"
+      responses:
+        "200":
+          description: The removed user's name.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  removed:
+                    type: string
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /users/{name}/token:
+    post:
+      operationId: issueUserToken
+      tags: [Access]
+      summary: Give a user a new token (the old one stops at once)
+      description: Admin only. Shown once. Signs the user out of every browser. Audited.
+      parameters:
+        - $ref: "#/components/parameters/UserName"
+      responses:
+        "200":
+          description: The new token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserTokenIssued"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /users/{name}/rotate:
+    post:
+      operationId: rotateUserToken
+      tags: [Access]
+      summary: Give a user a new token and keep the old one for a while
+      description: Admin only. The old token still works for graceMinutes (default 10, at most 1440), so a script can switch over without a gap. Audited.
+      parameters:
+        - $ref: "#/components/parameters/UserName"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                graceMinutes:
+                  type: integer
+                  minimum: 0
+                  maximum: 1440
+      responses:
+        "200":
+          description: The new token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserTokenIssued"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /rotate/{what}:
+    post:
+      operationId: rotateSecret
+      tags: [Access]
+      summary: Replace the operator token, the AI key or the pairing token
+      description: |
+        Admin only. No restart needed. Rotating the operator token signs out
+        every dashboard session and invalidates the old token at once. The AI
+        key is replaced for apps (they must be given the new one). The pairing
+        token only matters for devices that have not joined yet; devices that
+        joined keep working because they hold their own keys. The new value is
+        returned once. Audited.
+      parameters:
+        - name: what
+          in: path
+          required: true
+          description: Which secret.
+          schema:
+            type: string
+            enum: [operator-token, ai-key, pairing-token]
+      responses:
+        "200":
+          description: The new value.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rotated:
+                    type: string
+                  value:
+                    type: string
+        "404":
+          description: Not one of operator-token, ai-key or pairing-token.
+        "409":
+          description: This manager cannot save that secret (no token file or no database).
   /policy:
     get:
       operationId: getPolicy
@@ -1789,6 +1952,13 @@ components:
       in: path
       required: true
       description: A node id.
+      schema:
+        type: string
+    UserName:
+      name: name
+      in: path
+      required: true
+      description: A user name.
       schema:
         type: string
     WorkloadId:
@@ -2644,6 +2814,67 @@ components:
           type: boolean
         allowNetwork:
           type: boolean
+    WhoAmI:
+      type: object
+      properties:
+        user:
+          type: string
+        role:
+          type: string
+          enum: [viewer, operator, admin]
+    User:
+      type: object
+      properties:
+        name:
+          type: string
+        role:
+          type: string
+          enum: [viewer, operator, admin]
+        created:
+          type: string
+          format: date-time
+        lastUsed:
+          type: string
+          format: date-time
+        expires:
+          type: string
+          format: date-time
+        expired:
+          type: boolean
+    AddUser:
+      type: object
+      required: [name, role]
+      properties:
+        name:
+          type: string
+        role:
+          type: string
+          enum: [viewer, operator, admin]
+        expiresDays:
+          type: integer
+          minimum: 0
+          maximum: 3650
+          description: 0 means the token never expires.
+    UserToken:
+      type: object
+      properties:
+        name:
+          type: string
+        role:
+          type: string
+        token:
+          type: string
+          description: Shown only once.
+    UserTokenIssued:
+      type: object
+      properties:
+        name:
+          type: string
+        token:
+          type: string
+          description: Shown only once.
+        graceMinutes:
+          type: integer
     Policy:
       type: object
       properties:
