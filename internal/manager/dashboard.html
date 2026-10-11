@@ -514,7 +514,7 @@
   function renderNodes(nodes) {
     const el = document.getElementById("nodes");
     if (nodes.length === 0) {
-      el.innerHTML = '<p class="empty">No nodes known yet — use "Add a device" below.</p>';
+      el.innerHTML = '<p class="empty">No devices yet. Add one: see "Add a device" at the bottom of this page (click "Allow new devices", then open the address it shows in the other device\'s browser). A task can only run once a device shows READY here.</p>';
       return;
     }
     const rows = nodes.map((n) => {
@@ -710,7 +710,7 @@
       document.getElementById("queueCount").textContent = running + " / " + queued;
       const el = document.getElementById("workloads");
       if (!recent.length) {
-        el.innerHTML = '<p class="empty">No tasks yet.</p>';
+        el.innerHTML = '<p class="empty">No tasks yet. Try "Run a visible test" above, or from a terminal: harnessctl do cpu.burn seconds=10</p>';
         return;
       }
       el.innerHTML = "<table><thead><tr><th>Task</th><th>Target</th><th>State</th><th>Priority</th><th>Result returned to phone</th></tr></thead><tbody>"
@@ -806,7 +806,7 @@
       const resp = await api("/audit?limit=50");
       const entries = (await resp.json()) || [];
       if (!entries.length) {
-        el.innerHTML = '<p class="empty">Nothing recorded yet.</p>';
+        el.innerHTML = '<p class="empty">Nothing recorded yet. Sign-ins, approvals, submitted work and policy changes appear here as they happen.</p>';
         return;
       }
       const nodeName = (id) => {
@@ -1090,7 +1090,7 @@
       const list = await (await api("/jobs")).json();
       const recent = (list || []).slice(-5).reverse();
       if (!recent.length) {
-        el.innerHTML = '<p class="empty">No jobs yet. Tick "Run once per input file" above to start one.</p>';
+        el.innerHTML = '<p class="empty">No jobs yet. A job runs one task over many files: in "Run a task" above, tick "Run once per input file" and choose the files. From a terminal: harnessctl map -type file.hash -each *.txt</p>';
         return;
       }
       const details = await Promise.all(recent.map(async (j) => {
@@ -1156,7 +1156,7 @@
       const list = await (await api("/workflows")).json();
       const recent = (list || []).slice(-5).reverse();
       if (!recent.length) {
-        el.innerHTML = '<p class="empty">No workflows yet: run one with harnessctl workflow, or approve a plan with more than one step.</p>';
+        el.innerHTML = '<p class="empty">No workflows yet. A workflow runs steps in order, each on the results of the step before. Start one from a terminal (harnessctl workflow -in photo.jpg -step "image.resize perFile width=800" -step "archive.zip once"), or approve an AI plan that has more than one step.</p>';
         return;
       }
       el.innerHTML = recent.map((w) => {

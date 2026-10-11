@@ -1,0 +1,50 @@
+[Unit]
+Description=Home Harness agent
+Documentation=https://github.com/ashutosh-rath02/distributed-compute-harness
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Starts only once /etc/home-harness/agent.env has AGENT_ARGS filled in (the file
+# is installed with it empty); until then the unit is skipped, not failed.
+ExecCondition=/bin/sh -c "grep -Eq '^AGENT_ARGS=.?-' /etc/home-harness/agent.env"
+User=homeharness-agent
+Group=homeharness-agent
+EnvironmentFile=/etc/home-harness/agent.env
+# AGENT_ARGS holds the manager's address and fingerprint and the pairing
+# token (or -pair); see agent.env. The agent is updated by your package
+# manager here, so it does not replace its own binary.
+ExecStart=/usr/bin/home-harness-agent -no-self-update -identity-dir /var/lib/home-harness/agent/identity -work-dir /var/lib/home-harness/agent/work $AGENT_ARGS
+Restart=always
+RestartSec=5
+StateDirectory=home-harness/agent
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/home-harness/agent
+
+# Hardening. Tasks run as this unprivileged user and can write only under the
+# state directory. Tasks that need more (container.run, GPUs, a local model
+# server) need the relevant access added with a drop-in:
+#   systemctl edit home-harness-agent
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

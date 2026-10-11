@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The Home Harness agent as a per-user launch agent. It uses the same label as
+     the dashboard's one-line join script, so launchd treats them as one service
+     (run packaging/macos/uninstall.sh first if a machine already joined that
+     way, so the join script's own copy is gone).
+     It does nothing until ~/Library/Application Support/HomeHarness/agent.env
+     says which manager to join (run-agent.sh explains). -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.homeharness.agent</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/usr/local/libexec/home-harness/run-agent.sh</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>5</integer>
+  <key>ProcessType</key><string>Background</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+</dict>
+</plist>

@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "homeharness"
+version = "0.1.0"
+description = "Python client for the Home Harness operator API (standard library only)."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = []
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: OS Independent",
+]
+
+[project.optional-dependencies]
+openai = ["openai>=1.0"]
+
+[tool.setuptools]
+packages = ["homeharness"]
+
+[tool.setuptools.package-data]
+homeharness = ["py.typed"]

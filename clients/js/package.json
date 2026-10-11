@@ -1,0 +1,13 @@
+{
+  "name": "@home-harness/client",
+  "version": "0.1.0",
+  "description": "JavaScript client for the Home Harness operator API (Node 20+, no dependencies).",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": "./src/index.js",
+  "engines": { "node": ">=20.3" },
+  "files": ["src", "README.md"],
+  "scripts": { "test": "node --test" },
+  "license": "UNLICENSED",
+  "private": true
+}

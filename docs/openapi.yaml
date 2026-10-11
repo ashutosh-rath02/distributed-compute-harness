@@ -1,0 +1,2890 @@
+openapi: "3.1.0"
+info:
+  title: Home Harness operator API
+  version: "1.0.0"
+  summary: The HTTP API of the Home Harness manager.
+  description: |
+    The manager serves this API on its API address (default 127.0.0.1:7421).
+    It is the same API the dashboard and `harnessctl` use.
+
+    Authentication. Every route except a few public ones needs the operator
+    token as `Authorization: Bearer <token>`. The token is in the manager's
+    `harness-operator-token` file. Never send it anywhere you do not trust.
+    The dashboard uses a session value derived from the token (from `POST
+    /login`); it is accepted the same way. Cookies are never used. The
+    OpenAI-compatible routes under `/v1` also accept the separate AI key,
+    which opens nothing else.
+
+    Hosts. The manager answers only requests whose Host is an IP address or
+    `localhost` (a defence against DNS rebinding), and refuses browser
+    requests marked cross-site.
+
+    Errors. Most errors are a short plain-text message with the status code
+    (`text/plain`), written to be shown to a person. The exceptions are a
+    401 (JSON `{"error": "..."}`) and the `/v1` routes, which use the OpenAI
+    error envelope. Treat the body as text and show it.
+
+    What is not here. Agents talk to the manager over a separate mutually
+    authenticated WebSocket, and a few agent-facing HTTP routes (workload
+    file transfer, enrollment pages, the join page) live on other
+    listeners. Those are internal and are not part of this API.
+  license:
+    name: See the repository
+    identifier: NOASSERTION
+servers:
+  - url: http://127.0.0.1:7421
+    description: The manager's default API address (loopback only).
+security:
+  - bearerAuth: []
+tags:
+  - name: Nodes
+    description: Devices that have joined, and what they can do.
+  - name: Workloads
+    description: Single tasks (raw commands or typed catalog tasks).
+  - name: Jobs
+    description: Batches of tasks with an optional fan-in step.
+  - name: Workflows
+    description: Steps that run in order, each on the step before's results.
+  - name: Plans
+    description: A job proposed by a local AI model from plain words, run only after approval.
+  - name: Files
+    description: Content-addressed files that tasks read and write.
+  - name: Catalog and policy
+    description: The task types and what the fleet may run.
+  - name: Joining
+    description: Adding devices.
+  - name: AI
+    description: Local models and the OpenAI-compatible API.
+  - name: Operations
+    description: Events, audit log, standby, remote access.
+  - name: Dashboard
+    description: HTML pages.
+paths:
+  /:
+    get:
+      operationId: getDashboard
+      tags: [Dashboard]
+      summary: The local web dashboard (HTML shell)
+      description: A static page; it signs in with the token in the URL fragment and then calls this API.
+      security: []
+      responses:
+        "200":
+          description: The dashboard page.
+          content:
+            text/html:
+              schema:
+                type: string
+  /live:
+    get:
+      operationId: getLiveView
+      tags: [Dashboard]
+      summary: The one-screen live view (HTML shell)
+      security: []
+      responses:
+        "200":
+          description: The live view page.
+          content:
+            text/html:
+              schema:
+                type: string
+  /login:
+    post:
+      operationId: login
+      tags: [Operations]
+      summary: Exchange the operator token for a dashboard session value
+      description: |
+        The session is an HMAC of the token; send it as a Bearer value like
+        the token itself. It is returned in the body and never as a cookie.
+        When the manager has no token configured the session is empty.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token:
+                  type: string
+      responses:
+        "200":
+          description: The session.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [session]
+                properties:
+                  session:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /server-proof:
+    get:
+      operationId: getServerProof
+      tags: [Operations]
+      summary: Prove this manager holds the operator token
+      description: |
+        Answers HMAC-SHA256(token, "harness-server-proof-v1:" + nonce) as hex
+        for a nonce you choose, so a client can check it is talking to the
+        real manager before sending the token. It reveals nothing usable as a
+        credential. Also useful as a cheap health check.
+      security: []
+      parameters:
+        - name: nonce
+          in: query
+          required: true
+          description: 32 to 128 lowercase hex characters.
+          schema:
+            type: string
+            pattern: "^[0-9a-f]{32,128}$"
+      responses:
+        "200":
+          description: The proof.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [proof]
+                properties:
+                  proof:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /events:
+    get:
+      operationId: streamEvents
+      tags: [Operations]
+      summary: Server-Sent Events stream of harness events
+      description: |
+        Stays open and sends one `data:` line per event, each a JSON `Event`
+        followed by a blank line. There is no replay: you see events from the
+        moment you connect. A slow reader is dropped events rather than
+        slowing the manager, so treat the stream as a hint to re-read state,
+        not as the source of truth. Reconnect if the connection closes.
+      responses:
+        "200":
+          description: An open text/event-stream.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: "Lines of the form `data: {Event JSON}`."
+              examples:
+                nodeReady:
+                  summary: One event on the wire
+                  value: |
+                    data: {"type":"node.ready","nodeId":"n-1234","timestamp":"2026-10-09T10:00:00Z"}
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /version:
+    get:
+      operationId: getVersion
+      tags: [Operations]
+      summary: This manager's version and build
+      description: Needs no credential.
+      security: []
+      responses:
+        "200":
+          description: Build information.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, platform, go]
+                properties:
+                  version:
+                    type: string
+                  commit:
+                    type: string
+                  date:
+                    type: string
+                  platform:
+                    type: string
+                  go:
+                    type: string
+  /status:
+    get:
+      operationId: getStatus
+      tags: [Operations]
+      summary: A one-call summary of the fleet's health
+      description: Version, uptime, readiness, device counts by state, queue depth, work counts and recent failures.
+      responses:
+        "200":
+          description: The summary.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /healthz:
+    get:
+      operationId: getHealthz
+      tags: [Operations]
+      summary: Liveness check
+      description: |
+        Answers `ok`, or 503 `stalled` when the manager's main loop has stopped
+        ticking. Needs no credential, so a load balancer or container check can use it.
+      security: []
+      responses:
+        "200":
+          description: Alive.
+          content:
+            text/plain:
+              schema:
+                type: string
+        "503":
+          description: The main loop is stalled.
+          content:
+            text/plain:
+              schema:
+                type: string
+  /readyz:
+    get:
+      operationId: getReadyz
+      tags: [Operations]
+      summary: Readiness check
+      description: Answers `ready`, or 503 with the reason it is not (for example the store is unavailable). Needs no credential.
+      security: []
+      responses:
+        "200":
+          description: Ready.
+          content:
+            text/plain:
+              schema:
+                type: string
+        "503":
+          description: Not ready; the body says why.
+          content:
+            text/plain:
+              schema:
+                type: string
+  /metrics:
+    get:
+      operationId: getMetrics
+      tags: [Operations]
+      summary: Prometheus metrics
+      description: |
+        Prometheus text format. A scraper can use the separate read-only metrics
+        token (the manager's `-metrics-token-file`), which opens only /metrics
+        (and the public /healthz and /readyz); without that token, the operator
+        token is needed.
+      security:
+        - bearerAuth: []
+        - metricsToken: []
+      responses:
+        "200":
+          description: Metrics.
+          content:
+            text/plain:
+              schema:
+                type: string
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /nodes:
+    get:
+      operationId: listNodes
+      tags: [Nodes]
+      summary: List every known node
+      responses:
+        "200":
+          description: The nodes.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Node"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /nodes/{id}:
+    get:
+      operationId: getNode
+      tags: [Nodes]
+      summary: One node's identity, state and metrics
+      parameters:
+        - $ref: "#/components/parameters/NodeId"
+      responses:
+        "200":
+          description: The node.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Node"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /nodes/{id}/resources:
+    get:
+      operationId: getNodeResources
+      tags: [Nodes]
+      summary: One node's declared resources
+      parameters:
+        - $ref: "#/components/parameters/NodeId"
+      responses:
+        "200":
+          description: The resources the node declared.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Resource"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /nodes/{id}/capabilities:
+    get:
+      operationId: getNodeCapabilities
+      tags: [Nodes]
+      summary: One node's declared capabilities (the task types it offers)
+      parameters:
+        - $ref: "#/components/parameters/NodeId"
+      responses:
+        "200":
+          description: The capabilities the node declared.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Capability"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /resources/total:
+    get:
+      operationId: getTotalResources
+      tags: [Nodes]
+      summary: Resource totals across the fleet
+      description: Machines that report the same host are counted once.
+      responses:
+        "200":
+          description: Totals by resource kind, for example cpu cores and memory bytes.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  type: number
+  /nodes/{id}/commands:
+    post:
+      operationId: sendNodeCommand
+      tags: [Nodes]
+      summary: Send a built-in command to a node and wait for the answer
+      description: For example `PING` or `ECHO`. Use workloads for real work.
+      parameters:
+        - $ref: "#/components/parameters/NodeId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  examples: [PING]
+                args:
+                  type: object
+                  additionalProperties:
+                    type: string
+                timeoutMs:
+                  type: integer
+                  description: How long to wait. Default 5000.
+      responses:
+        "200":
+          description: The node's answer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommandResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: The node is not connected.
+          content:
+            text/plain:
+              schema:
+                type: string
+        "504":
+          description: The node did not answer in time.
+          content:
+            text/plain:
+              schema:
+                type: string
+  /nodes/{id}/update:
+    post:
+      operationId: updateNodeAgent
+      tags: [Nodes]
+      summary: Push a self-update to a node
+      description: |
+        Does nothing if the node already runs the build this manager serves.
+        A 200 means the agent acknowledged and started; it then goes offline
+        and reconnects with the new build.
+      parameters:
+        - $ref: "#/components/parameters/NodeId"
+      responses:
+        "200":
+          description: Started, or already up to date.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                description: '`{"status":"already-up-to-date"}` or the command result.'
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: |
+            Not possible: no build loaded for the node's platform, the node
+            is offline, or it needs a one-time reinstall. The body says which.
+          content:
+            text/plain:
+              schema:
+                type: string
+        "504":
+          description: The node did not answer in time.
+          content:
+            text/plain:
+              schema:
+                type: string
+  /nodes/{id}/revoke:
+    post:
+      operationId: revokeNode
+      tags: [Nodes]
+      summary: Permanently refuse a node identity
+      description: Forgets the node, closes its connection and rejects its registration even with a valid pairing token, until the revocation is lifted.
+      parameters:
+        - $ref: "#/components/parameters/NodeId"
+      responses:
+        "200":
+          description: The revocation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RevokedNode"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /nodes/{id}/meta:
+    put:
+      operationId: setNodeMeta
+      tags: [Nodes]
+      summary: Set the operator's name and labels for a node
+      description: Replaces the alias and labels. The availability rule is kept.
+      parameters:
+        - $ref: "#/components/parameters/NodeId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NodeMeta"
+      responses:
+        "200":
+          description: The stored metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NodeMeta"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /nodes/{id}/availability:
+    put:
+      operationId: setNodeAvailability
+      tags: [Nodes]
+      summary: Choose when a node takes new work
+      parameters:
+        - $ref: "#/components/parameters/NodeId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Availability"
+      responses:
+        "200":
+          description: The rule and whether the node takes work right now.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AvailabilityView"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /nodes/{id}/suspect:
+    delete:
+      operationId: clearNodeSuspect
+      tags: [Nodes]
+      summary: Clear the mark spot checks put on a device
+      parameters:
+        - $ref: "#/components/parameters/NodeId"
+      responses:
+        "200":
+          description: Cleared.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [cleared]
+                properties:
+                  cleared:
+                    type: boolean
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /revocations:
+    get:
+      operationId: listRevocations
+      tags: [Nodes]
+      summary: List revoked node identities
+      responses:
+        "200":
+          description: Revocations, most recent first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/RevokedNode"
+  /revocations/{id}:
+    delete:
+      operationId: liftRevocation
+      tags: [Nodes]
+      summary: Lift a revocation
+      description: The node must then be admitted afresh.
+      parameters:
+        - $ref: "#/components/parameters/NodeId"
+      responses:
+        "204":
+          description: Lifted.
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /agent-binaries:
+    get:
+      operationId: listAgentBinaries
+      tags: [Joining]
+      summary: The agent builds this manager serves
+      responses:
+        "200":
+          description: One entry per platform.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AgentBinary"
+  /agent-binary/hash:
+    get:
+      operationId: getAgentBinaryHash
+      tags: [Joining]
+      summary: The primary agent build's hash (legacy)
+      description: Kept for older clients; current clients use `/agent-binaries`.
+      responses:
+        "200":
+          description: Hash and platform; empty when no build is loaded.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sha256:
+                    type: string
+                  os:
+                    type: string
+                  architecture:
+                    type: string
+  /join-info:
+    get:
+      operationId: getJoinInfo
+      tags: [Joining]
+      summary: What a new device needs to onboard
+      description: |
+        Contains the pairing token and relay token, which are secrets. Keep
+        the response private.
+      responses:
+        "200":
+          description: Join information.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JoinInfo"
+  /join-script:
+    get:
+      operationId: getJoinScript
+      tags: [Joining]
+      summary: A ready-to-paste onboarding script
+      description: The script the dashboard's "add a device" form shows. It contains the pairing token.
+      parameters:
+        - name: addr
+          in: query
+          description: The manager's LAN address as host:port (LAN mode).
+          schema:
+            type: string
+        - name: platform
+          in: query
+          description: Target platform. Default windows.
+          schema:
+            type: string
+            examples: [windows]
+        - name: mode
+          in: query
+          description: lan (default) or remote (through the relay).
+          schema:
+            type: string
+            enum: [lan, remote]
+      responses:
+        "200":
+          description: The script.
+          content:
+            text/plain:
+              schema:
+                type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /enrollments:
+    post:
+      operationId: createEnrollment
+      tags: [Joining]
+      summary: Create a short-lived invitation link and QR code
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [platform]
+              properties:
+                addr:
+                  type: string
+                  description: The manager's public host:port (required in lan mode).
+                platform:
+                  type: string
+                  description: windows, android, macos, linux and architecture variants.
+                mode:
+                  type: string
+                  enum: [lan, remote]
+                  description: Default lan.
+      responses:
+        "201":
+          description: The invitation.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token, url, expiresAt, qrPath]
+                properties:
+                  token:
+                    type: string
+                  url:
+                    type: string
+                  expiresAt:
+                    type: string
+                    format: date-time
+                  qrPath:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: No agent build loaded for that platform, or internet enrollment is not configured.
+          content:
+            text/plain:
+              schema:
+                type: string
+        "502":
+          description: The relay refused or could not be reached.
+          content:
+            text/plain:
+              schema:
+                type: string
+  /enrollments/{token}/qr:
+    get:
+      operationId: getEnrollmentQR
+      tags: [Joining]
+      summary: The invitation as a QR code (SVG)
+      description: Public, because an image tag cannot send headers; the unguessable token in the path is the secret.
+      security: []
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The QR code.
+          content:
+            image/svg+xml:
+              schema:
+                type: string
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /join-requests:
+    get:
+      operationId: listJoinRequests
+      tags: [Joining]
+      summary: Devices waiting to be approved
+      responses:
+        "200":
+          description: Pending requests, each with the pairing code to compare.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/JoinRequest"
+  /join-requests/{id}/approve:
+    post:
+      operationId: approveJoinRequest
+      tags: [Joining]
+      summary: Admit a waiting device
+      description: Compare the pairing code on the device with the one listed first.
+      parameters:
+        - $ref: "#/components/parameters/NodeId"
+      responses:
+        "200":
+          description: Decision recorded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JoinDecision"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /join-requests/{id}/reject:
+    post:
+      operationId: rejectJoinRequest
+      tags: [Joining]
+      summary: Refuse a waiting device for a while
+      parameters:
+        - $ref: "#/components/parameters/NodeId"
+      responses:
+        "200":
+          description: Decision recorded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JoinDecision"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /join-window:
+    get:
+      operationId: getJoinWindow
+      tags: [Joining]
+      summary: Whether new devices may ask to join now
+      responses:
+        "200":
+          description: The window.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JoinWindow"
+    post:
+      operationId: openJoinWindow
+      tags: [Joining]
+      summary: Let new devices ask to join for a while
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                minutes:
+                  type: integer
+                  description: Default 15.
+      responses:
+        "200":
+          description: The window.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JoinWindow"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+    delete:
+      operationId: closeJoinWindow
+      tags: [Joining]
+      summary: Stop new devices asking to join
+      responses:
+        "200":
+          description: The window (now closed).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JoinWindow"
+  /workloads:
+    post:
+      operationId: submitWorkload
+      tags: [Workloads]
+      summary: Submit one workload
+      description: |
+        Either a typed catalog task (`capability` plus `params`) or, if the
+        policy allows raw commands, a command. The manager picks a ready node
+        unless `target` names one. 202 means accepted: the state is PENDING
+        (sent) or QUEUED (every eligible node is full and it starts when one
+        has room).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkloadRequest"
+      responses:
+        "202":
+          description: Accepted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkloadAccepted"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/PolicyRefused"
+        "409":
+          $ref: "#/components/responses/NoNode"
+    get:
+      operationId: listWorkloads
+      tags: [Workloads]
+      summary: List workloads (without their output)
+      responses:
+        "200":
+          description: Summaries.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WorkloadSummary"
+  /workloads/{id}:
+    get:
+      operationId: getWorkload
+      tags: [Workloads]
+      summary: One workload with its output
+      parameters:
+        - $ref: "#/components/parameters/WorkloadId"
+      responses:
+        "200":
+          description: The workload.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Workload"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /workloads/{id}/cancel:
+    post:
+      operationId: cancelWorkload
+      tags: [Workloads]
+      summary: Ask for a workload to stop
+      parameters:
+        - $ref: "#/components/parameters/WorkloadId"
+      responses:
+        "202":
+          description: Cancellation requested. No body.
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The node running it is not connected.
+          content:
+            text/plain:
+              schema:
+                type: string
+  /artifacts:
+    post:
+      operationId: uploadArtifact
+      tags: [Files]
+      summary: Store a file
+      description: |
+        The request body is the raw file (send `application/octet-stream`).
+        The file is stored by its SHA-256, so uploading the same bytes twice
+        is harmless. Reference it from a task's `inputs` by that hash. If you
+        send `X-Artifact-SHA256`, the upload is refused unless it matches.
+      parameters:
+        - name: X-Artifact-SHA256
+          in: header
+          required: false
+          description: Expected SHA-256 of the body, 64 lowercase hex characters.
+          schema:
+            type: string
+            pattern: "^[0-9a-f]{64}$"
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "201":
+          description: Stored.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactInfo"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "413":
+          description: Larger than the manager's per-file limit.
+          content:
+            text/plain:
+              schema:
+                type: string
+        "503":
+          description: This manager has no artifact store.
+          content:
+            text/plain:
+              schema:
+                type: string
+        "507":
+          description: The store is full.
+          content:
+            text/plain:
+              schema:
+                type: string
+    get:
+      operationId: listArtifacts
+      tags: [Files]
+      summary: List stored files and store usage
+      responses:
+        "200":
+          description: Files and usage.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [artifacts, usedBytes, totalBytes, maxBytes]
+                properties:
+                  artifacts:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ArtifactInfo"
+                  usedBytes:
+                    type: integer
+                  totalBytes:
+                    type: integer
+                  maxBytes:
+                    type: integer
+        "503":
+          description: This manager has no artifact store.
+          content:
+            text/plain:
+              schema:
+                type: string
+  /artifacts/{sha}:
+    get:
+      operationId: downloadArtifact
+      tags: [Files]
+      summary: Download a stored file
+      description: Always sent as an attachment, with headers that stop a browser from rendering it.
+      parameters:
+        - $ref: "#/components/parameters/ArtifactSha"
+        - name: name
+          in: query
+          required: false
+          description: The file name to suggest in Content-Disposition (for example out/result.txt).
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The bytes.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          description: This manager has no artifact store.
+          content:
+            text/plain:
+              schema:
+                type: string
+    delete:
+      operationId: deleteArtifact
+      tags: [Files]
+      summary: Delete a stored file
+      parameters:
+        - $ref: "#/components/parameters/ArtifactSha"
+      responses:
+        "204":
+          description: Deleted.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: A queued, running or restarting workload still needs it.
+          content:
+            text/plain:
+              schema:
+                type: string
+  /catalog:
+    get:
+      operationId: getCatalog
+      tags: [Catalog and policy]
+      summary: The task types, their parameters, policy and how many nodes offer each
+      responses:
+        "200":
+          description: The catalog.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [types, raw]
+                properties:
+                  types:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CatalogType"
+                  raw:
+                    type: object
+                    description: Effective policy for the raw capabilities (system.execute, filesystem.read), by name.
+                    additionalProperties:
+                      $ref: "#/components/schemas/TypePolicy"
+  /policy:
+    get:
+      operationId: getPolicy
+      tags: [Catalog and policy]
+      summary: What the fleet may run
+      responses:
+        "200":
+          description: The policy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Policy"
+    put:
+      operationId: setPolicy
+      tags: [Catalog and policy]
+      summary: Replace the policy
+      description: Applies to new submissions and restarts; work already queued runs under the old policy. Audited.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Policy"
+      responses:
+        "200":
+          description: The policy now in force.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Policy"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /jobs:
+    post:
+      operationId: submitJob
+      tags: [Jobs]
+      summary: Submit a batch job
+      description: |
+        Many tasks spread over the fleet, retried on other devices when one
+        fails, with an optional `reduce` step that combines their outputs.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JobRequest"
+      responses:
+        "202":
+          description: Accepted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/PolicyRefused"
+        "409":
+          $ref: "#/components/responses/NoNode"
+    get:
+      operationId: listJobs
+      tags: [Jobs]
+      summary: List jobs with progress counts
+      responses:
+        "200":
+          description: Jobs (without per-task detail).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Job"
+  /jobs/{id}:
+    get:
+      operationId: getJob
+      tags: [Jobs]
+      summary: One job with every task's state
+      parameters:
+        - $ref: "#/components/parameters/JobId"
+      responses:
+        "200":
+          description: The job.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /jobs/{id}/cancel:
+    post:
+      operationId: cancelJob
+      tags: [Jobs]
+      summary: Cancel a job and its running attempts
+      parameters:
+        - $ref: "#/components/parameters/JobId"
+      responses:
+        "202":
+          description: Canceling.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /workflows:
+    post:
+      operationId: submitWorkflow
+      tags: [Workflows]
+      summary: Submit a workflow
+      description: |
+        Steps run in order. Each step becomes an ordinary job when the step
+        before it has completed, and gets that step's results as its files.
+        Unknown fields are rejected, so a misspelled field is an error rather
+        than silently ignored.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkflowRequest"
+      responses:
+        "202":
+          description: Accepted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRun"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/PolicyRefused"
+        "409":
+          $ref: "#/components/responses/NoNode"
+    get:
+      operationId: listWorkflows
+      tags: [Workflows]
+      summary: List workflows with each step's progress
+      responses:
+        "200":
+          description: Workflows.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WorkflowRun"
+  /workflows/{id}:
+    get:
+      operationId: getWorkflow
+      tags: [Workflows]
+      summary: One workflow with its steps, jobs and results
+      parameters:
+        - $ref: "#/components/parameters/WorkflowId"
+      responses:
+        "200":
+          description: The workflow.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRun"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /workflows/{id}/cancel:
+    post:
+      operationId: cancelWorkflow
+      tags: [Workflows]
+      summary: Cancel a workflow and its running step's job
+      parameters:
+        - $ref: "#/components/parameters/WorkflowId"
+      responses:
+        "202":
+          description: Canceling.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRun"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /plans:
+    post:
+      operationId: createPlan
+      tags: [Plans]
+      summary: Ask a local AI model to plan a job from plain words
+      description: |
+        The model only proposes. Its answer is validated against the catalog
+        and the policy and shown as a plan; nothing runs until you approve it.
+        Poll the plan until its state is no longer `planning`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [request, model]
+              properties:
+                request:
+                  type: string
+                  description: What you want done, in plain words.
+                model:
+                  type: string
+                  description: A model name from `GET /plans` (the `models` list).
+                files:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/FileRef"
+      responses:
+        "202":
+          description: Planning started.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Plan"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/PolicyRefused"
+        "429":
+          description: Too many plans being made at once.
+          content:
+            text/plain:
+              schema:
+                type: string
+        "503":
+          description: No device can plan right now (no model, or none ready).
+          content:
+            text/plain:
+              schema:
+                type: string
+    get:
+      operationId: listPlans
+      tags: [Plans]
+      summary: List plans, newest first, and the models that can plan now
+      responses:
+        "200":
+          description: Plans and planning models.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [plans, models]
+                properties:
+                  plans:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Plan"
+                  models:
+                    type: array
+                    items:
+                      type: string
+  /plans/{id}:
+    get:
+      operationId: getPlan
+      tags: [Plans]
+      summary: One plan
+      parameters:
+        - $ref: "#/components/parameters/PlanId"
+      responses:
+        "200":
+          description: The plan.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Plan"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /plans/{id}/approve:
+    post:
+      operationId: approvePlan
+      tags: [Plans]
+      summary: Approve a proposed plan and run it as a job
+      description: Only the operator token can approve; the AI key cannot.
+      parameters:
+        - $ref: "#/components/parameters/PlanId"
+      responses:
+        "202":
+          description: Submitted; the plan now carries a job id.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Plan"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The plan is not in the proposed state.
+          content:
+            text/plain:
+              schema:
+                type: string
+        "403":
+          $ref: "#/components/responses/PolicyRefused"
+        "503":
+          description: No device can run it right now.
+          content:
+            text/plain:
+              schema:
+                type: string
+  /plans/{id}/reject:
+    post:
+      operationId: rejectPlan
+      tags: [Plans]
+      summary: Reject a proposed plan
+      parameters:
+        - $ref: "#/components/parameters/PlanId"
+      responses:
+        "200":
+          description: Rejected.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Plan"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The plan is not in the proposed state.
+          content:
+            text/plain:
+              schema:
+                type: string
+  /models:
+    get:
+      operationId: listModels
+      tags: [AI]
+      summary: Local AI models the ready devices have, and where
+      responses:
+        "200":
+          description: One entry per model.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required: [model, nodes, text]
+                  properties:
+                    model:
+                      type: string
+                    text:
+                      type: boolean
+                      description: false for an embedding model, which cannot answer a prompt.
+                    nodes:
+                      type: array
+                      items:
+                        type: object
+                        required: [id, name]
+                        properties:
+                          id:
+                            type: string
+                          name:
+                            type: string
+  /ai-devices:
+    get:
+      operationId: listAIDevices
+      tags: [AI]
+      summary: Devices that run models, with their models and GPUs
+      responses:
+        "200":
+          description: The devices.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AIDevice"
+  /llm/split:
+    get:
+      operationId: getSplitSession
+      tags: [AI]
+      summary: The split session (one model run across several devices)
+      responses:
+        "200":
+          description: "The session, or an object with a null session when none."
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [session]
+                properties:
+                  session:
+                    type:
+                      - object
+                      - "null"
+                    additionalProperties: true
+    post:
+      operationId: startSplitSession
+      tags: [AI]
+      summary: Start a split session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, model, main]
+              properties:
+                name:
+                  type: string
+                  description: What chats call the model.
+                model:
+                  type: string
+                  description: The .gguf file on the main device.
+                main:
+                  type: string
+                  description: Node id of the device that has the model file.
+                helpers:
+                  type: array
+                  description: Helper node ids. Empty means every other device that can help.
+                  items:
+                    type: string
+      responses:
+        "202":
+          description: Starting in the background.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session:
+                    type:
+                      - object
+                      - "null"
+                    additionalProperties: true
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: A session is already running, or the devices cannot do it.
+          content:
+            text/plain:
+              schema:
+                type: string
+    delete:
+      operationId: stopSplitSession
+      tags: [AI]
+      summary: Stop the split session
+      responses:
+        "202":
+          description: Stopping. No body.
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /ai-info:
+    get:
+      operationId: getAIInfo
+      tags: [AI]
+      summary: The OpenAI-compatible base URL and AI key
+      description: For setting up apps. The AI key is a secret.
+      responses:
+        "200":
+          description: Connection details.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [baseUrl, apiKey, models]
+                properties:
+                  baseUrl:
+                    type: string
+                    examples: ["http://127.0.0.1:7421/v1"]
+                  apiKey:
+                    type: string
+                  models:
+                    type: array
+                    items:
+                      type: string
+  /v1/models:
+    get:
+      operationId: openaiListModels
+      tags: [AI]
+      summary: OpenAI-compatible model list
+      description: The models ready devices can chat with.
+      security:
+        - aiKey: []
+        - bearerAuth: []
+      responses:
+        "200":
+          description: An OpenAI-style list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [object, data]
+                properties:
+                  object:
+                    type: string
+                    enum: [list]
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, object, created, owned_by]
+                      properties:
+                        id:
+                          type: string
+                        object:
+                          type: string
+                        created:
+                          type: integer
+                        owned_by:
+                          type: string
+        "401":
+          $ref: "#/components/responses/OpenAIError"
+  /v1/chat/completions:
+    post:
+      operationId: openaiChatCompletions
+      tags: [AI]
+      summary: OpenAI-compatible chat completion
+      description: |
+        Streamed (`"stream": true`, Server-Sent Events of
+        `chat.completion.chunk`, ending with `data: [DONE]`) or not. Fields
+        the manager does not use are ignored, as OpenAI-compatible servers
+        commonly do. The model must be one a ready device offers.
+      security:
+        - aiKey: []
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OpenAIChatRequest"
+      responses:
+        "200":
+          description: A chat completion, or a stream of chunks.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                description: An OpenAI `chat.completion` object.
+            text/event-stream:
+              schema:
+                type: string
+        "400":
+          $ref: "#/components/responses/OpenAIError"
+        "401":
+          $ref: "#/components/responses/OpenAIError"
+        "404":
+          $ref: "#/components/responses/OpenAIError"
+  /audit:
+    get:
+      operationId: listAudit
+      tags: [Operations]
+      summary: The audit log, newest first
+      parameters:
+        - name: log
+          in: query
+          description: One log. Omit for security and admissions together.
+          schema:
+            type: string
+            enum: [security, admissions, noise, remote]
+        - name: limit
+          in: query
+          description: How many entries, 1 to 1000. Default 100.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+      responses:
+        "200":
+          description: Entries.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AuditEntry"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /standby:
+    get:
+      operationId: getStandby
+      tags: [Operations]
+      summary: The standby manager's role, term and lag
+      description: |
+        On a manager that is running as a standby this route returns the
+        replica status instead (role, primary, term, lag, reachability).
+      responses:
+        "200":
+          description: Status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandbyStatus"
+    post:
+      operationId: createStandbyEnrollment
+      tags: [Operations]
+      summary: Create a one-time standby enrollment
+      description: The response includes a secret token and the command that starts the standby with it.
+      responses:
+        "201":
+          description: The enrollment.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:
+                    type: string
+                  fingerprint:
+                    type: string
+                  primary:
+                    type: string
+                  expiresAt:
+                    type: string
+                    format: date-time
+                  command:
+                    type: string
+        "409":
+          description: This manager cannot have a standby (it needs TLS and a database).
+          content:
+            text/plain:
+              schema:
+                type: string
+    delete:
+      operationId: removeStandby
+      tags: [Operations]
+      summary: Forget the standby
+      responses:
+        "200":
+          description: Status after removal.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandbyStatus"
+        "409":
+          description: There is no standby.
+          content:
+            text/plain:
+              schema:
+                type: string
+  /standby/promote:
+    post:
+      operationId: promoteStandby
+      tags: [Operations]
+      summary: Promote this standby to active
+      description: |
+        Only meaningful on the standby manager. On the active manager this
+        answers 409 and tells you to run it on the standby's machine.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                force:
+                  type: boolean
+      responses:
+        "200":
+          description: Promoted.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "409":
+          description: Refused (this is the active manager, or promotion is unsafe without force).
+          content:
+            text/plain:
+              schema:
+                type: string
+  /remote-access:
+    get:
+      operationId: getRemoteAccess
+      tags: [Operations]
+      summary: Remote dashboard settings
+      description: The response includes the remote key, which is a secret.
+      responses:
+        "200":
+          description: Settings.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RemoteAccess"
+    put:
+      operationId: setRemoteAccess
+      tags: [Operations]
+      summary: Turn remote access on or off and set its mode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled:
+                  type: boolean
+                mode:
+                  type: string
+                  enum: [read-only, standard, full]
+      responses:
+        "200":
+          description: Settings now in force.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RemoteAccess"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: Remote access is not available (no relay configured, for example); the body says why.
+          content:
+            text/plain:
+              schema:
+                type: string
+  /remote-access/rotate:
+    post:
+      operationId: rotateRemoteKey
+      tags: [Operations]
+      summary: Replace the remote key
+      description: Every remote browser and `harnessctl -remote` session is signed out.
+      responses:
+        "200":
+          description: Settings with the new key.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RemoteAccess"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        The operator token (contents of the manager's harness-operator-token
+        file) or the dashboard session from POST /login.
+    aiKey:
+      type: http
+      scheme: bearer
+      description: The AI key (the manager's ai-key file). Opens only /v1.
+    metricsToken:
+      type: http
+      scheme: bearer
+      description: A read-only token for a Prometheus scraper (-metrics-token-file). Opens only /metrics, /healthz and /readyz.
+  parameters:
+    NodeId:
+      name: id
+      in: path
+      required: true
+      description: A node id.
+      schema:
+        type: string
+    WorkloadId:
+      name: id
+      in: path
+      required: true
+      description: A workload id.
+      schema:
+        type: string
+    JobId:
+      name: id
+      in: path
+      required: true
+      description: A job id.
+      schema:
+        type: string
+    WorkflowId:
+      name: id
+      in: path
+      required: true
+      description: A workflow id.
+      schema:
+        type: string
+    PlanId:
+      name: id
+      in: path
+      required: true
+      description: A plan id.
+      schema:
+        type: string
+    ArtifactSha:
+      name: sha
+      in: path
+      required: true
+      description: The file's SHA-256, 64 lowercase hex characters.
+      schema:
+        type: string
+        pattern: "^[0-9a-f]{64}$"
+  responses:
+    BadRequest:
+      description: The request was not valid. The body says what to fix.
+      content:
+        text/plain:
+          schema:
+            type: string
+    Unauthorized:
+      description: Missing or wrong operator token.
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error]
+            properties:
+              error:
+                type: string
+    NotFound:
+      description: No such thing. The body says what.
+      content:
+        text/plain:
+          schema:
+            type: string
+    PolicyRefused:
+      description: The policy does not allow this task type, or the task is not allowed on that device.
+      content:
+        text/plain:
+          schema:
+            type: string
+    NoNode:
+      description: No connected, ready, eligible device for it right now. The body says why.
+      content:
+        text/plain:
+          schema:
+            type: string
+    OpenAIError:
+      description: An OpenAI-style error.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error]
+            properties:
+              error:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  type:
+                    type: string
+                  param:
+                    type:
+                      - string
+                      - "null"
+                  code:
+                    type:
+                      - string
+                      - "null"
+  schemas:
+    FileRef:
+      type: object
+      description: A stored file used as a task input.
+      required: [name, sha256]
+      properties:
+        name:
+          type: string
+          description: |
+            The name the task sees: up to 4 path segments of letters, digits,
+            dot, underscore and dash, at most 128 bytes.
+        sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        size:
+          type: integer
+    ArtifactInfo:
+      type: object
+      required: [sha256, size, modTime]
+      properties:
+        sha256:
+          type: string
+        size:
+          type: integer
+        modTime:
+          type: string
+          format: date-time
+    Resource:
+      type: object
+      properties:
+        kind:
+          type: string
+        capacity:
+          type: number
+        unit:
+          type: string
+    Capability:
+      type: object
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+        attributes:
+          type: object
+          additionalProperties:
+            type: string
+    CommandResult:
+      type: object
+      properties:
+        commandId:
+          type: string
+        success:
+          type: boolean
+        output:
+          type: object
+          additionalProperties:
+            type: string
+        error:
+          type: string
+    Platform:
+      type: object
+      properties:
+        os:
+          type: string
+        architecture:
+          type: string
+    GPU:
+      type: object
+      properties:
+        name:
+          type: string
+        vendor:
+          type: string
+        memoryBytes:
+          type: integer
+        integrated:
+          type: boolean
+    NodeMeta:
+      type: object
+      properties:
+        alias:
+          type: string
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+        availability:
+          $ref: "#/components/schemas/Availability"
+    Availability:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum: [auto, always, idle, charging, paused]
+          description: Default auto (new work only while not on battery).
+        idleMinutes:
+          type: integer
+          description: For mode idle, minutes without input.
+        hours:
+          type: string
+          description: 'A daily window such as "22:00-07:00".'
+    AvailabilityView:
+      type: object
+      required: [rule, available]
+      properties:
+        rule:
+          $ref: "#/components/schemas/Availability"
+        available:
+          type: boolean
+        reason:
+          type: string
+          description: Why the node is not taking new work right now.
+    Node:
+      type: object
+      required: [nodeId, name, hostname, platform, agentVersion, state, lastSeen, metrics, updateStatus, slots, running, availability]
+      properties:
+        nodeId:
+          type: string
+        name:
+          type: string
+        hostname:
+          type: string
+        platform:
+          $ref: "#/components/schemas/Platform"
+        agentVersion:
+          type: string
+        binaryHash:
+          type: string
+        state:
+          type: string
+          enum: [UNKNOWN, DISCOVERED, REGISTERING, CONNECTED, READY, DEGRADED, OFFLINE, RECONNECTING]
+        lastSeen:
+          type: string
+          format: date-time
+        metrics:
+          type: object
+          description: Latest runtime state (CPU, memory, uptime, device use).
+          additionalProperties: true
+        updateStatus:
+          type: string
+          enum: [current, available, unknown, reinstall-required]
+        slots:
+          type: integer
+          description: How many workloads the node runs at once.
+        running:
+          type: integer
+          description: How many of those slots are in use.
+        alias:
+          type: string
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+        hostFingerprintSource:
+          type: string
+        sameHostAs:
+          type: array
+          items:
+            type: string
+        hostConflict:
+          type: boolean
+        availability:
+          $ref: "#/components/schemas/AvailabilityView"
+        gpus:
+          type: array
+          items:
+            $ref: "#/components/schemas/GPU"
+        suspect:
+          type: object
+          description: Present when spot checks found this device's results differing from other devices'.
+          additionalProperties: true
+    RevokedNode:
+      type: object
+      properties:
+        nodeId:
+          type: string
+        name:
+          type: string
+        hostname:
+          type: string
+        platform:
+          $ref: "#/components/schemas/Platform"
+        revokedAt:
+          type: string
+          format: date-time
+    AgentBinary:
+      type: object
+      properties:
+        os:
+          type: string
+        architecture:
+          type: string
+        sha256:
+          type: string
+        path:
+          type: string
+    JoinInfo:
+      type: object
+      properties:
+        fingerprint:
+          type: string
+        pairingToken:
+          type: string
+        insecure:
+          type: boolean
+        agentBinaries:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentBinary"
+        relayAvailable:
+          type: boolean
+        relayAddr:
+          type: string
+        relayToken:
+          type: string
+        lanAddr:
+          type: string
+        joinUrl:
+          type: string
+        joinPort:
+          type: string
+    JoinRequest:
+      type: object
+      properties:
+        nodeId:
+          type: string
+        name:
+          type: string
+        hostname:
+          type: string
+        platform:
+          $ref: "#/components/schemas/Platform"
+        remote:
+          type: string
+        code:
+          type: string
+          description: The pairing code to compare with the one the device shows.
+        requestedAt:
+          type: string
+          format: date-time
+        approved:
+          type: boolean
+    JoinDecision:
+      type: object
+      properties:
+        nodeId:
+          type: string
+        decision:
+          type: string
+          enum: [approved, rejected]
+    JoinWindow:
+      type: object
+      required: [open, remainingSeconds]
+      properties:
+        open:
+          type: boolean
+        remainingSeconds:
+          type: integer
+        url:
+          type: string
+        port:
+          type: string
+    Resources:
+      type: object
+      description: What a task needs from a device.
+      properties:
+        minCpuCores:
+          type: number
+        minMemoryBytes:
+          type: integer
+        maxCpuPercent:
+          type: number
+    WorkloadRequest:
+      type: object
+      properties:
+        target:
+          type: string
+          description: Node id to run on. Optional; the manager picks otherwise.
+        command:
+          type: string
+          description: Required for a raw command (the default system.execute capability).
+        args:
+          type: array
+          items:
+            type: string
+        capability:
+          type: string
+          description: A catalog task type name such as image.resize. See GET /catalog.
+        params:
+          type: object
+          description: The task type's parameters. Every value is a string.
+          additionalProperties:
+            type: string
+        requirements:
+          $ref: "#/components/schemas/Resources"
+        restartPolicy:
+          type: string
+          description: Restart behaviour after the workload ends.
+          enum: [never, on-failure, always]
+        inputs:
+          type: array
+          items:
+            $ref: "#/components/schemas/FileRef"
+        outputs:
+          type: array
+          description: Files the workload must leave in its working directory.
+          items:
+            type: string
+        priority:
+          type: string
+          enum: [high, normal, low]
+    WorkloadAccepted:
+      type: object
+      description: The workload as submitted, plus its state.
+      required: [id, state]
+      properties:
+        id:
+          type: string
+        target:
+          type: string
+        command:
+          type: string
+        capability:
+          type: string
+        params:
+          type: object
+          additionalProperties:
+            type: string
+        state:
+          type: string
+          enum: [QUEUED, PENDING]
+    WorkloadSummary:
+      type: object
+      required: [id, state, priority]
+      properties:
+        id:
+          type: string
+        target:
+          type: string
+        command:
+          type: string
+        args:
+          type: array
+          items:
+            type: string
+        state:
+          type: string
+          enum: [QUEUED, PENDING, RUNNING, COMPLETED, FAILED, CANCELED, UNKNOWN]
+        exitCode:
+          type: integer
+          description: Only present once a process ran to an end.
+        capability:
+          type: string
+        waiting:
+          type: string
+          description: Why a QUEUED workload has not started.
+        priority:
+          type: string
+          enum: [high, normal, low]
+    Workload:
+      description: A workload summary plus its output.
+      allOf:
+        - $ref: "#/components/schemas/WorkloadSummary"
+        - type: object
+          properties:
+            requirements:
+              $ref: "#/components/schemas/Resources"
+            restartPolicy:
+              type: string
+            restartCount:
+              type: integer
+            nextRestartAt:
+              type: string
+              format: date-time
+            params:
+              type: object
+              additionalProperties:
+                type: string
+            stdout:
+              type: string
+            stderr:
+              type: string
+            truncated:
+              type: boolean
+              description: The output was cut at the manager's cap.
+            error:
+              type: string
+            startedAt:
+              type: string
+              format: date-time
+            finishedAt:
+              type: string
+              format: date-time
+            inputs:
+              type: array
+              items:
+                $ref: "#/components/schemas/FileRef"
+            outputs:
+              type: array
+              description: The output names the workload declared.
+              items:
+                type: string
+            outputFiles:
+              type: array
+              description: The outputs it delivered; download each with GET /artifacts/{sha256}.
+              items:
+                $ref: "#/components/schemas/FileRef"
+    TaskSpec:
+      type: object
+      description: One task of a job.
+      properties:
+        name:
+          type: string
+        target:
+          type: string
+        capability:
+          type: string
+        params:
+          type: object
+          additionalProperties:
+            type: string
+        command:
+          type: string
+        args:
+          type: array
+          items:
+            type: string
+        inputs:
+          type: array
+          items:
+            $ref: "#/components/schemas/FileRef"
+        outputs:
+          type: array
+          items:
+            type: string
+        requirements:
+          $ref: "#/components/schemas/Resources"
+    JobRequest:
+      type: object
+      required: [tasks]
+      properties:
+        name:
+          type: string
+        tasks:
+          type: array
+          items:
+            $ref: "#/components/schemas/TaskSpec"
+        reduce:
+          $ref: "#/components/schemas/TaskSpec"
+        maxAttempts:
+          type: integer
+          description: Tries per task, each on a different device where possible. Default 3.
+        priority:
+          type: string
+          enum: [high, normal, low]
+    JobCounts:
+      type: object
+      properties:
+        total:
+          type: integer
+        completed:
+          type: integer
+        active:
+          type: integer
+        waiting:
+          type: integer
+        failed:
+          type: integer
+        canceled:
+          type: integer
+    JobTask:
+      type: object
+      properties:
+        key:
+          type: string
+        name:
+          type: string
+        state:
+          type: string
+        attempts:
+          type: integer
+        workload:
+          type: string
+        node:
+          type: string
+        nodeName:
+          type: string
+        outputs:
+          type: array
+          items:
+            $ref: "#/components/schemas/FileRef"
+        error:
+          type: string
+        waiting:
+          type: string
+        spotCheck:
+          type: string
+    Job:
+      type: object
+      required: [id, state, maxAttempts, createdAt, counts, priority]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        state:
+          type: string
+          enum: [RUNNING, COMPLETED, FAILED, CANCELED]
+        error:
+          type: string
+        maxAttempts:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+        counts:
+          $ref: "#/components/schemas/JobCounts"
+        tasks:
+          type: array
+          description: Only in GET /jobs/{id}.
+          items:
+            $ref: "#/components/schemas/JobTask"
+        reduce:
+          $ref: "#/components/schemas/JobTask"
+        outputs:
+          type: array
+          description: The job's result files (the reduce step's outputs).
+          items:
+            $ref: "#/components/schemas/FileRef"
+        priority:
+          type: string
+          enum: [high, normal, low]
+        spotChecks:
+          type: object
+          additionalProperties: true
+    WorkflowStep:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          description: A catalog task type.
+        params:
+          type: object
+          additionalProperties:
+            type: string
+    WorkflowStage:
+      description: One step of a workflow request.
+      allOf:
+        - $ref: "#/components/schemas/WorkflowStep"
+        - type: object
+          properties:
+            name:
+              type: string
+            mode:
+              type: string
+              enum: [once, perFile, parts]
+              description: once = one run with every file; perFile = one run per file; parts = one run per part.
+            parts:
+              type: integer
+            combine:
+              $ref: "#/components/schemas/WorkflowStep"
+    WorkflowRequest:
+      type: object
+      required: [stages]
+      properties:
+        name:
+          type: string
+        inputs:
+          type: array
+          items:
+            $ref: "#/components/schemas/FileRef"
+        stages:
+          type: array
+          maxItems: 8
+          items:
+            $ref: "#/components/schemas/WorkflowStage"
+        maxAttempts:
+          type: integer
+    WorkflowRun:
+      type: object
+      required: [id, state, maxAttempts, createdAt, stage, stages]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        state:
+          type: string
+          enum: [RUNNING, COMPLETED, FAILED, CANCELED]
+        error:
+          type: string
+        maxAttempts:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+        inputs:
+          type: array
+          items:
+            $ref: "#/components/schemas/FileRef"
+        stage:
+          type: integer
+          description: The stage now running or last run, from 1; 0 before the first job.
+        stages:
+          type: array
+          items:
+            type: object
+            required: [stage, type, title, mode, state]
+            properties:
+              stage:
+                type: integer
+              name:
+                type: string
+              type:
+                type: string
+              title:
+                type: string
+              params:
+                type: object
+                additionalProperties:
+                  type: string
+              mode:
+                type: string
+              parts:
+                type: integer
+              combine:
+                type: object
+                additionalProperties: true
+              state:
+                type: string
+                description: PENDING, WAITING, SKIPPED or the stage job's state.
+              job:
+                type: string
+              counts:
+                $ref: "#/components/schemas/JobCounts"
+              error:
+                type: string
+              waiting:
+                type: string
+              outputs:
+                type: array
+                items:
+                  $ref: "#/components/schemas/FileRef"
+        outputs:
+          type: array
+          description: The workflow's results (the last stage's), once completed.
+          items:
+            $ref: "#/components/schemas/FileRef"
+    PlanStep:
+      type: object
+      properties:
+        type:
+          type: string
+        title:
+          type: string
+        params:
+          type: object
+          additionalProperties:
+            type: string
+        effective:
+          type: object
+          additionalProperties:
+            type: string
+    Plan:
+      type: object
+      required: [id, state, request, model, files, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+        state:
+          type: string
+          enum: [planning, proposed, refused, failed, approved, rejected, expired]
+        request:
+          type: string
+        model:
+          type: string
+        files:
+          type: array
+          items:
+            $ref: "#/components/schemas/FileRef"
+        workloadId:
+          type: string
+        chatState:
+          type: string
+          description: While planning, the planning chat's state (QUEUED means the model's device is busy).
+        summary:
+          type: string
+        modelReason:
+          type: string
+        problem:
+          type: string
+          description: Why a plan was refused or failed.
+        answer:
+          type: string
+        task:
+          $ref: "#/components/schemas/PlanStep"
+        mode:
+          type: string
+        parts:
+          type: integer
+        useFiles:
+          type: array
+          items:
+            type: string
+        combine:
+          $ref: "#/components/schemas/PlanStep"
+        then:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        workflowId:
+          type: string
+        tasks:
+          type: integer
+        jobId:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+    TypePolicy:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        nodeLabels:
+          type: object
+          description: Only nodes carrying all of these labels may run it.
+          additionalProperties:
+            type: string
+        maxRuntimeSeconds:
+          type: integer
+        allowImages:
+          type: array
+          description: container.run only; the images it may run.
+          items:
+            type: string
+        allowTags:
+          type: boolean
+        allowNetwork:
+          type: boolean
+    Policy:
+      type: object
+      properties:
+        types:
+          type: object
+          description: Rules by task type name. A type without an entry is enabled (except opt-in types).
+          additionalProperties:
+            $ref: "#/components/schemas/TypePolicy"
+        allowUnlisted:
+          type: boolean
+          description: Whether raw commands and capabilities outside the catalog are allowed.
+        spotCheckPercent:
+          type: integer
+          minimum: 0
+          maximum: 100
+    CatalogParam:
+      type: object
+      required: [name, type]
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+          enum: [string, int, number, bool, enum]
+        title:
+          type: string
+        description:
+          type: string
+        required:
+          type: boolean
+        default:
+          type: string
+        min:
+          type: number
+        max:
+          type: number
+        enum:
+          type: array
+          items:
+            type: string
+        pattern:
+          type: string
+        maxLength:
+          type: integer
+        multiline:
+          type: boolean
+    CatalogType:
+      type: object
+      required: [name, version, title, description, inputs, policy, nodes]
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        params:
+          type: array
+          items:
+            $ref: "#/components/schemas/CatalogParam"
+        inputs:
+          type: object
+          properties:
+            min:
+              type: integer
+            max:
+              type: integer
+            extensions:
+              type: array
+              items:
+                type: string
+            description:
+              type: string
+        outputs:
+          type: array
+          items:
+            type: string
+        reduce:
+          type: boolean
+          description: Makes sense as a job's combining step.
+        parts:
+          type: boolean
+        optIn:
+          type: boolean
+          description: Off until the policy turns it on.
+        policy:
+          $ref: "#/components/schemas/TypePolicy"
+        nodes:
+          type: integer
+          description: How many ready nodes offer it now.
+        choices:
+          type: object
+          description: Values ready nodes offer for parameters that have them (for example models).
+          additionalProperties:
+            type: array
+            items:
+              type: string
+    AIDevice:
+      type: object
+      properties:
+        nodeId:
+          type: string
+        name:
+          type: string
+        state:
+          type: string
+        models:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              sizeBytes:
+                type: integer
+        gpus:
+          type: array
+          items:
+            $ref: "#/components/schemas/GPU"
+        dedicatedGpuBytes:
+          type: integer
+        llamaVersion:
+          type: string
+        ollama:
+          type: boolean
+    OpenAIChatRequest:
+      type: object
+      required: [model, messages]
+      properties:
+        model:
+          type: string
+        messages:
+          type: array
+          items:
+            type: object
+            required: [role, content]
+            properties:
+              role:
+                type: string
+              content:
+                description: A string, or a list of text parts.
+        stream:
+          type: boolean
+        stream_options:
+          type: object
+          properties:
+            include_usage:
+              type: boolean
+        temperature:
+          type: number
+        max_tokens:
+          type: integer
+        max_completion_tokens:
+          type: integer
+        seed:
+          type: integer
+    AuditEntry:
+      type: object
+      required: [seq, log, time, kind, actor]
+      properties:
+        seq:
+          type: integer
+        log:
+          type: string
+        time:
+          type: string
+          format: date-time
+        kind:
+          type: string
+          examples: [workload.submitted]
+        nodeId:
+          type: string
+        actor:
+          type: string
+          description: Which credential acted (operator token, dashboard session, AI key).
+        detail:
+          type: object
+          additionalProperties: true
+    Event:
+      type: object
+      description: One item of the /events stream.
+      required: [type, nodeId, timestamp]
+      properties:
+        type:
+          type: string
+          examples: [node.ready]
+          description: |
+            For example node.discovered, node.registered, node.connected,
+            node.ready, node.updated, node.offline, node.reconnected,
+            node.revoked, command.completed, workload.assigned,
+            workload.started, workload.completed, workload.failed,
+            workload.progress, job.submitted, job.finished, plan.updated,
+            node.join-requested, join.window.
+        nodeId:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        data:
+          type: object
+          additionalProperties: true
+    StandbyStatus:
+      type: object
+      properties:
+        role:
+          type: string
+        term:
+          type: integer
+        available:
+          type: boolean
+        reason:
+          type: string
+        standby:
+          type: object
+          additionalProperties: true
+        enrollmentExpiresAt:
+          type: string
+          format: date-time
+        primary:
+          type: string
+        lagSeconds:
+          type: integer
+    RemoteAccess:
+      type: object
+      required: [enabled, mode, sessions, available]
+      properties:
+        enabled:
+          type: boolean
+        mode:
+          type: string
+          enum: [read-only, standard, full]
+        url:
+          type: string
+        key:
+          type: string
+        sessions:
+          type: integer
+        available:
+          type: boolean
+        unavailable:
+          type: string
+          description: Why remote access cannot be turned on.

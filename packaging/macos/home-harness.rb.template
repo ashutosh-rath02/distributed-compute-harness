@@ -1,0 +1,64 @@
+# Homebrew formula TEMPLATE for a tap (for example homebrew-tap/Formula/home-harness.rb).
+# Fill in the version, URLs and SHA-256 values from your release artifacts
+# (shasum -a 256 <file>) and remove this comment block. NOT TESTED: it needs
+# Homebrew and a published release; brew audit --strict it before publishing.
+class HomeHarness < Formula
+  desc "Use the spare computers in your home as one pool"
+  homepage "https://github.com/ashutosh-rath02/distributed-compute-harness"
+  version "@VERSION@"
+  license :cannot_represent
+
+  on_macos do
+    on_arm do
+      url "@BASE_URL@/home-harness-@VERSION@-darwin-arm64.tar.gz"
+      sha256 "@SHA256_DARWIN_ARM64@"
+    end
+    on_intel do
+      url "@BASE_URL@/home-harness-@VERSION@-darwin-amd64.tar.gz"
+      sha256 "@SHA256_DARWIN_AMD64@"
+    end
+  end
+  on_linux do
+    on_arm do
+      url "@BASE_URL@/home-harness-@VERSION@-linux-arm64.tar.gz"
+      sha256 "@SHA256_LINUX_ARM64@"
+    end
+    on_intel do
+      url "@BASE_URL@/home-harness-@VERSION@-linux-amd64.tar.gz"
+      sha256 "@SHA256_LINUX_AMD64@"
+    end
+  end
+
+  # The tarball holds: manager, agent, harnessctl, run-manager.sh, run-agent.sh.
+  def install
+    libexec.install "manager", "agent"
+    bin.install "harnessctl"
+    libexec.install "run-manager.sh", "run-agent.sh"
+    chmod 0755, libexec/"run-manager.sh"
+    chmod 0755, libexec/"run-agent.sh"
+  end
+
+  # `brew services start home-harness` runs the manager at login via launchd.
+  # run-manager.sh looks for the programs in HH_LIBEXEC,
+  # so point it at this formula's libexec.
+  service do
+    run [opt_libexec/"run-manager.sh"]
+    environment_variables HH_LIBEXEC: opt_libexec, HH_PREFIX: opt_prefix, HOME_HARNESS_SUPERVISED: "1"
+    keep_alive true
+    log_path var/"log/home-harness.log"
+    error_log_path var/"log/home-harness.log"
+  end
+
+  def caveats
+    <<~EOS
+      Start the manager:   brew services start home-harness
+      Its dashboard:       http://127.0.0.1:7421  (the sign-in link is in ~/Library/Application Support/HomeHarness/manager/manager.log)
+      Your data lives in:  ~/Library/Application Support/HomeHarness  (brew uninstall keeps it)
+      To make this Mac a worker, see "Join a device" in the docs.
+    EOS
+  end
+
+  test do
+    assert_predicate bin/"harnessctl", :executable?
+  end
+end

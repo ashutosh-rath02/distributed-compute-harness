@@ -72,6 +72,7 @@ func main() {
 	withArtifacts := flag.Bool("with-artifacts", false, "with -export-state: include stored workload files (can be large)")
 	force := flag.Bool("force", false, "with -import-state: replace an existing state; with -standby-of: replace this manager's database and identity with the primary's")
 	standby := registerStandbyFlags()
+	healthcheck := flag.Bool("healthcheck", false, "ask the manager already running at -api-addr whether it is up (GET /server-proof, which needs no token), print ok, and exit 0 or 1: for container and service health checks")
 	metricsTokenFile := flag.String("metrics-token-file", "", "file holding a read-only token for a Prometheus scraper, created (owner-only) if missing. It opens only GET /metrics, /healthz and /readyz, never the rest of the API; without it /metrics needs the operator token. Must differ from the operator token and AI key")
 	logFormat := flag.String("log-format", "text", "log format: text (the familiar lines, plus key=value fields) or json (one object per line)")
 	logLevel := flag.String("log-level", "info", "log level: debug, info, warn or error")
@@ -80,6 +81,9 @@ func main() {
 	if *showVersion {
 		fmt.Println(version.String("manager"))
 		return
+	}
+	if *healthcheck {
+		os.Exit(runHealthcheck(*apiAddr))
 	}
 	if err := logging.Setup(*logFormat, *logLevel, os.Stderr); err != nil {
 		log.Fatalf("manager: %v", err)
