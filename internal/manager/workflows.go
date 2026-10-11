@@ -461,7 +461,6 @@ func currentStage(wf domain.Workflow, jobs map[int]domain.Job) int {
 	return cur
 }
 
-
 func (s *Server) finishWorkflow(wf domain.Workflow, state domain.JobState, reason string) {
 	done, ok := s.workflows.finish(wf.ID, state, reason)
 	if !ok {

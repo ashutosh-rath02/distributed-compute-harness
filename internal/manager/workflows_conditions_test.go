@@ -174,12 +174,14 @@ func TestWorkflowToleratesAStageThatCannotStart(t *testing.T) {
 func TestWorkflowStageSpecIsValidatedUpFront(t *testing.T) {
 	s, store := workflowTestServer(t)
 	files := photoFiles(t, store)
-	hash := func(f func(*domain.WorkflowStage)) domain.WorkflowStage { return withStage(stage("file.hash", "", nil), f) }
+	hash := func(f func(*domain.WorkflowStage)) domain.WorkflowStage {
+		return withStage(stage("file.hash", "", nil), f)
+	}
 	cases := map[string]struct {
 		stages []domain.WorkflowStage
 		want   string
 	}{
-		"bad condition":          {[]domain.WorkflowStage{stage("file.hash", "", nil), hash(func(st *domain.WorkflowStage) { st.When = "previous.nope" })}, `no "nope"`},
+		"bad condition":           {[]domain.WorkflowStage{stage("file.hash", "", nil), hash(func(st *domain.WorkflowStage) { st.When = "previous.nope" })}, `no "nope"`},
 		"first step has previous": {[]domain.WorkflowStage{hash(func(st *domain.WorkflowStage) { st.When = "previous.failed" })}, "no previous step"},
 		"later step":              {[]domain.WorkflowStage{stage("file.hash", "", nil), hash(func(st *domain.WorkflowStage) { st.When = "stage[2].succeeded" })}, "steps 1-1"},
 		"bad onFailure":           {[]domain.WorkflowStage{hash(func(st *domain.WorkflowStage) { st.OnFailure = "ignore" })}, "isn't stop, continue or retry"},
@@ -205,7 +207,12 @@ func TestWorkflowStageSpecIsValidatedUpFront(t *testing.T) {
 	}
 	// And a good one passes.
 	if _, err := s.SubmitWorkflow(t.Context(), WorkflowSpec{Inputs: files, Stages: []domain.WorkflowStage{
-		hash(func(st *domain.WorkflowStage) { st.When = "inputs.any(name matches \"*.jpg\")"; st.OnFailure = "retry:1"; st.TimeoutSeconds = 60; st.MaxAttempts = 2 })}}); err != nil {
+		hash(func(st *domain.WorkflowStage) {
+			st.When = "inputs.any(name matches \"*.jpg\")"
+			st.OnFailure = "retry:1"
+			st.TimeoutSeconds = 60
+			st.MaxAttempts = 2
+		})}}); err != nil {
 		t.Fatal(err)
 	}
 }

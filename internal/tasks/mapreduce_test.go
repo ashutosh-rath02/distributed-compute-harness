@@ -30,7 +30,9 @@ func countOf(t *testing.T, name string, content string) (lines, words, bytes int
 	if err != nil {
 		t.Fatal(err)
 	}
-	var got struct{ Total struct{ Lines, Words, Bytes int64 } }
+	var got struct {
+		Total struct{ Lines, Words, Bytes int64 }
+	}
 	if err := json.Unmarshal([]byte(readOut(t, env, 0)), &got); err != nil {
 		t.Fatal(err)
 	}

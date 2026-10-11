@@ -12,7 +12,7 @@ import (
 // schedClock is a hand-set clock for the scheduler.
 type schedClock struct{ t time.Time }
 
-func (c *schedClock) now() time.Time { return c.t }
+func (c *schedClock) now() time.Time  { return c.t }
 func (c *schedClock) set(t time.Time) { c.t = t }
 
 func scheduleTestServer(t *testing.T) (*Server, *schedClock) {
@@ -348,16 +348,16 @@ func TestScheduleKeepsItsFilesFromGC(t *testing.T) {
 func TestScheduleValidation(t *testing.T) {
 	s, _ := scheduleTestServer(t)
 	cases := map[string]ScheduleRequest{
-		"bad cron":      {Spec: "61 * * * *", Job: identityJob()},
-		"never":         {Spec: "0 0 30 2 *", Job: identityJob()},
-		"bad zone":      {Spec: "@daily", Timezone: "Mars/Base", Job: identityJob()},
-		"both":          {Spec: "@daily", Job: identityJob(), Workflow: &domain.WorkflowTemplate{}},
-		"neither":       {Spec: "@daily"},
-		"bad missed":    {Spec: "@daily", Missed: "maybe", Job: identityJob()},
-		"bad overlap":   {Spec: "@daily", Overlap: "pile", Job: identityJob()},
-		"past end":      {Spec: "@daily", EndAt: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC), Job: identityJob()},
-		"bad work":      {Spec: "@daily", Job: &domain.JobTemplate{Tasks: []domain.TaskSpec{{Capability: "cpu.burn", Params: map[string]string{"seconds": "999999"}}}}},
-		"bad workflow":  {Spec: "@daily", Workflow: &domain.WorkflowTemplate{Stages: []domain.WorkflowStage{stage("file.hash", "", nil)}}},
+		"bad cron":     {Spec: "61 * * * *", Job: identityJob()},
+		"never":        {Spec: "0 0 30 2 *", Job: identityJob()},
+		"bad zone":     {Spec: "@daily", Timezone: "Mars/Base", Job: identityJob()},
+		"both":         {Spec: "@daily", Job: identityJob(), Workflow: &domain.WorkflowTemplate{}},
+		"neither":      {Spec: "@daily"},
+		"bad missed":   {Spec: "@daily", Missed: "maybe", Job: identityJob()},
+		"bad overlap":  {Spec: "@daily", Overlap: "pile", Job: identityJob()},
+		"past end":     {Spec: "@daily", EndAt: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC), Job: identityJob()},
+		"bad work":     {Spec: "@daily", Job: &domain.JobTemplate{Tasks: []domain.TaskSpec{{Capability: "cpu.burn", Params: map[string]string{"seconds": "999999"}}}}},
+		"bad workflow": {Spec: "@daily", Workflow: &domain.WorkflowTemplate{Stages: []domain.WorkflowStage{stage("file.hash", "", nil)}}},
 	}
 	for name, req := range cases {
 		if _, err := s.CreateSchedule(t.Context(), req); err == nil {

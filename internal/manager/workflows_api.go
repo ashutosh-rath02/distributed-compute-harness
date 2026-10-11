@@ -193,4 +193,3 @@ func (s *Server) workflowView(wf domain.Workflow, jobs map[int]domain.Job, count
 	}
 	return v
 }
-
