@@ -136,7 +136,7 @@ func (p *chaosProxy) serve(client net.Conn) {
 // effect, so "ran twice" is observable.
 func markerCmd(path string) (string, []string) {
 	if runtime.GOOS == "windows" {
-		return "cmd", []string{"/C", `echo x>> "` + path + `"`}
+		return "powershell", []string{"-NoProfile", "-Command", "Add-Content -Path '" + path + "' -Value x"}
 	}
 	return "sh", []string{"-c", `echo x >> '` + path + `'`}
 }
@@ -482,7 +482,7 @@ func TestChaosLossyLinkNeverDuplicatesSideEffects(t *testing.T) {
 			}
 		}
 	}
-	t.Logf("%d of %d workloads completed through the chaos (%d connections cut)", completed, len(ids), 0)
+	t.Logf("%d of %d workloads completed through the chaos", completed, len(ids))
 	if markerCount(mk) != 1 {
 		t.Errorf("post-chaos workload ran %d times", markerCount(mk))
 	}
@@ -536,7 +536,11 @@ func TestChaosFullDiskRefusesNewWorkKeepsServingAndRecovers(t *testing.T) {
 		b, _ := io.ReadAll(r.Body)
 		return r, string(b)
 	}
-	m.st.UpsertJob(domain.Job{ID: "probe"}) // surfaces the failure like any real write would
+	// A write that was already in flight when the fault began may still succeed
+	// and clear the flag; the next failing write sets it again, as in life.
+	failingWrite := func() { m.st.UpsertJob(domain.Job{ID: "probe"}) }
+	failingWrite()
+	failingWrite()
 	resp, text := post()
 	if resp.StatusCode != http.StatusInsufficientStorage {
 		t.Fatalf("submission on a full disk: %s %q, want 507", resp.Status, text)
@@ -553,6 +557,7 @@ func TestChaosFullDiskRefusesNewWorkKeepsServingAndRecovers(t *testing.T) {
 	if len(nodes) != 1 {
 		t.Errorf("GET /nodes while degraded returned %d nodes", len(nodes))
 	}
+	failingWrite()
 	var rel struct {
 		Storage struct {
 			Degraded bool `json:"degraded"`
