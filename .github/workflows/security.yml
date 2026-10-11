@@ -16,7 +16,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4 # major tag: first-party, bumped by Dependabot
-      - uses: actions/setup-go@v5 # major tag: first-party, bumped by Dependabot
+      - uses: actions/setup-go@v7 # major tag: first-party, bumped by Dependabot
         with:
           go-version-file: go.mod
       # Pinned so a new govulncheck cannot change what fails the build
@@ -44,7 +44,7 @@ jobs:
       security-events: write
     steps:
       - uses: actions/checkout@v4 # major tag: first-party, bumped by Dependabot
-      - uses: actions/setup-go@v5 # major tag: first-party, bumped by Dependabot
+      - uses: actions/setup-go@v7 # major tag: first-party, bumped by Dependabot
         with:
           go-version-file: go.mod
       - uses: github/codeql-action/init@v3 # major tag: first-party, bumped by Dependabot
