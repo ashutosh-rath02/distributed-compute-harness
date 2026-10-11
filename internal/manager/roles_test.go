@@ -19,7 +19,7 @@ func TestRouteRolesCoverEveryRoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wanted := map[string]bool{"NewHTTPHandler": true, "registerRemoteAccessRoutes": true, "registerUserRoutes": true, "registerObserveRoutes": true}
+	wanted := map[string]bool{"NewHTTPHandler": true, "registerRemoteAccessRoutes": true, "registerUserRoutes": true, "registerObserveRoutes": true, "registerScheduleRoutes": true}
 	var patterns []string
 	for _, pkg := range pkgs {
 		for fname, f := range pkg.Files {
@@ -80,7 +80,7 @@ var expectedRoles = map[string]domain.Role{
 	"POST /nodes/{id}/commands": "operator", "POST /workloads": "operator", "POST /workloads/{id}/cancel": "operator",
 	"POST /artifacts": "operator", "DELETE /artifacts/{sha}": "operator", "PUT /nodes/{id}/availability": "operator",
 	"POST /llm/split": "operator", "DELETE /llm/split": "operator", "POST /jobs": "operator", "POST /jobs/{id}/cancel": "operator",
-	"POST /workflows": "operator", "POST /workflows/{id}/cancel": "operator", "POST /plans": "operator",
+	"POST /workflows": "operator", "GET /schedules": "viewer", "GET /schedules/{id}": "viewer", "POST /schedules": "operator", "POST /schedules/{id}/pause": "operator", "POST /schedules/{id}/resume": "operator", "POST /schedules/{id}/run": "operator", "DELETE /schedules/{id}": "operator", "POST /workflows/{id}/cancel": "operator", "POST /plans": "operator",
 	"POST /plans/{id}/approve": "operator", "POST /plans/{id}/reject": "operator", "POST /v1/chat/completions": "operator",
 
 	"POST /nodes/{id}/update": "admin", "POST /nodes/{id}/revoke": "admin", "DELETE /revocations/{id}": "admin",

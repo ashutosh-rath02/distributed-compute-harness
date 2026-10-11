@@ -45,6 +45,8 @@ tags:
     description: Batches of tasks with an optional fan-in step.
   - name: Workflows
     description: Steps that run in order, each on the step before's results.
+  - name: Schedules
+    description: Jobs and workflows that run by themselves on a timetable.
   - name: Plans
     description: A job proposed by a local AI model from plain words, run only after approval.
   - name: Files
@@ -1213,6 +1215,120 @@ paths:
           description: Not one of operator-token, ai-key or pairing-token.
         "409":
           description: This manager cannot save that secret (no token file or no database).
+  /schedules:
+    get:
+      operationId: listSchedules
+      tags: [Schedules]
+      summary: List schedules
+      responses:
+        "200":
+          description: The schedules with their next run and last run.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Schedule"
+    post:
+      operationId: createSchedule
+      tags: [Schedules]
+      summary: Run a job or a workflow on a timetable
+      description: |
+        Give exactly one of job or workflow. The timetable is a 5-field cron
+        expression, @hourly/@daily/@weekly/@monthly/@yearly, or "every 15m".
+        Each run is checked like a normal submission when it starts, so a task
+        type disabled later fails that run with the reason. Each slot runs
+        exactly once, also across manager restarts. Files the schedule names
+        are kept from cleanup while it exists. Audited.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScheduleRequest"
+      responses:
+        "201":
+          description: The new schedule.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Schedule"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /schedules/{id}:
+    get:
+      operationId: getSchedule
+      tags: [Schedules]
+      summary: One schedule with its run history
+      parameters:
+        - $ref: "#/components/parameters/ScheduleId"
+      responses:
+        "200":
+          description: The schedule and its last 50 runs.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Schedule"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteSchedule
+      tags: [Schedules]
+      summary: Delete a schedule
+      description: Runs already started keep going. Its files become eligible for cleanup. Audited.
+      parameters:
+        - $ref: "#/components/parameters/ScheduleId"
+      responses:
+        "200":
+          description: Deleted.
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /schedules/{id}/pause:
+    post:
+      operationId: pauseSchedule
+      tags: [Schedules]
+      summary: Stop starting new runs
+      parameters:
+        - $ref: "#/components/parameters/ScheduleId"
+      responses:
+        "200":
+          description: The schedule, paused.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Schedule"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /schedules/{id}/resume:
+    post:
+      operationId: resumeSchedule
+      tags: [Schedules]
+      summary: Start running on the timetable again
+      description: What was missed while paused follows the schedule's missed policy.
+      parameters:
+        - $ref: "#/components/parameters/ScheduleId"
+      responses:
+        "200":
+          description: The schedule, active.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Schedule"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /schedules/{id}/run:
+    post:
+      operationId: runScheduleNow
+      tags: [Schedules]
+      summary: Run it now, outside the timetable
+      description: A manual run does not move the timetable and does not count toward maxRuns. Audited.
+      parameters:
+        - $ref: "#/components/parameters/ScheduleId"
+      responses:
+        "200":
+          description: The run that was started.
+        "404":
+          $ref: "#/components/responses/NotFound"
   /policy:
     get:
       operationId: getPolicy
@@ -1952,6 +2068,13 @@ components:
       in: path
       required: true
       description: A node id.
+      schema:
+        type: string
+    ScheduleId:
+      name: id
+      in: path
+      required: true
+      description: A schedule id.
       schema:
         type: string
     UserName:
@@ -2814,6 +2937,80 @@ components:
           type: boolean
         allowNetwork:
           type: boolean
+    ScheduleRequest:
+      type: object
+      required: [schedule]
+      properties:
+        name:
+          type: string
+        schedule:
+          type: string
+          description: A cron expression, an @macro, or "every 15m".
+        timezone:
+          type: string
+          description: An IANA zone such as Europe/Berlin. Default UTC.
+        missed:
+          type: string
+          enum: [skip, run-once]
+          description: What to do about slots missed while the manager was down or the schedule paused.
+        overlap:
+          type: string
+          enum: [skip, queue, allow]
+          description: What to do when the last run is still going.
+        maxRuns:
+          type: integer
+        endAt:
+          type: string
+          format: date-time
+        job:
+          $ref: "#/components/schemas/JobRequest"
+        workflow:
+          $ref: "#/components/schemas/WorkflowRequest"
+    Schedule:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        schedule:
+          type: string
+        timezone:
+          type: string
+        kind:
+          type: string
+          enum: [job, workflow]
+        summary:
+          type: string
+        state:
+          type: string
+          description: ACTIVE, PAUSED or ENDED.
+        missed:
+          type: string
+        overlap:
+          type: string
+        maxRuns:
+          type: integer
+        endAt:
+          type: string
+          format: date-time
+        runs:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        nextRun:
+          type: string
+          format: date-time
+        lastRun:
+          type: object
+        queuedSlot:
+          type: string
+          format: date-time
+        history:
+          type: array
+          items:
+            type: object
     WhoAmI:
       type: object
       properties:
