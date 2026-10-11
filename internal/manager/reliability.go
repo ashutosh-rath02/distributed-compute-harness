@@ -90,10 +90,13 @@ func (s *Server) storageProblem() string {
 	return ""
 }
 
+// StorageProbeEvery is how often a degraded store is probed for recovery.
+var StorageProbeEvery = 5 * time.Second
+
 // watchStorage probes a degraded store every few seconds, so recovery
 // needs no restart and no operator action beyond freeing space.
 func (s *Server) watchStorage(ctx context.Context) {
-	t := time.NewTicker(5 * time.Second)
+	t := time.NewTicker(StorageProbeEvery)
 	defer t.Stop()
 	was := false
 	for {
