@@ -37,8 +37,13 @@ function Say([string]$m) { Write-Host $m }
 # Refuse paths that are plainly not an install folder: a typo here would
 # otherwise delete something of yours.
 function Assert-SafeDir([string]$p, [string]$what) {
-  $full = [IO.Path]::GetFullPath($p).TrimEnd('\')
-  $roots = @($env:USERPROFILE, $env:LOCALAPPDATA, $env:APPDATA, $env:SystemDrive + "\", $env:TEMP) | ForEach-Object { if ($_) { [IO.Path]::GetFullPath($_).TrimEnd('\') } }
+  # Compared in 8.3 short form, so C:\Users\ASHUTO~1 and C:\Users\Ashutosh Rath are the same folder.
+  function Short([string]$x) {
+    $x = [IO.Path]::GetFullPath($x).TrimEnd('\')
+    try { return (New-Object -ComObject Scripting.FileSystemObject).GetFolder($x).ShortPath.TrimEnd('\') } catch { return $x }
+  }
+  $full = Short $p
+  $roots = @($env:USERPROFILE, $env:LOCALAPPDATA, $env:APPDATA, $env:SystemDrive + "\", $env:TEMP) | ForEach-Object { if ($_) { Short $_ } }
   if ($roots -contains $full -or $full.Length -lt 12) { throw "Refusing to delete $what '$full': it is not a Home Harness folder." }
 }
 

@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- The Home Harness agent as a per-user launch agent. It uses the same label as
-     the dashboard's one-line join script, so installing the package over a
-     machine that already joined replaces that service rather than running two.
+     the dashboard's one-line join script, so launchd treats them as one service
+     (run packaging/macos/uninstall.sh first if a machine already joined that
+     way, so the join script's own copy is gone).
      It does nothing until ~/Library/Application Support/HomeHarness/agent.env
      says which manager to join (run-agent.sh explains). -->
 <plist version="1.0">

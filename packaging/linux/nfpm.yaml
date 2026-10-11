@@ -11,7 +11,8 @@
 #   go run github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.41.1 package -f packaging/linux/nfpm.yaml -p rpm -t dist/
 #
 # (`go run pkg@version` fetches nfpm into the module cache; it does not change go.mod.)
-# NOT YET BUILT OR INSTALLED by the author: this needs a Linux machine to test.
+# Verified: this file builds a .deb and .rpm with nfpm v2.41.1 (contents checked). NOT
+# verified: installing them on a real Linux machine (users, systemd, upgrade, purge).
 name: home-harness
 arch: "${ARCH}"
 platform: linux
@@ -41,11 +42,14 @@ contents:
     file_info: { mode: 0755 }
   - src: packaging/linux/home-harness-manager.service
     dst: /usr/lib/systemd/system/home-harness-manager.service
+    file_info: { mode: 0644 }
   - src: packaging/linux/home-harness-agent.service
     dst: /usr/lib/systemd/system/home-harness-agent.service
+    file_info: { mode: 0644 }
   - src: packaging/linux/manager.env
     dst: /etc/home-harness/manager.env
     type: config|noreplace
+    file_info: { mode: 0644 }
   - src: packaging/linux/agent.env
     dst: /etc/home-harness/agent.env
     type: config|noreplace

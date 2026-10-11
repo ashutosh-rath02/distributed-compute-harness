@@ -58,7 +58,7 @@ func TestEveryPageRendersAndLinksResolve(t *testing.T) {
 			t.Errorf("%s renders empty", p.slug)
 		}
 		for _, l := range internalLinks(body) {
-			if !known[strings.SplitN(l, "#", 2)[0]] {
+			if !p.linked && !known[strings.SplitN(l, "#", 2)[0]] {
 				t.Errorf("%s links to %s, which is not a page", p.slug, l)
 			}
 		}

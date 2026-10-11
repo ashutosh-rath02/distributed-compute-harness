@@ -183,6 +183,110 @@ paths:
 
         "401":
           $ref: "#/components/responses/Unauthorized"
+  /version:
+    get:
+      operationId: getVersion
+      tags: [Operations]
+      summary: This manager's version and build
+      description: Needs no credential.
+      security: []
+      responses:
+        "200":
+          description: Build information.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, platform, go]
+                properties:
+                  version:
+                    type: string
+                  commit:
+                    type: string
+                  date:
+                    type: string
+                  platform:
+                    type: string
+                  go:
+                    type: string
+  /status:
+    get:
+      operationId: getStatus
+      tags: [Operations]
+      summary: A one-call summary of the fleet's health
+      description: Version, uptime, readiness, device counts by state, queue depth, work counts and recent failures.
+      responses:
+        "200":
+          description: The summary.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /healthz:
+    get:
+      operationId: getHealthz
+      tags: [Operations]
+      summary: Liveness check
+      description: |
+        Answers `ok`, or 503 `stalled` when the manager's main loop has stopped
+        ticking. Needs no credential, so a load balancer or container check can use it.
+      security: []
+      responses:
+        "200":
+          description: Alive.
+          content:
+            text/plain:
+              schema:
+                type: string
+        "503":
+          description: The main loop is stalled.
+          content:
+            text/plain:
+              schema:
+                type: string
+  /readyz:
+    get:
+      operationId: getReadyz
+      tags: [Operations]
+      summary: Readiness check
+      description: Answers `ready`, or 503 with the reason it is not (for example the store is unavailable). Needs no credential.
+      security: []
+      responses:
+        "200":
+          description: Ready.
+          content:
+            text/plain:
+              schema:
+                type: string
+        "503":
+          description: Not ready; the body says why.
+          content:
+            text/plain:
+              schema:
+                type: string
+  /metrics:
+    get:
+      operationId: getMetrics
+      tags: [Operations]
+      summary: Prometheus metrics
+      description: |
+        Prometheus text format. A scraper can use the separate read-only metrics
+        token (the manager's `-metrics-token-file`), which opens only /metrics
+        (and the public /healthz and /readyz); without that token, the operator
+        token is needed.
+      security:
+        - bearerAuth: []
+        - metricsToken: []
+      responses:
+        "200":
+          description: Metrics.
+          content:
+            text/plain:
+              schema:
+                type: string
+        "404":
+          $ref: "#/components/responses/NotFound"
   /nodes:
     get:
       operationId: listNodes
@@ -259,13 +363,13 @@ paths:
       description: Machines that report the same host are counted once.
       responses:
         "200":
-          description: Totals by resource kind.
+          description: Totals by resource kind, for example cpu cores and memory bytes.
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Resource"
+                type: object
+                additionalProperties:
+                  type: number
   /nodes/{id}/commands:
     post:
       operationId: sendNodeCommand
@@ -1675,6 +1779,10 @@ components:
       type: http
       scheme: bearer
       description: The AI key (the manager's ai-key file). Opens only /v1.
+    metricsToken:
+      type: http
+      scheme: bearer
+      description: A read-only token for a Prometheus scraper (-metrics-token-file). Opens only /metrics, /healthz and /readyz.
   parameters:
     NodeId:
       name: id

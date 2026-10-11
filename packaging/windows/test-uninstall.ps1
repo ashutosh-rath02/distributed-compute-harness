@@ -79,6 +79,13 @@ try {
   $code = $LASTEXITCODE
   $ErrorActionPreference = "Stop"
   Check ($code -ne 0 -and (Test-Path $env:USERPROFILE)) "refuses a folder that is not an install folder"
+  # The same folder spelled in 8.3 short form must be refused too.
+  $short = (New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:USERPROFILE).ShortPath
+  $ErrorActionPreference = "Continue"
+  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $uninstall -AgentDir $short -AgentTaskName $agentTask -ManagerTaskName $managerTask -Component agent -Yes 2>&1 | Out-Null
+  $code = $LASTEXITCODE
+  $ErrorActionPreference = "Stop"
+  Check ($code -ne 0 -and (Test-Path $env:USERPROFILE)) "refuses a short-form spelling of the profile folder"
 }
 finally {
   foreach ($t in @($agentTask, $managerTask)) { Unregister-ScheduledTask -TaskName $t -Confirm:$false -ErrorAction SilentlyContinue }

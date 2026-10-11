@@ -85,6 +85,11 @@ func main() {
 		body, missing := p.render()
 		for _, l := range internalLinks(body) {
 			if !known[strings.SplitN(l, "#", 2)[0]] {
+				if p.linked {
+					// Written by someone else, and free to link to repository files the site does not carry.
+					fmt.Printf("warning: %s links to %s, which is not a page of this site\n", p.slug, l)
+					continue
+				}
 				broken = append(broken, p.slug+": "+l)
 			}
 		}

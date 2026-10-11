@@ -1,6 +1,6 @@
 # @home-harness/client (JavaScript)
 
-A client for the Home Harness operator API. Node 20 or newer, ES modules, global
+A client for the Home Harness operator API. Node 20.3 or newer, ES modules, global
 `fetch`, no dependencies. The API is described in `docs/openapi.yaml`.
 
 ```js

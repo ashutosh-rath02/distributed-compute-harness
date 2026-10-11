@@ -3,11 +3,12 @@ Description=Home Harness agent
 Documentation=https://github.com/ashutosh-rath02/distributed-compute-harness
 After=network-online.target
 Wants=network-online.target
-# Does nothing until /etc/home-harness/agent.env says which manager to join.
-ConditionPathExists=/etc/home-harness/agent.env
 
 [Service]
 Type=simple
+# Starts only once /etc/home-harness/agent.env has AGENT_ARGS filled in (the file
+# is installed with it empty); until then the unit is skipped, not failed.
+ExecCondition=/bin/sh -c "grep -Eq '^AGENT_ARGS=.?-' /etc/home-harness/agent.env"
 User=homeharness-agent
 Group=homeharness-agent
 EnvironmentFile=/etc/home-harness/agent.env
