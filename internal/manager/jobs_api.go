@@ -73,7 +73,7 @@ func (s *Server) apiPostJob(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	s.audit(domain.AuditSecurity, "job.submitted", "", actorFrom(r.Context()), map[string]any{
+	s.audit(domain.AuditSecurity, "job.submitted", "", actorFrom(r.Context()), map[string]any{"requestId": requestIDFrom(r.Context()), 
 		"jobId": string(job.ID), "tasks": len(job.Tasks), "reduce": job.Reduce != nil, "maxAttempts": job.MaxAttempts,
 	})
 	writeJSON(w, http.StatusAccepted, s.toJobView(job, false))
@@ -104,7 +104,7 @@ func (s *Server) apiCancelJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
-	s.audit(domain.AuditSecurity, "job.canceled", "", actorFrom(r.Context()), map[string]any{"jobId": string(id)})
+	s.audit(domain.AuditSecurity, "job.canceled", "", actorFrom(r.Context()), map[string]any{"requestId": requestIDFrom(r.Context()), "jobId": string(id)})
 	job, _ := s.jobs.get(id)
 	writeJSON(w, http.StatusAccepted, s.toJobView(job, false))
 }

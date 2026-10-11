@@ -1,0 +1,56 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "41 4 * * 1" # weekly: new advisories appear without any code change
+
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4 # major tag: first-party, bumped by Dependabot
+      - uses: actions/setup-go@v5 # major tag: first-party, bumped by Dependabot
+        with:
+          go-version-file: go.mod
+      # Pinned so a new govulncheck cannot change what fails the build
+      # without a reviewed edit here.
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4 # major tag: first-party, bumped by Dependabot
+      - uses: actions/dependency-review-action@v4 # major tag: first-party, bumped by Dependabot
+        with:
+          fail-on-severity: high
+
+  codeql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4 # major tag: first-party, bumped by Dependabot
+      - uses: actions/setup-go@v5 # major tag: first-party, bumped by Dependabot
+        with:
+          go-version-file: go.mod
+      - uses: github/codeql-action/init@v3 # major tag: first-party, bumped by Dependabot
+        with:
+          languages: go
+          build-mode: autobuild
+      - uses: github/codeql-action/analyze@v3 # major tag: first-party, bumped by Dependabot
+        with:
+          category: "/language:go"

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"path"
 	"sort"
 	"strconv"
@@ -500,7 +501,8 @@ func (s *Server) finishWorkflow(wf domain.Workflow, state domain.JobState, reaso
 		return
 	}
 	s.persistWorkflow(done)
-	log.Printf("workflow.finished: %s %s %s", done.ID, done.State, reason)
+	s.met.workflowFinished(done.State)
+	slog.Info("workflow.finished", "workflow", done.ID, "state", done.State, "reason", clip(reason))
 	s.publish(domain.EventWorkflowFinished, "", map[string]any{"workflowId": string(done.ID), "state": string(done.State)})
 }
 

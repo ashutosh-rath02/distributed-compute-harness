@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"slices"
 	"sort"
 	"strings"
@@ -518,6 +519,10 @@ func (s *Server) submitAttempt(ctx context.Context, job domain.Job, key string, 
 		spec.Outputs = nil // the type names them again for these inputs
 	}
 	_, err := s.Submit(ctx, spec)
+	if err == nil && tp.attempts > 0 {
+		s.met.retry("job_attempt")
+		slog.Info("job.retry", "job", job.ID, "attempt", spec.Attempt)
+	}
 	if errors.Is(err, ErrInvalidWorkload) || errors.Is(err, ErrPolicy) {
 		// Won't get better by waiting (policy changed, or the reduce's
 		// real inputs don't fit): stop the job and say why.
@@ -537,7 +542,8 @@ func (s *Server) finishJob(job domain.Job, state domain.JobState, reason string)
 		return
 	}
 	s.persistJob(done)
-	log.Printf("job.finished: %s %s %s", done.ID, done.State, reason)
+	s.met.jobFinished(done.State)
+	slog.Info("job.finished", "job", done.ID, "state", done.State, "reason", clip(reason))
 	s.publish(domain.EventJobFinished, "", map[string]any{"jobId": string(done.ID), "state": string(done.State)})
 }
 

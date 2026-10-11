@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"slices"
 	"sort"
@@ -496,7 +497,8 @@ func (s *Server) stepSpotCheck(ctx context.Context, t *spotCheckTable, c domain.
 		if c.State == domain.SpotMismatch || c.State == domain.SpotUnresolved {
 			s.reportSpotMismatch(t, &c)
 		}
-		log.Printf("spotcheck.finished: job %s task %s: %s", c.Job, c.Task, c.Detail)
+		s.met.spotChecked(c.State)
+		slog.Info("spotcheck.finished", "job", c.Job, "task", c.Task, "result", c.State, "reason", clip(c.Detail))
 		s.publish(domain.EventJobSpotCheck, "", map[string]any{"jobId": string(c.Job), "task": c.Task, "state": string(c.State)})
 		changed = true
 	}
@@ -726,7 +728,7 @@ func (s *Server) apiClearSuspect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "this device has no suspect mark", http.StatusNotFound)
 		return
 	}
-	s.audit(domain.AuditSecurity, "node.suspect-cleared", id, actorFrom(r.Context()), map[string]any{"count": m.Count, "jobId": string(m.Job), "task": m.Task})
+	s.audit(domain.AuditSecurity, "node.suspect-cleared", id, actorFrom(r.Context()), map[string]any{"requestId": requestIDFrom(r.Context()), "count": m.Count, "jobId": string(m.Job), "task": m.Task})
 	s.publish(domain.EventNodeUpdated, id, map[string]any{"reason": "suspect mark cleared"})
 	writeJSON(w, http.StatusOK, map[string]any{"cleared": true})
 }

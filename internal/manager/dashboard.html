@@ -121,6 +121,10 @@
     <div class="card"><span class="hint">Running / queued</span><div class="metric" id="queueCount">-</div></div>
   </div>
   <p id="standbyLine" class="hint" hidden></p>
+  <details class="card" id="healthCard">
+    <summary><strong>Health</strong> <span id="healthSummary" class="hint">…</span></summary>
+    <ul id="healthList" class="hint"></ul>
+  </details>
   <p class="sub">Operator dashboard — your sign-in is kept only in this browser, for this exact address. Generated onboarding scripts below include this harness's pairing token in plain text. <a href="#" id="signout">Sign out of this browser</a></p>
 
   <h2>Nodes</h2>
@@ -1516,6 +1520,36 @@
   }
   setInterval(() => { if (!signedOut) refreshStandby(); }, 15000);
 
+  // The Health card (GET /status): everything is set as text, never HTML,
+  // because device names and failure reasons come from agents.
+  async function refreshHealth() {
+    let v;
+    try { v = await (await api("/status")).json(); } catch (e) { return; }
+    if (!v || !v.nodes) return; // not allowed (remote page) or not a status
+    const list = document.getElementById("healthList");
+    const lines = [];
+    const n = v.nodes || {};
+    lines.push((n.takingWork || 0) + " of " + (n.total || 0) + " devices taking work"
+      + (n.heldBack && Object.keys(n.heldBack).some((k) => n.heldBack[k]) ? " (held back: "
+        + Object.keys(n.heldBack).filter((k) => n.heldBack[k]).map((k) => n.heldBack[k] + " " + k.replace(/_/g, " ")).join(", ") + ")" : ""));
+    lines.push("Queue: " + ((v.queue || {}).depth || 0) + " waiting"
+      + (v.queue && v.queue.depth ? ", oldest " + Math.round(v.queue.oldestWaitSeconds) + " s" : ""));
+    const d = v.disk || {};
+    lines.push("Disk: files " + fmtBytes(d.artifactUsedBytes) + " of " + fmtBytes(d.artifactLimitBytes) + ", database " + fmtBytes(d.storeBytes));
+    lines.push("Manager " + String(v.version || "?") + " (" + String(v.commit || "?") + "), up " + Math.round((v.uptimeSeconds || 0) / 60) + " min");
+    (v.nodes && v.nodes.list || []).forEach((x) => {
+      if (x.state === "READY" && x.heartbeatAgeSeconds > 20) lines.push("Quiet device: " + String(x.name || x.id) + " (" + Math.round(x.heartbeatAgeSeconds) + " s since its last heartbeat)");
+    });
+    (v.recentFailures || []).slice(0, 3).forEach((f) => {
+      lines.push("Failed: " + String(f.capability) + " on " + String(f.node).slice(0, 12) + ": " + String(f.error));
+    });
+    list.textContent = "";
+    lines.forEach((t) => { const li = document.createElement("li"); li.textContent = t; list.appendChild(li); });
+    const sum = document.getElementById("healthSummary");
+    sum.textContent = v.ready ? "ready" : "not ready: " + String(v.notReady || "");
+  }
+  setInterval(() => { if (!signedOut) refreshHealth(); }, 10000);
+
   document.getElementById("joinBanner").addEventListener("click", async (event) => {
     const button = event.target.closest("button[data-join]");
     if (!button) return;
@@ -1643,6 +1677,7 @@
     refreshJoinRequests();
     refreshJoinWindow();
     refreshStandby();
+    refreshHealth();
     prefillLanAddr();
     streamEvents();
   })();

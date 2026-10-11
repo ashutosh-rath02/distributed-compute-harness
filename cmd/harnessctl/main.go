@@ -19,6 +19,7 @@ import (
 
 	"home-harness/internal/domain"
 	"home-harness/internal/joinscript"
+	"home-harness/internal/version"
 )
 
 func main() {
@@ -26,8 +27,13 @@ func main() {
 	tokenFile := flag.String("token-file", "harness-operator-token", "the manager's operator token file (its -operator-token-file); the "+operatorTokenEnv+" environment variable overrides it")
 	remoteURL := flag.String("remote", "", "use the manager from anywhere, through its relay: the remote address \"harnessctl remote\" shows (needs -remote-key-file or "+remoteKeyEnv+")")
 	remoteKeyFile := flag.String("remote-key-file", "", "file holding the remote key, for -remote")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Usage = usage
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(version.String("harnessctl"))
+		return
+	}
 
 	args := flag.Args()
 	if len(args) == 0 {
@@ -122,7 +128,13 @@ func main() {
 			return client.cmdCommand(args[1], domain.CommandEcho, map[string]string{"message": args[2]})
 		})
 	case "status":
-		err = requireArgs(args, 2, "status <id>", func() error { return client.cmdCommand(args[1], domain.CommandGetAgentStatus, nil) })
+		if len(args) == 1 { // the whole manager on one screen
+			err = client.cmdStatus()
+			break
+		}
+		err = requireArgs(args, 2, "status [<id>]", func() error { return client.cmdCommand(args[1], domain.CommandGetAgentStatus, nil) })
+	case "top":
+		err = client.cmdTop(args[1:])
 	case "info":
 		err = requireArgs(args, 2, "info <id>", func() error { return client.cmdCommand(args[1], domain.CommandGetSystemInfo, nil) })
 	case "events":
@@ -200,7 +212,8 @@ Commands:
   resources             show resource totals summed across all nodes
   ping <id>             send PING, print the result
   echo <id> <message>   send ECHO, print the echoed message
-  status <id>           send GET_AGENT_STATUS, print the result
+  status [<id>]         no id: the whole manager on one screen (fleet, queue, failures, standby, disk); with an id: GET_AGENT_STATUS from that node
+  top [-n 2s]           the same screen, refreshing
   info <id>             send GET_SYSTEM_INFO, print the result
   refresh <id>          send REQUEST_RESOURCE_REFRESH, print the result
   events                tail the harness event stream

@@ -200,7 +200,7 @@ func (s *Server) apiPutNodeAvailability(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	s.audit(domain.AuditSecurity, "node.availability-changed", id, actorFrom(r.Context()), map[string]any{"from": old.Availability, "to": s.meta.get(id).Availability})
+	s.audit(domain.AuditSecurity, "node.availability-changed", id, actorFrom(r.Context()), map[string]any{"requestId": requestIDFrom(r.Context()), "from": old.Availability, "to": s.meta.get(id).Availability})
 	s.publish(domain.EventNodeUpdated, id, map[string]any{"reason": "availability rule changed"})
 	s.kickDispatch() // the rule may let queued work start now
 	writeJSON(w, http.StatusOK, s.availabilityView(id))

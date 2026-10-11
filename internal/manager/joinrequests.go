@@ -220,7 +220,7 @@ func (s *Server) apiDecideJoinRequest(approve bool) http.HandlerFunc {
 			http.Error(w, "no such device waiting for approval (it may have stopped asking, or was already decided)", http.StatusNotFound)
 			return
 		}
-		s.audit(domain.AuditSecurity, kind, id, actorFrom(r.Context()), map[string]any{
+		s.audit(domain.AuditSecurity, kind, id, actorFrom(r.Context()), map[string]any{"requestId": requestIDFrom(r.Context()), 
 			"name": req.Name, "code": req.Code, "remote": req.Remote,
 		})
 		s.publish(domain.EventJoinDecided, id, map[string]any{"decision": decision})

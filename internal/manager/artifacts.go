@@ -373,7 +373,7 @@ func (s *Server) ArtifactTransferHandler() http.HandlerFunc {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /workload-artifacts/{workload}/inputs/{sha}", s.agentGetInput)
 	mux.HandleFunc("PUT /workload-artifacts/{workload}/outputs/{name...}", s.agentPutOutput)
-	return mux.ServeHTTP
+	return s.countAgentTransfers(mux).ServeHTTP
 }
 
 // grantFor authorizes an agent transfer request for its workload.
@@ -518,7 +518,7 @@ func (s *Server) apiPostArtifact(w http.ResponseWriter, r *http.Request) {
 		writeArtifactError(w, err)
 		return
 	}
-	s.audit(domain.AuditSecurity, "artifact.uploaded", "", actorFrom(r.Context()), map[string]any{"sha256": info.SHA256[:12], "size": info.Size})
+	s.audit(domain.AuditSecurity, "artifact.uploaded", "", actorFrom(r.Context()), map[string]any{"requestId": requestIDFrom(r.Context()), "sha256": info.SHA256[:12], "size": info.Size})
 	writeJSON(w, http.StatusCreated, info)
 }
 
@@ -595,6 +595,6 @@ func (s *Server) apiDeleteArtifact(w http.ResponseWriter, r *http.Request) {
 		writeArtifactError(w, err)
 		return
 	}
-	s.audit(domain.AuditSecurity, "artifact.deleted", "", actorFrom(r.Context()), map[string]any{"sha256": sha[:12]})
+	s.audit(domain.AuditSecurity, "artifact.deleted", "", actorFrom(r.Context()), map[string]any{"requestId": requestIDFrom(r.Context()), "sha256": sha[:12]})
 	w.WriteHeader(http.StatusNoContent)
 }

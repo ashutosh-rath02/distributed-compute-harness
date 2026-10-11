@@ -1,0 +1,43 @@
+name: Nightly flake hunt
+
+# Runs the integration suite three times in a row on each OS. A test that
+# passes on push CI but fails here is a flake: the logs are uploaded so it
+# can be diagnosed instead of re-run until green.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  integration-x3:
+    name: integration x3 (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4 # major tag: first-party, bumped by Dependabot
+      - uses: actions/setup-go@v5 # major tag: first-party, bumped by Dependabot
+        with:
+          go-version-file: go.mod
+      # -count=3 reruns every test; -p 1 because the tests share fixed ports.
+      - name: Integration suite, three times
+        run: |
+          mkdir -p logs
+          go test -p 1 -count=3 -v -timeout 100m ./test/integration 2>&1 | tee logs/integration.log
+          exit "${PIPESTATUS[0]}"
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4 # major tag: first-party, bumped by Dependabot
+        with:
+          name: integration-logs-${{ matrix.os }}
+          path: logs/
+          retention-days: 14

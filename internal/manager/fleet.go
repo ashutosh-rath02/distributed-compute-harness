@@ -130,7 +130,7 @@ func (s *Server) apiPutNodeMeta(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	s.audit(domain.AuditSecurity, "node.meta-changed", id, actorFrom(r.Context()), map[string]any{"from": old, "to": s.meta.get(id)})
+	s.audit(domain.AuditSecurity, "node.meta-changed", id, actorFrom(r.Context()), map[string]any{"requestId": requestIDFrom(r.Context()), "from": old, "to": s.meta.get(id)})
 	s.publish(domain.EventNodeUpdated, id, map[string]any{"reason": "operator metadata changed"})
 	writeJSON(w, http.StatusOK, s.meta.get(id))
 }

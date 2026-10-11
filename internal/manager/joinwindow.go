@@ -112,7 +112,7 @@ func (s *Server) apiOpenJoinWindow(w http.ResponseWriter, r *http.Request) {
 		d = time.Duration(req.Minutes) * time.Minute
 	}
 	s.OpenJoinWindow(d)
-	s.audit(domain.AuditSecurity, "join.window-opened", "", actorFrom(r.Context()), map[string]any{"minutes": int(min(max(d, time.Minute), maxJoinWindow).Minutes())})
+	s.audit(domain.AuditSecurity, "join.window-opened", "", actorFrom(r.Context()), map[string]any{"requestId": requestIDFrom(r.Context()), "minutes": int(min(max(d, time.Minute), maxJoinWindow).Minutes())})
 	s.apiGetJoinWindow(w, r)
 }
 

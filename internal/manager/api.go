@@ -47,6 +47,8 @@ type nodeView struct {
 	// Suspect: spot checks found its results differing from other
 	// devices' (spotcheck.go). Informational; the operator clears it.
 	Suspect *domain.SuspectMark `json:"suspect,omitempty"`
+	// Self: the agent's own counters, as it reports them (domain.FeatureSelfMetrics).
+	Self *domain.AgentSelfMetrics `json:"self,omitempty"`
 }
 
 func (s *Server) toNodeView(rec *NodeRecord, relations map[domain.NodeID]hostRelation) nodeView {
@@ -74,6 +76,7 @@ func (s *Server) toNodeView(rec *NodeRecord, relations map[domain.NodeID]hostRel
 		Availability:          s.availabilityView(rec.Node.Identity.NodeID),
 		GPUs:                  rec.GPUs,
 		Suspect:               s.suspectView(rec.Node.Identity.NodeID),
+		Self:                  rec.Self,
 	}
 }
 
@@ -175,6 +178,7 @@ func (s *Server) NewHTTPHandler() http.Handler {
 	mux.HandleFunc("POST /workloads/{id}/cancel", s.apiCancelWorkload)
 	mux.HandleFunc("POST /login", s.apiLogin)
 	mux.HandleFunc("GET /server-proof", s.apiServerProof)
+	mux.HandleFunc("GET /version", s.apiGetVersion)
 	mux.HandleFunc("GET /join-requests", s.apiListJoinRequests)
 	mux.HandleFunc("GET /join-window", s.apiGetJoinWindow)
 	mux.HandleFunc("POST /join-window", s.apiOpenJoinWindow)
@@ -221,7 +225,8 @@ func (s *Server) NewHTTPHandler() http.Handler {
 	// Host check and CSRF protection first (apiguard.go), then operator
 	// authentication (operatorauth.go) — browser defenses and the
 	// credential check are independent layers.
-	return guardOperatorAPI(s.requireOperator(mux))
+	s.registerObserveRoutes(mux) // GET /metrics, /healthz, /readyz, /status (observe.go, status.go)
+	return s.instrument(mux, guardOperatorAPI(s.requireOperator(mux)))
 }
 
 func (s *Server) apiListNodes(w http.ResponseWriter, r *http.Request) {
@@ -353,7 +358,7 @@ func (s *Server) apiPostUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	s.audit(domain.AuditSecurity, "agent.update-dispatched", nodeID, actorFrom(r.Context()), map[string]any{
+	s.audit(domain.AuditSecurity, "agent.update-dispatched", nodeID, actorFrom(r.Context()), map[string]any{"requestId": requestIDFrom(r.Context()), 
 		"platform": build.platform(), "from": map[bool]string{false: rec.Node.BinaryHash, true: rec.Node.AppHash}[app], "to": build.SHA256, "app": app,
 	})
 	writeJSON(w, http.StatusOK, result)
@@ -561,7 +566,7 @@ func (s *Server) apiPostWorkload(w http.ResponseWriter, r *http.Request) {
 	}
 	// The command and argument count only, never argv: arguments can carry
 	// secrets, and truncating them wouldn't remove those.
-	s.audit(domain.AuditSecurity, "workload.submitted", wl.Target, actorFrom(r.Context()), map[string]any{
+	s.audit(domain.AuditSecurity, "workload.submitted", wl.Target, actorFrom(r.Context()), map[string]any{"requestId": requestIDFrom(r.Context()), 
 		"workloadId": string(wl.ID), "command": wl.Command, "capability": string(wl.EffectiveCapability()), "args": len(wl.Args),
 		"inputs": len(wl.Inputs), "outputs": len(wl.Outputs),
 	})
@@ -618,6 +623,8 @@ func (s *Server) apiEvents(w http.ResponseWriter, r *http.Request) {
 
 	ch, unsubscribe := s.Events.Subscribe(16)
 	defer unsubscribe()
+	s.met.sseOpened()
+	defer s.met.sseClosed()
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")

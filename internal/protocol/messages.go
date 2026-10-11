@@ -108,6 +108,8 @@ type HeartbeatPayload struct {
 	// Cache replaces what the agent last said it holds
 	// (domain.FeatureInputCache); nil: unchanged since then.
 	Cache *domain.InputCacheReport `json:"cache,omitempty"`
+	// Self: the agent's own counters (domain.FeatureSelfMetrics).
+	Self *domain.AgentSelfMetrics `json:"self,omitempty"`
 }
 
 // StateUpdatePayload is an out-of-band runtime state push (distinct from a

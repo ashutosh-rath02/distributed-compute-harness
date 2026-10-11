@@ -4,7 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 
@@ -130,5 +130,5 @@ func (s *Server) AgentBinaryHandler() http.HandlerFunc {
 // onboarding or an update), and knowing which route and build a node
 // actually fetched is the first question when an update doesn't land.
 func logAgentDownload(r *http.Request, build agentBuild) {
-	log.Printf("manager: serving agent build %s via %s to %s", build.platform(), r.URL.Path, r.RemoteAddr)
+	slog.Info("update.build_served", "platform", build.platform(), "route", r.URL.Path, "remote", r.RemoteAddr)
 }

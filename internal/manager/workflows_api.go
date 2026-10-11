@@ -59,7 +59,7 @@ func (s *Server) apiPostWorkflow(w http.ResponseWriter, r *http.Request) {
 		writeWorkflowError(w, err)
 		return
 	}
-	s.audit(domain.AuditSecurity, "workflow.submitted", "", actorFrom(r.Context()), map[string]any{
+	s.audit(domain.AuditSecurity, "workflow.submitted", "", actorFrom(r.Context()), map[string]any{"requestId": requestIDFrom(r.Context()), 
 		"workflowId": string(wf.ID), "steps": len(wf.Stages), "files": len(wf.Inputs), "maxAttempts": wf.MaxAttempts,
 	})
 	writeJSON(w, http.StatusAccepted, s.toWorkflowView(wf))
@@ -90,7 +90,7 @@ func (s *Server) apiCancelWorkflow(w http.ResponseWriter, r *http.Request) {
 		writeWorkflowError(w, err)
 		return
 	}
-	s.audit(domain.AuditSecurity, "workflow.canceled", "", actorFrom(r.Context()), map[string]any{"workflowId": string(id)})
+	s.audit(domain.AuditSecurity, "workflow.canceled", "", actorFrom(r.Context()), map[string]any{"requestId": requestIDFrom(r.Context()), "workflowId": string(id)})
 	wf, _ := s.workflows.get(id)
 	writeJSON(w, http.StatusAccepted, s.toWorkflowView(wf))
 }

@@ -187,7 +187,7 @@ func (s *Server) apiRevokeNode(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	default:
-		s.audit(domain.AuditSecurity, "node.revoked", revoked.NodeID, actorFrom(r.Context()), map[string]any{"name": revoked.Name, "hostname": revoked.Hostname})
+		s.audit(domain.AuditSecurity, "node.revoked", revoked.NodeID, actorFrom(r.Context()), map[string]any{"requestId": requestIDFrom(r.Context()), "name": revoked.Name, "hostname": revoked.Hostname})
 		writeJSON(w, http.StatusOK, revoked)
 	}
 }

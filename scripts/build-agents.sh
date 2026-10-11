@@ -7,6 +7,8 @@
 #   manager -pairing-token ... -agent-binary bin/agents/agent-windows-amd64.exe \
 #           -agent-binary bin/agents/agent-linux-arm64 ...
 #
+# HARNESS_VERSION=1.2.3 sets the version (default 0.0.0-dev+<commit>).
+#
 # CGO_ENABLED=0 keeps every build static and buildable from any host
 # (including this project's Windows dev machine, which has no C toolchain).
 #
@@ -16,6 +18,8 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+# Version, commit and date go into every binary (scripts/version.sh).
+source scripts/version.sh
 out="bin/agents"
 mkdir -p "$out"
 
@@ -35,7 +39,7 @@ for target in "${targets[@]}"; do
   # start from the unsigned build, so signing (and its cache) always sees
   # the same input.
   rm -f "$out/$name"
-  if CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" GOARM=7 go build -trimpath -o "$out/$name" ./cmd/agent; then
+  if CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" GOARM=7 go build -trimpath -ldflags "$VERSION_LDFLAGS" -o "$out/$name" ./cmd/agent; then
     echo "built $out/$name ($goos/$goarch)"
   else
     failed+=("$goos/$goarch")
