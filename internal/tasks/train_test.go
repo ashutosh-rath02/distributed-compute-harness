@@ -133,3 +133,23 @@ func TestTrainLoRANeedsItsEnvironment(t *testing.T) {
 		t.Fatalf("a full environment must be offered: %v", err)
 	}
 }
+
+func TestAdapterAverageSkipsTheMetricsThatRideAlong(t *testing.T) {
+	files := map[string][]byte{
+		"parts/0000/adapter.safetensors": stFile(t, map[string][]float32{"a": {2}}),
+		"parts/0000/metrics.json":        []byte(`{"steps": 3}`),
+		"parts/0001/adapter.safetensors": stFile(t, map[string][]float32{"a": {4}}),
+		"parts/0001/metrics.json":        []byte(`{"steps": 3}`),
+	}
+	env, _, err := run(t, "adapter.average", map[string]string{"weights": "1,1"}, files,
+		"parts/0000/adapter.safetensors", "parts/0000/metrics.json", "parts/0001/adapter.safetensors", "parts/0001/metrics.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := readBack(t, env)["a"][0]; v != 3 {
+		t.Fatalf("mean = %v, want 3", v)
+	}
+	if _, _, err := run(t, "adapter.average", nil, map[string][]byte{"m.json": []byte("{}")}, "m.json"); err == nil {
+		t.Fatal("no adapters at all must be an error")
+	}
+}

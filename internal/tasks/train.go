@@ -67,13 +67,14 @@ func (tr trainLoRA) Available(context.Context) error {
 	return nil
 }
 
-// trainThreads: the task's own number, else half the cores, so the owner
-// can still use the device and several devices share a round fairly.
+// trainThreads: the task's own number, else a quarter of the logical
+// cores (at least 2). More threads than a laptop has real cores run
+// slower, not faster, and the owner can keep using the device.
 func trainThreads(asked int) int {
 	if asked > 0 {
 		return min(asked, runtime.NumCPU())
 	}
-	return max(1, runtime.NumCPU()/2)
+	return min(runtime.NumCPU(), max(2, runtime.NumCPU()/4))
 }
 
 // trainArgs is the worker's argument list: only files in the workload's
@@ -240,9 +241,16 @@ func averageAdapters(files []*safetensors, weights []float64) ([]byte, error) {
 }
 
 func (adapterAverage) Run(ctx context.Context, env Env) error {
-	order := make([]int, len(env.Inputs))
-	for i := range order {
-		order[i] = i
+	// Only the adapters: a training task's metrics.json comes along in a
+	// reduce's inputs and is not averaged.
+	var order []int
+	for i, name := range env.Inputs {
+		if hasExt(name, "safetensors") {
+			order = append(order, i)
+		}
+	}
+	if len(order) == 0 {
+		return errors.New("no .safetensors adapters among the inputs")
 	}
 	// Name order, like json.merge, so the weights line up with the parts
 	// however the manager happened to list them.

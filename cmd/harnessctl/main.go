@@ -119,6 +119,8 @@ func main() {
 		err = cmdSchedule(client, args[1:])
 	case "mapreduce":
 		err = cmdMapReduce(client, args[1:])
+	case "train":
+		err = cmdTrain(client, args[1:])
 	case "node":
 		err = requireArgs(args, 2, "node <id>", func() error { return client.cmdNode(args[1]) })
 	case "resources":
@@ -391,6 +393,9 @@ Commands:
                         recurring work on a cron expression, @daily or
                         "every 15m" (docs/schedules.md; run with no
                         arguments for the options)
+  train -data TEXT.txt [-rounds N] [-steps N] [-nodes ID,...]
+                        fine-tune a language model across your devices: each trains
+                        an adapter on its share, the adapters are averaged, repeat
   mapreduce -in BIG.txt -chunks N -map "TYPE ..." -reduce "TYPE ..."
                         cut a big text file into chunks, run a task on each
                         across the fleet, fold the results into one

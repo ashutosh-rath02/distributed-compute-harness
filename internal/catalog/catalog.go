@@ -400,11 +400,11 @@ var builtins = []Type{
 	},
 	{
 		Name: "train.lora", Version: "1", Title: "Train a model's adapter on some text",
-		Description: "One round of fine-tuning on this device: train a small LoRA adapter on the text file for a number of steps, starting from the adapter given as the second file (or from scratch), and write the new adapter (adapter.safetensors, a few hundred KB) and metrics.json (seconds per step, loss at the start and the end). Run it on several devices, each with its own share of the text, then average the adapters with adapter.average. Uses half the device's cores unless told otherwise. Offered by devices with a training environment and a base model installed.",
+		Description: "One round of fine-tuning on this device: train a small LoRA adapter on the text file for a number of steps, starting from the adapter given as the second file (or from scratch), and write the new adapter (adapter.safetensors, a few hundred KB) and metrics.json (seconds per step, loss at the start and the end). Run it on several devices, each with its own share of the text, then average the adapters with adapter.average. Uses a quarter of the device's cores unless told otherwise. Offered by devices with a training environment and a base model installed.",
 		Params: []Param{
 			{Name: "steps", Type: Int, Title: "Training steps", Default: "20", Min: num(1), Max: num(2000)},
 			{Name: "lr", Type: Enum, Title: "Learning rate", Default: "2e-4", Enum: []string{"5e-5", "1e-4", "2e-4", "5e-4", "1e-3"}},
-			{Name: "threads", Type: Int, Title: "CPU threads (0 = half the cores)", Default: "0", Min: num(0), Max: num(64)},
+			{Name: "threads", Type: Int, Title: "CPU threads (0 = a quarter of the cores)", Default: "0", Min: num(0), Max: num(64)},
 		},
 		Inputs:       Inputs{Min: 1, Max: 2, Description: "the text to train on, then (optionally) the adapter to start from"},
 		Outputs:      []string{"adapter.safetensors", "metrics.json"},
