@@ -552,3 +552,9 @@ Passed: `harnessctl status`; viewer role reads (200) but cannot submit or list u
 - Tests that need memory (`image.resize` needs 512 MiB free, `audio.transcribe` 1 GiB) fail on a busy machine and pass alone. Laptop sleep also breaks long runs.
 - The macOS and Linux installers and join scripts still create the flashing-window watchdog form. Windows was fixed.
 - The standby manager on the Mac runs from `~/hh-standby` under nohup and will not survive a reboot.
+
+## 16. Distributed training (2026-10-12)
+
+`harnessctl train` runs federated LoRA fine-tuning of SmolLM2-135M across devices; see `docs/training.md`. Task types: `train.setup` (opt-in; installs a private venv, the model and the worker, which is built into the agent from `internal/tasks/trainkit/lora_worker.py`), `train.lora` (one round on one device; needs 1.5 GiB free), `adapter.average` (pure Go, float32 safetensors, ignores the metrics files that ride along in a reduce). The driver is `cmd/harnessctl/train.go`: one shard per device (uploaded once, so the input cache serves later rounds), steps per device scaled by measured seconds per step.
+
+Verified live: the Mac set itself up through `train.setup`; 3 rounds across the laptop and the Intel Mac took the average loss from 2.918 to 2.722. Traps: new transformers breaks on PyTorch 2.2.2 (Intel Mac) so the pins in `train_setup.go` and `scripts/build-training-kit.sh` must be kept in step; the worker's peak-memory reading returns 0 on Windows (ctypes call fails silently); the laptop slowed to 5 s/step when busy, and 8 threads were slower than 4. Phones can't train. Vishal's Mac and the other PCs were not set up (not the operator's machines).
