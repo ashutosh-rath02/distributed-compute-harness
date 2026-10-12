@@ -78,6 +78,11 @@ type Config struct {
 	// AdvertiseAddr is this machine's LAN address for agents (host:port),
 	// offered pre-filled where the dashboard asks for it. Optional.
 	AdvertiseAddr string
+	// AdvertiseFunc finds the address again each time it is needed, for a
+	// manager that was not given AdvertiseAddr: a laptop moves between
+	// networks, and an address found once at startup goes stale. Ignored
+	// when AdvertiseAddr is set.
+	AdvertiseFunc func() string
 	// JoinAddr is where the join page listens (-join-addr, plain HTTP;
 	// empty = no join page), and AppAPK the Android app's own APK it offers
 	// for download (joinpage.go). Both optional.
@@ -152,6 +157,9 @@ type PersistentStore interface {
 // nothing survives a restart) so tests and the walking-skeleton path from
 // Milestone 3 keep working unchanged.
 type Server struct {
+	advertMu    sync.Mutex // guards advertCache and advertAt (advertiseAddr)
+	advertCache string
+	advertAt    time.Time
 	cfg       Config
 	transport domain.Transport
 	store     PersistentStore

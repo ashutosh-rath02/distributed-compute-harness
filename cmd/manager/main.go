@@ -112,8 +112,18 @@ func main() {
 		return
 	}
 
+	// Without an explicit address the manager looks again each time one is
+	// needed, so moving to another network doesn't leave devices pointed at
+	// the old one. The first look is also what the standby phase advertises.
+	var advertiseFunc func() string
 	if *advertiseAddr == "" {
-		*advertiseAddr = detectLANAddr(*addr)
+		listen := *addr
+		advertiseFunc = func() string { return detectLANAddr(listen) }
+		*advertiseAddr = advertiseFunc()
+	}
+	fixedAdvertise := *advertiseAddr
+	if advertiseFunc != nil {
+		fixedAdvertise = "" // not fixed by the operator: found again on demand
 	}
 
 	if *checkAgentBinaries {
@@ -296,7 +306,8 @@ func main() {
 		Artifacts:           artifactStore,
 		ArtifactRetention:   *artifactRetention,
 		InitialPolicy:       initialPolicy(*allowRaw),
-		AdvertiseAddr:       *advertiseAddr,
+		AdvertiseAddr:       fixedAdvertise,
+		AdvertiseFunc:       advertiseFunc,
 		JoinAddr:            *joinAddr,
 		FirstRunJoinWindow:  *joinWindow,
 		AppAPK:              *appAPK,

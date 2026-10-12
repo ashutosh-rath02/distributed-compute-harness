@@ -2,6 +2,7 @@ package manager
 
 import (
 	"net"
+	"time"
 
 	"home-harness/internal/joinscript"
 )
@@ -48,7 +49,7 @@ type JoinInfo struct {
 // (cmd/manager/main.go), so the two are equivalent.
 func (s *Server) JoinInfo() JoinInfo {
 	return JoinInfo{
-		LANAddr:        s.cfg.AdvertiseAddr,
+		LANAddr:        s.advertiseAddr(),
 		JoinURL:        s.joinURL(),
 		JoinPort:       s.joinPort(),
 		Fingerprint:    s.cfg.Fingerprint,
@@ -133,11 +134,26 @@ func (s *Server) joinPort() string {
 	return port
 }
 
+// advertiseAddr is the address to offer devices: the one the operator
+// fixed, else a fresh look at the machine's network (kept a few seconds,
+// so a busy dashboard doesn't probe on every request).
+func (s *Server) advertiseAddr() string {
+	if s.cfg.AdvertiseAddr != "" || s.cfg.AdvertiseFunc == nil {
+		return s.cfg.AdvertiseAddr
+	}
+	s.advertMu.Lock()
+	defer s.advertMu.Unlock()
+	if time.Since(s.advertAt) > 5*time.Second {
+		s.advertCache, s.advertAt = s.cfg.AdvertiseFunc(), time.Now()
+	}
+	return s.advertCache
+}
+
 // joinURL is the join page's address on this machine's LAN address, when
 // both are known.
 func (s *Server) joinURL() string {
 	port := s.joinPort()
-	host, _, err := net.SplitHostPort(s.cfg.AdvertiseAddr)
+	host, _, err := net.SplitHostPort(s.advertiseAddr())
 	if port == "" || err != nil || host == "" {
 		return ""
 	}

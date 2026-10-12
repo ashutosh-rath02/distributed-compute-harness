@@ -135,10 +135,11 @@ func (s *Server) failoverView() (uint64, []byte, []string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var addrs []string
-	if s.cfg.AdvertiseAddr != "" {
-		addrs = append(addrs, s.cfg.AdvertiseAddr)
+	self := s.advertiseAddr()
+	if self != "" {
+		addrs = append(addrs, self)
 	}
-	if f.pair != nil && f.pair.PeerAddr != "" && f.pair.PeerAddr != s.cfg.AdvertiseAddr {
+	if f.pair != nil && f.pair.PeerAddr != "" && f.pair.PeerAddr != self {
 		addrs = append(addrs, f.pair.PeerAddr)
 	}
 	return f.term, f.proof, addrs
@@ -574,7 +575,7 @@ func (s *Server) apiAddStandby(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	f.enrollHash, f.enrollUntil = sha256.Sum256([]byte(token)), until
 	f.mu.Unlock()
-	primary := s.cfg.AdvertiseAddr
+	primary := s.advertiseAddr()
 	if primary == "" {
 		primary = "<this manager's LAN address>:7420"
 	}
