@@ -303,7 +303,16 @@ func (s *Server) runSplit(sess *splitSession) {
 		end("while the helpers started: " + why)
 		return
 	}
-	id, err := submit(sess.Main, capSplitMain, map[string]string{"session": sess.ID, "model": sess.Model, "name": sess.Name, "helpers": strconv.Itoa(len(sess.Helpers))})
+	// What the helpers can hold: three quarters of the memory each has free
+	// (the rest is for the system, the cache and their own work). The main
+	// device keeps the layers that do not fit.
+	var helperBytes uint64
+	for _, h := range sess.Helpers {
+		if rec, ok := s.Registry.Get(h); ok {
+			helperBytes += rec.LastMetrics.MemoryAvailableBytes / 4 * 3
+		}
+	}
+	id, err := submit(sess.Main, capSplitMain, map[string]string{"session": sess.ID, "model": sess.Model, "name": sess.Name, "helpers": strconv.Itoa(len(sess.Helpers)), "helperBytes": strconv.FormatUint(helperBytes, 10)})
 	if err != nil {
 		end(fmt.Sprintf("couldn't start the main part: %v", err))
 		return

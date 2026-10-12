@@ -355,6 +355,10 @@ var builtins = []Type{
 			{Name: "model", Type: String, Title: "Model file (.gguf) on this device", Required: true, MaxLength: 1024, Pattern: `.+\.(gguf|GGUF)`},
 			{Name: "name", Type: String, Title: "Name to chat with it by", Required: true, Pattern: ModelPattern, MaxLength: 128},
 			{Name: "helpers", Type: Int, Title: "Helpers", Required: true, Min: num(1), Max: num(15)},
+			// 0 (default): unknown, the helpers take every layer. Otherwise the
+			// memory the helpers can offer, so the main device keeps the layers
+			// that do not fit on them.
+			{Name: "helperBytes", Type: Int, Title: "Memory the helpers can offer (bytes)", Default: "0", Min: num(0), Max: num(1e13)},
 		},
 		TargetRequired:           true,
 		Internal:                 true,

@@ -358,8 +358,20 @@ func (m splitMain) Run(ctx context.Context, env tasks.Env) error {
 	if err != nil {
 		return err
 	}
+	// Without a limit every layer goes to the helpers, and a model bigger
+	// than their memory crashes them. Give them the share that fits.
+	ngl := 999
+	if fi, err := os.Stat(model); err == nil {
+		hb, _ := strconv.ParseInt(env.Params["helperBytes"], 10, 64)
+		if blocks, err := ggufBlockCount(model); err == nil {
+			ngl = offloadLayers(fi.Size(), blocks, hb)
+			if ngl != 999 {
+				fmt.Fprintf(env.Stderr, "the helpers can hold about %d MB of the %d MB model: they take %d of its %d layers, this device the rest\n", hb>>20, fi.Size()>>20, ngl, blocks)
+			}
+		}
+	}
 	cmd := exec.CommandContext(ctx, m.a.llama.bin("llama-server"), "-m", model, "--rpc", strings.Join(rpc, ","),
-		"-ngl", "999", "--host", "127.0.0.1", "--port", strconv.Itoa(port), "--alias", name)
+		"-ngl", strconv.Itoa(ngl), "--host", "127.0.0.1", "--port", strconv.Itoa(port), "--alias", name)
 	cmd.Env = append(os.Environ(), "GGML_RPC_NO_RDMA=1")
 	cmd.Stdout, cmd.Stderr = env.Stdout, env.Stderr
 	exited, err := startProgram(cmd)
