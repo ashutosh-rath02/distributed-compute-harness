@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"home-harness/internal/catalog"
 )
 
 // stFile builds a float32 safetensors file with the given tensors.
@@ -151,5 +153,27 @@ func TestAdapterAverageSkipsTheMetricsThatRideAlong(t *testing.T) {
 	}
 	if _, _, err := run(t, "adapter.average", nil, map[string][]byte{"m.json": []byte("{}")}, "m.json"); err == nil {
 		t.Fatal("no adapters at all must be an error")
+	}
+}
+
+func TestTrainSetupIsFixedAndOptIn(t *testing.T) {
+	if len(loraWorker) < 1000 || !strings.Contains(string(loraWorker), "def main") {
+		t.Fatal("the worker script is not built into the agent")
+	}
+	for v, want := range map[string]bool{"3.8": false, "3.9": true, "3.12": true, "3.13": false, "": false} {
+		if supportedPython(v) != want {
+			t.Errorf("supportedPython(%q) = %v", v, !want)
+		}
+	}
+	pkgs, _ := pipPackages()
+	if len(pkgs) == 0 || !strings.HasPrefix(pkgs[0], "torch") {
+		t.Fatalf("packages %v", pkgs)
+	}
+	ty, ok := catalog.Lookup("train.setup")
+	if !ok || !ty.OptIn || !ty.TargetRequired || len(ty.Params) != 0 {
+		t.Fatal("train.setup must be opt-in, aimed at one device, and take no parameters")
+	}
+	if (trainSetup{&tools{}}).Available(nil) == nil { //nolint:staticcheck
+		t.Fatal("no tools folder: not offered")
 	}
 }

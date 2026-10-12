@@ -125,6 +125,7 @@ func NewRegistry(opts Options) *Registry {
 	r.handlers["audio.transcribe"] = audioTranscribe{t}
 	r.handlers["doc.text"] = docText{t}
 	r.handlers["train.lora"] = trainLoRA{t}
+	r.handlers["train.setup"] = trainSetup{t}
 	return r
 }
 

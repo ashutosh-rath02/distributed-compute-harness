@@ -399,6 +399,17 @@ var builtins = []Type{
 		DefaultMaxRuntimeSeconds: 3600,
 	},
 	{
+		Name: "train.setup", Version: "1", Title: "Set up this device for training",
+		Description: "Install what train.lora needs, in the agent's private tools folder (train/): a Python environment with PyTorch (CPU) and the training libraries, the base model (about 260 MB) and the worker script. Needs Python 3.9 to 3.12 on the device. About 1 GB in all, downloaded from the Python package index and Hugging Face. Takes no parameters: what is installed is fixed by the agent. Off until the operator's policy allows it; run it with a target on the devices whose owners agree.",
+		Inputs:         Inputs{Min: 0, Max: 0},
+		Requirements:   domain.ResourceRequirements{MinMemoryBytes: 512 << 20},
+		MaxPerNode:     1,
+		TargetRequired: true,
+		OptIn:          true,
+		// Slow connections: a few GB of downloads.
+		DefaultMaxRuntimeSeconds: 7200,
+	},
+	{
 		Name: "train.lora", Version: "1", Title: "Train a model's adapter on some text",
 		Description: "One round of fine-tuning on this device: train a small LoRA adapter on the text file for a number of steps, starting from the adapter given as the second file (or from scratch), and write the new adapter (adapter.safetensors, a few hundred KB) and metrics.json (seconds per step, loss at the start and the end). Run it on several devices, each with its own share of the text, then average the adapters with adapter.average. Uses a quarter of the device's cores unless told otherwise. Offered by devices with a training environment and a base model installed.",
 		Params: []Param{

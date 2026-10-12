@@ -46,7 +46,12 @@ func TestUserTokenIsStoredOnlyAsAHash(t *testing.T) {
 	if u, ok := s2.userByToken(tok, time.Now()); !ok || u.Name != "alice" {
 		t.Fatal("user did not survive a restart")
 	}
-	if _, ok := s2.userByToken(tok[:63]+"0", time.Now()); ok {
+	// Change the last character to a different one (it was "0" one time in 16).
+	other := "0"
+	if tok[63:] == "0" {
+		other = "1"
+	}
+	if _, ok := s2.userByToken(tok[:63]+other, time.Now()); ok {
 		t.Fatal("a wrong token authenticated")
 	}
 }

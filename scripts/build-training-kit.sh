@@ -49,7 +49,7 @@ PYEOF
 
 cat > lora_worker.py <<'WORKER_EOF'
 HEAD
-cat tools/train/lora_worker.py >> "$out"
+cat internal/tasks/trainkit/lora_worker.py >> "$out"
 cat >> "$out" <<'TAIL'
 WORKER_EOF
 
