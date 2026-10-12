@@ -408,7 +408,7 @@ var builtins = []Type{
 		},
 		Inputs:       Inputs{Min: 1, Max: 2, Description: "the text to train on, then (optionally) the adapter to start from"},
 		Outputs:      []string{"adapter.safetensors", "metrics.json"},
-		Requirements: domain.ResourceRequirements{MinMemoryBytes: 2 << 30},
+		Requirements: domain.ResourceRequirements{MinMemoryBytes: 3 << 29},
 		MaxPerNode:   1,
 		// A slow CPU can take long; the limit is per attempt.
 		DefaultMaxRuntimeSeconds: 7200,

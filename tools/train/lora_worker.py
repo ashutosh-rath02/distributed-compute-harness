@@ -18,6 +18,31 @@ from safetensors.torch import load_file, save_file
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
+def peak_mb():
+    """This process's peak memory in MB, or 0 where it can't be read."""
+    try:
+        if os.name == "nt":
+            import ctypes
+            from ctypes import wintypes
+
+            class PMC(ctypes.Structure):
+                _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
+                            ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
+                            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t), ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t), ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                            ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t)]
+            pmc = PMC()
+            pmc.cb = ctypes.sizeof(PMC)
+            h = ctypes.windll.kernel32.GetCurrentProcess()
+            ctypes.windll.psapi.GetProcessMemoryInfo(h, ctypes.byref(pmc), pmc.cb)
+            return int(pmc.PeakWorkingSetSize / 1048576)
+        import resource
+        r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        return int(r / 1048576) if os.uname().sysname == "Darwin" else int(r / 1024)
+    except Exception:
+        return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True)
@@ -78,7 +103,7 @@ def main():
     with open(a.metrics, "w") as f:
         json.dump({"steps": a.steps, "secPerStep": secs / max(1, a.steps), "threads": a.threads,
                    "lossStart": sum(losses[:k]) / k, "lossEnd": sum(losses[-k:]) / k,
-                   "tokens": int(a.steps * min(a.batch, n_blocks) * a.block)}, f)
+                   "tokens": int(a.steps * min(a.batch, n_blocks) * a.block), "peakMB": peak_mb()}, f)
 
 
 if __name__ == "__main__":
