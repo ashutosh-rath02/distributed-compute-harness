@@ -399,6 +399,32 @@ var builtins = []Type{
 		DefaultMaxRuntimeSeconds: 3600,
 	},
 	{
+		Name: "train.lora", Version: "1", Title: "Train a model's adapter on some text",
+		Description: "One round of fine-tuning on this device: train a small LoRA adapter on the text file for a number of steps, starting from the adapter given as the second file (or from scratch), and write the new adapter (adapter.safetensors, a few hundred KB) and metrics.json (seconds per step, loss at the start and the end). Run it on several devices, each with its own share of the text, then average the adapters with adapter.average. Uses half the device's cores unless told otherwise. Offered by devices with a training environment and a base model installed.",
+		Params: []Param{
+			{Name: "steps", Type: Int, Title: "Training steps", Default: "20", Min: num(1), Max: num(2000)},
+			{Name: "lr", Type: Enum, Title: "Learning rate", Default: "2e-4", Enum: []string{"5e-5", "1e-4", "2e-4", "5e-4", "1e-3"}},
+			{Name: "threads", Type: Int, Title: "CPU threads (0 = half the cores)", Default: "0", Min: num(0), Max: num(64)},
+		},
+		Inputs:       Inputs{Min: 1, Max: 2, Description: "the text to train on, then (optionally) the adapter to start from"},
+		Outputs:      []string{"adapter.safetensors", "metrics.json"},
+		Requirements: domain.ResourceRequirements{MinMemoryBytes: 2 << 30},
+		MaxPerNode:   1,
+		// A slow CPU can take long; the limit is per attempt.
+		DefaultMaxRuntimeSeconds: 7200,
+	},
+	{
+		Name: "adapter.average", Version: "1", Title: "Average trained adapters",
+		Description: "Combine adapters trained on different devices (adapter.safetensors from train.lora) into one by taking their mean, optionally weighted (for example by how many steps each device trained). Files are taken in name order, so weights line up with the parts. The last step of a training round.",
+		Params: []Param{
+			{Name: "weights", Type: String, Title: "Weight of each adapter, comma-separated (default: equal)", Pattern: `[0-9]+(\.[0-9]+)?(,[0-9]+(\.[0-9]+)?)*`, MaxLength: 600},
+		},
+		Inputs:       Inputs{Min: 1, Max: 64, Description: "the adapters to average"},
+		Outputs:      []string{"adapter.safetensors"},
+		Reduce:       true,
+		Requirements: domain.ResourceRequirements{MinMemoryBytes: 512 << 20},
+	},
+	{
 		Name: "audio.transcribe", Version: "1", Title: "Transcribe speech to text",
 		Description: "Write down what is said in a recording with whisper.cpp, on the device: transcript.txt and subtitles (transcript.srt). A .wav works anywhere it is offered; other audio and video files need ffmpeg on that device too. Offered by devices with whisper.cpp and a model.",
 		Params: []Param{

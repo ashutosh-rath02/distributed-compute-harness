@@ -92,6 +92,7 @@ func builtinHandlers() map[domain.CapabilityName]Handler {
 		"text.count":      textCount{},
 		"text.split":      textSplit{},
 		"json.merge":      jsonMerge{},
+		"adapter.average": adapterAverage{},
 		"render.fractal":  renderFractal{},
 		"image.stack":     imageStack{},
 		"image.upscale":   imageUpscale{},
@@ -123,6 +124,7 @@ func NewRegistry(opts Options) *Registry {
 	r.handlers["media.transcode"] = mediaTranscode{t}
 	r.handlers["audio.transcribe"] = audioTranscribe{t}
 	r.handlers["doc.text"] = docText{t}
+	r.handlers["train.lora"] = trainLoRA{t}
 	return r
 }
 
