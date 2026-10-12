@@ -78,7 +78,7 @@ func describeAvailability(n nodeView) string {
 	var rule string
 	switch r.Mode {
 	case domain.AvailableAlways:
-		rule = "always"
+		rule = "always (above 10% battery)"
 	case domain.AvailableWhenIdle:
 		m := r.IdleMinutes
 		if m <= 0 {

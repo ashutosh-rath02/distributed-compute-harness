@@ -61,6 +61,10 @@ func evaluateAvailability(rule domain.Availability, reports, noReportYet bool, u
 	}
 	switch rule.Mode {
 	case domain.AvailableAlways:
+		// Plugged in or not, but not from a nearly flat battery.
+		if use.OnBattery != nil && *use.OnBattery && use.BatteryPercent != nil && *use.BatteryPercent <= domain.MinBatteryPercent {
+			return false, fmt.Sprintf("battery low (%d%%)", *use.BatteryPercent)
+		}
 		return true, ""
 	case domain.AvailableWhenIdle:
 		minutes := rule.IdleMinutes

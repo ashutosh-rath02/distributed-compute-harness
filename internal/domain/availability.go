@@ -28,7 +28,8 @@ type AvailabilityMode string
 const (
 	// AvailableAuto (the default): new work only while not on battery.
 	AvailableAuto AvailabilityMode = "auto"
-	// AvailableAlways: whenever connected.
+	// AvailableAlways: whenever connected, plugged in or not, as long as
+	// a battery that is in use is above MinBatteryPercent.
 	AvailableAlways AvailabilityMode = "always"
 	// AvailableWhenIdle: only after IdleMinutes without input.
 	AvailableWhenIdle AvailabilityMode = "idle"
@@ -38,6 +39,10 @@ const (
 	// AvailablePaused: no new work at all until changed.
 	AvailablePaused AvailabilityMode = "paused"
 )
+
+// MinBatteryPercent is the lowest charge, on battery, at which an
+// "always" device still takes new work: it must be above this.
+const MinBatteryPercent = 10
 
 // DefaultIdleMinutes is the idle rule's wait when none is set.
 const DefaultIdleMinutes = 5
